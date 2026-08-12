@@ -1,0 +1,376 @@
+/**
+ * OWNER: Phase 4; rebuilt by the design overhaul, session 1.
+ *
+ * Two stacked pills (overhaul §16.3): the bottom capsule is the permanent
+ * grammar — one shape, always in the same place — and the message pill above
+ * it appears only when a state needs words. Geometry is measured, not styled
+ * by eye: 71 × 30 pt capsule, 10 bars at 2 pt wide on a 4.2 pt pitch
+ * (overhaul §15.1). The capsule is opaque like the reference; only the
+ * transient message pill pays for a backdrop blur.
+ *
+ * The window is transparent and non-focusable, so everything here is drawn
+ * inside it. Nothing may make the pills grab attention they do not need: the
+ * user is looking at the app they are dictating into.
+ */
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+}
+
+body {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  /* Bottom room is shadow clearance for the capsule, and nothing more: it adds
+     to `HUD_BOTTOM_MARGIN`, so every pixel here pushes the pill up the screen
+     (§19.2 — the user's "it's too far inside the screen"). The capsule's shadow
+     reaches 12 px below it (4 px offset + half of a 16 px blur); 14 px clears
+     it and buys nothing else. */
+  padding: 0 0 14px;
+  box-sizing: border-box;
+  font:
+    13px/1.45 -apple-system,
+    BlinkMacSystemFont,
+    system-ui,
+    sans-serif;
+  color: #fff;
+  /* The pills are never a text-selection surface; the message body opts back in. */
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: default;
+}
+
+#root {
+  display: contents;
+}
+
+.hud {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+}
+
+/* ------------------------------------------------------------------ *
+ * The capsule (§15.1: 71 × 30 pt, radius = height / 2 — a true capsule)
+ * ------------------------------------------------------------------ */
+
+.capsule {
+  box-sizing: border-box;
+  height: 30px;
+  border-radius: 15px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(24, 24, 26, 0.96);
+  border: 0.5px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.42);
+  /* One window width, capsule widths animated in CSS — overhaul §11.1.2:
+     resizing the window between 71/92/100 pt would read as jitter. */
+  transition:
+    width 180ms ease,
+    background-color 180ms ease;
+  animation: capsule-in 160ms ease-out;
+}
+
+.capsule.is-hold,
+.capsule.is-check,
+.capsule.is-alert {
+  width: 71px;
+}
+
+.capsule.is-processing {
+  width: 92px;
+  gap: 7px;
+}
+
+.capsule.is-toggle {
+  width: 100px;
+  justify-content: space-between;
+  padding: 3px;
+}
+
+/* ------------------------------------------------------------------ *
+ * The waveform: 10 bars, symmetric envelope, dots at silence (§4.2)
+ * ------------------------------------------------------------------ */
+
+.bars {
+  display: flex;
+  align-items: center;
+  /* 2 pt bars on a 4.2 pt pitch (§15.1). */
+  gap: 2.2px;
+  height: 16px;
+  flex: none;
+}
+
+.bar {
+  width: 2px;
+  height: 16px;
+  border-radius: 1px;
+  background: #fff;
+  transform-origin: center;
+  /* The floor (2 of 16 pt), so a bar is a dash before the first frame runs. */
+  transform: scaleY(0.125);
+  /* Scaled rather than resized: animating `height` would relayout the capsule
+     on every frame of every dictation. There is deliberately **no transition**
+     — `waveform.ts` drives the transform on every animation frame, and a CSS
+     transition on top of that would add a second, slower lag to a value that
+     is already smoothed (§19.1). */
+  will-change: transform;
+}
+
+/* ------------------------------------------------------------------ *
+ * Hands-free ✕ / ✓ (§16.5c — the one recording mode that takes the mouse)
+ * ------------------------------------------------------------------ */
+
+button.round {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: none;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  cursor: default;
+}
+
+button.round svg {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+}
+
+button.round.cancel {
+  background: #5a5a5e;
+  color: #fff;
+}
+
+button.round.cancel:hover {
+  background: #6e6e73;
+}
+
+button.round.confirm {
+  background: #fff;
+  color: #1c1c1e;
+}
+
+button.round.confirm:hover {
+  background: #e5e5ea;
+}
+
+button.round:active {
+  filter: brightness(0.85);
+}
+
+/* ------------------------------------------------------------------ *
+ * Processing spinner: 8 spokes, white at ~60% (§16.7 on §9.5)
+ * ------------------------------------------------------------------ */
+
+.spinner {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  fill: #fff;
+  opacity: 0.65;
+  animation: spin 0.8s steps(8) infinite;
+}
+
+/* ------------------------------------------------------------------ *
+ * Inserted: the animated green check (§16.3)
+ * ------------------------------------------------------------------ */
+
+.check {
+  width: 20px;
+  height: 20px;
+}
+
+.check path {
+  stroke: #30d158;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: check-draw 320ms 60ms ease-out forwards;
+}
+
+/* ------------------------------------------------------------------ *
+ * Alert fills: red = act, amber = paused (§16.5b)
+ * ------------------------------------------------------------------ */
+
+.capsule.is-alert.tone-error {
+  background: #c73a31;
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.capsule.is-alert.tone-warning {
+  background: #c07d0a;
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.glyph {
+  width: 16px;
+  height: 16px;
+  stroke: #fff;
+  color: #fff;
+}
+
+/* ------------------------------------------------------------------ *
+ * The message pill — transient, and the only surface with words (§16.3)
+ * ------------------------------------------------------------------ */
+
+/* Sized to its words, not to a grid slot (§19.3). The old pill had a 260 pt
+   floor and 7 pt gaps, so a two-line notice — a title and one line of advice —
+   was drawn at the size of a dialog box. It is a passing remark above the
+   capsule, and it should read as one: tight leading, no minimum width, and the
+   words the only thing occupying space. */
+.message {
+  box-sizing: border-box;
+  max-width: 340px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 11px;
+  border-radius: 11px;
+  background: rgba(28, 28, 30, 0.9);
+  border: 0.5px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.34);
+  -webkit-backdrop-filter: blur(24px);
+  backdrop-filter: blur(24px);
+  animation: message-in 180ms ease-out;
+}
+
+.message-title {
+  font-size: 12.5px;
+  line-height: 1.3;
+  font-weight: 590;
+  letter-spacing: 0.1px;
+}
+
+/* The transcript. Braindump §12.5: shown in full, never truncated — it scrolls
+   instead, so a long dictation is still entirely inspectable. */
+.message-body {
+  font-size: 12.5px;
+  line-height: 1.4;
+  margin-top: 2px;
+  color: rgba(255, 255, 255, 0.95);
+  max-height: 108px;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  /* Selecting the text here is a reasonable instinct even though the window
+     cannot take focus, and it costs nothing to allow. */
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.message-detail {
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: rgba(255, 255, 255, 0.62);
+  /* Balanced wrapping keeps a two-line hint from leaving one orphan word, which
+     is most of what made the old pill look bigger than its content. */
+  text-wrap: pretty;
+}
+
+.actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 5px;
+}
+
+.actions button {
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 510;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.14);
+  border: 0.5px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  padding: 3px 9px;
+  cursor: default;
+}
+
+.actions button:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.actions button:active {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.actions button.quiet {
+  margin-left: auto;
+  background: transparent;
+  border-color: transparent;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.actions button.quiet:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.8);
+}
+
+/* ------------------------------------------------------------------ *
+ * Motion — restrained, and honouring reduced motion (§11.1.13)
+ * ------------------------------------------------------------------ */
+
+@keyframes capsule-in {
+  from {
+    opacity: 0;
+    transform: scale(0.82) translateY(4px);
+  }
+}
+
+@keyframes message-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes check-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .capsule,
+  .message {
+    animation: none;
+  }
+
+  /* A 10 Hz animated bar row is exactly what this media query exists for:
+     the bars hold a constant dash height instead of dancing. */
+  .bar {
+    transition: none;
+    transform: scaleY(0.4) !important;
+  }
+
+  .spinner {
+    animation: none;
+  }
+
+  .check path {
+    animation: none;
+    stroke-dashoffset: 0;
+  }
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 4px;
+}

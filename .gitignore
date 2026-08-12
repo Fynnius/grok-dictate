@@ -1,0 +1,42 @@
+node_modules/
+out/
+dist/
+release/
+*.log
+
+# Proprietary Grok CLI source. Never vendor it, never publish it.
+grok-build/
+
+# Encrypted API-key file lives in userData, but never commit a stray copy.
+credentials.json
+
+# Probe dumps (scripts/probe-stt.ts). Can contain spoken transcripts.
+docs/spike-raw/
+
+# Raw spike captures can contain long transcripts; the summarised results live
+# in docs/spike-results.md and are committed. Raw frames are committed too, but
+# any ad-hoc scratch output is not.
+docs/spike-raw/scratch/
+
+# `grok-dictate-helper --probe-insert` writes `probe-out/expected.txt` relative
+# to the working directory, so running it from the repository root (rather than
+# from `native/`, where `probe-app.sh` puts it) leaves a stray copy here.
+probe-out/
+
+.DS_Store
+.impeccable/
+
+# Claude Code scratch: subagent worktrees are separate checkouts of this same
+# repository and must never be committed into it.
+.claude/
+
+# TypeScript incremental build state
+*.tsbuildinfo
+
+# iCloud Drive conflict copies. This repository lives under ~/Documents, which
+# is synced, and a conflict is saved as `<name> 2.<ext>` beside the original —
+# note the space, which is what makes this pattern safe for ordinary names that
+# happen to end in a digit. One (`src/main/state/machine 2.ts`) reached a commit
+# during Phase 5 and only surfaced because ESLint type-checked the stale copy
+# against a union it no longer matched.
+* [0-9].*

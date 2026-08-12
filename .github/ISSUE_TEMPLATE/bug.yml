@@ -1,0 +1,48 @@
+name: Bug report
+description: Something is broken
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. Search existing issues first.
+        Do **not** paste API keys, Grok tokens, or full `~/.grok/auth.json` contents.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you got.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: '`0.1.0`, or the commit if you built from source.'
+      placeholder: '0.1.0'
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: '15.5'
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How you run it
+      options:
+        - "Packaged app (npm run package / Grok Dictate.app)"
+        - "npm run dev"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log lines
+      description: |
+        `~/Library/Logs/grok-dictate/main.log` for a packaged build.
+        Redact anything that looks like a token before pasting.
+      render: text

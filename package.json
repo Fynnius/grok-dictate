@@ -1,0 +1,75 @@
+{
+  "name": "grok-dictate",
+  "version": "0.1.0",
+  "description": "Hold Fn to dictate. A macOS menu-bar dictation app powered by xAI streaming speech-to-text.",
+  "private": true,
+  "license": "MIT",
+  "author": "Fynn Auerbach",
+  "homepage": "https://github.com/Fynnius/grok-dictate",
+  "bugs": {
+    "url": "https://github.com/Fynnius/grok-dictate/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Fynnius/grok-dictate.git"
+  },
+  "keywords": [
+    "macos",
+    "dictation",
+    "speech-to-text",
+    "xai",
+    "grok",
+    "electron",
+    "menu-bar"
+  ],
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "type": "module",
+  "main": "./out/main/index.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "npm run typecheck && electron-vite build",
+    "start": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "lint": "eslint . && prettier --check .",
+    "format": "prettier --write .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "probe:stt": "tsx scripts/probe-stt.ts",
+    "package": "./scripts/package.sh"
+  },
+  "dependencies": {
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "ws": "^8.21.3",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.2.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@types/ws": "^8.18.1",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^43.3.0",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
+    "eslint": "^10.8.1",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "jsdom": "^29.1.1",
+    "prettier": "^3.9.6",
+    "tsx": "^4.23.11",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.66.0",
+    "vite": "^7.3.6",
+    "vitest": "^4.1.10"
+  }
+}

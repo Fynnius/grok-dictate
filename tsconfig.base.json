@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+
+    /* §4 of IMPLEMENTATION-PLAN.md: TypeScript strict. Everything below is
+       part of "strict" as this project means it, not just `strict: true`. */
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "useUnknownInCatchVariables": true,
+
+    /* No `baseUrl` — deprecated in TypeScript 6. Path mappings resolve
+       relative to this file's directory. */
+    "paths": {
+      "@contracts/*": ["./contracts/*"],
+      "@shared/*": ["./src/shared/*"],
+      "@mocks/*": ["./mocks/*"]
+    }
+  }
+}

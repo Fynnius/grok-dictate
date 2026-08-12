@@ -1,0 +1,765 @@
+/**
+ * OWNER: Design overhaul 2026-08-09 (session 2). Shared styling for the
+ * Settings, History and Scratchpad windows.
+ *
+ * This replaces the Phase 4 "functional skeleton" wholesale — the deferral it
+ * documented was called in (overhaul braindump §1.5, §8.1). The system here is
+ * hand-authored to shadcn/ui's proportions — its muted/foreground/border token
+ * structure, its radii, its restraint — without adopting the library
+ * (braindump §16.1: no Tailwind, no component package; shadcn is a reference
+ * photograph).
+ *
+ * Structure over styling: every panel is a grid of non-scrolling header /
+ * optional toolbar / scrolling body / optional footer. Only `.panel-body`
+ * scrolls, which is the structural fix for the transparent-band bug
+ * (braindump §4.3 — the old `.panel` was simultaneously scrollport, padding
+ * owner and flex-gap column, so content scrolled visibly past the sticky
+ * header and footer).
+ *
+ * The panels follow the system appearance in both light and dark, because
+ * these are ordinary macOS windows and anything else would look foreign next
+ * to the apps around them.
+ */
+
+:root {
+  color-scheme: light dark;
+
+  --background: #ffffff;
+  --foreground: #1d1d1f;
+  --secondary: #6e6e73;
+  --surface: #f5f5f7;
+  --surface-hover: rgba(0, 0, 0, 0.045);
+  --elevated: #ffffff;
+  --border: rgba(0, 0, 0, 0.12);
+  --border-faint: rgba(0, 0, 0, 0.065);
+  --accent: #0a70e0;
+  --ring: rgba(10, 112, 224, 0.3);
+  --ok: #1c8a3e;
+  --danger: #c1391a;
+  --danger-tint: rgba(193, 57, 26, 0.08);
+  --shadow-pop:
+    0 0 0 1px rgba(0, 0, 0, 0.06), 0 8px 24px rgba(0, 0, 0, 0.14), 0 2px 6px rgba(0, 0, 0, 0.08);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #1e1e20;
+    --foreground: #f2f2f5;
+    --secondary: #9a9aa0;
+    --surface: #2a2a2d;
+    --surface-hover: rgba(255, 255, 255, 0.055);
+    --elevated: #323236;
+    --border: rgba(255, 255, 255, 0.14);
+    --border-faint: rgba(255, 255, 255, 0.08);
+    --accent: #4da3ff;
+    --ring: rgba(77, 163, 255, 0.35);
+    --ok: #4cd26a;
+    --danger: #ff6a4d;
+    --danger-tint: rgba(255, 106, 77, 0.12);
+    --shadow-pop:
+      0 0 0 1px rgba(255, 255, 255, 0.08), 0 8px 24px rgba(0, 0, 0, 0.5),
+      0 2px 6px rgba(0, 0, 0, 0.3);
+  }
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--background);
+  color: var(--foreground);
+}
+
+body {
+  font:
+    13px/1.5 -apple-system,
+    BlinkMacSystemFont,
+    system-ui,
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  height: 100%;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* ------------------------------------------------------------------ shell -- */
+
+.panel {
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto auto 1fr auto;
+}
+
+/* The header is the window's title bar: it reserves the traffic-light region
+   (`titleBarStyle: hiddenInset` floats them at roughly x 20–70) and is the
+   drag surface the old design lacked (braindump §11.1.8). */
+.panel-head {
+  grid-row: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 52px;
+  padding: 0 20px 0 84px;
+  -webkit-app-region: drag;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.panel-head button,
+.panel-head input {
+  -webkit-app-region: no-drag;
+}
+
+.panel-toolbar {
+  grid-row: 2;
+  padding: 0 20px 12px;
+}
+
+.panel-body {
+  grid-row: 3;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 20px 20px;
+}
+
+.panel-foot {
+  grid-row: 4;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-top: 1px solid var(--border-faint);
+  padding: 11px 20px;
+}
+
+.panel-foot .note {
+  flex: 1;
+}
+
+h1 {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+.note {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--secondary);
+}
+
+.spacer {
+  flex: 1;
+}
+
+/* A small status chip for the header (History's count, Settings' "Saved",
+   Scratchpad's "Edited"). */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--secondary);
+  background: var(--surface);
+  border-radius: 99px;
+  padding: 2px 8px;
+}
+
+.chip.ok {
+  color: var(--ok);
+}
+
+.chip.fade {
+  opacity: 0;
+  transition: opacity 180ms ease;
+}
+
+.chip.fade.on {
+  opacity: 1;
+}
+
+/* ---------------------------------------------------------------- buttons -- */
+
+button {
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--foreground);
+  background: var(--surface);
+  border: 1px solid var(--border-faint);
+  border-radius: 7px;
+  padding: 4px 12px;
+  cursor: default;
+}
+
+button:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+button:active:not(:disabled) {
+  filter: brightness(0.96);
+}
+
+button:disabled {
+  opacity: 0.45;
+}
+
+button.danger {
+  color: #fff;
+  background: var(--danger);
+  border-color: transparent;
+}
+
+button.danger:hover:not(:disabled) {
+  background: var(--danger);
+  filter: brightness(1.06);
+}
+
+button.ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--secondary);
+}
+
+button.ghost:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--foreground);
+}
+
+button.ghost.destructive {
+  color: var(--danger);
+}
+
+button.ghost.destructive:hover:not(:disabled) {
+  background: var(--danger-tint);
+  color: var(--danger);
+}
+
+/* A square, quiet button holding a single icon. */
+button.icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  color: var(--secondary);
+}
+
+button.icon:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--foreground);
+}
+
+button svg {
+  flex: none;
+}
+
+/* Buttons with an icon and a label. */
+button.labelled {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/* ----------------------------------------------------------------- inputs -- */
+
+input[type='number'],
+input[type='search'],
+input[type='text'],
+textarea {
+  font: inherit;
+  color: var(--foreground);
+  background: var(--surface);
+  border: 1px solid var(--border-faint);
+  border-radius: 7px;
+  padding: 4px 8px;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--secondary);
+  opacity: 0.75;
+}
+
+input[type='number'] {
+  width: 72px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+input:focus-visible,
+textarea:focus-visible,
+button:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--ring);
+}
+
+button.ghost:focus-visible,
+button.icon:focus-visible {
+  border-color: transparent;
+  box-shadow: 0 0 0 3px var(--ring);
+}
+
+/* The search field: a magnifier, the input, a clear affordance — one control,
+   sized to the content it filters rather than floating in whitespace
+   (braindump §4.6). */
+.searchfield {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.searchfield > svg {
+  position: absolute;
+  left: 9px;
+  color: var(--secondary);
+  pointer-events: none;
+}
+
+.searchfield input {
+  flex: 1;
+  padding: 5px 30px 5px 30px;
+  border-radius: 8px;
+}
+
+.searchfield input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+}
+
+.searchfield .clear {
+  position: absolute;
+  right: 3px;
+  width: 24px;
+  height: 24px;
+}
+
+/* ------------------------------------------------------------------ alert -- */
+
+.issues {
+  border: 1px solid color-mix(in srgb, var(--danger) 32%, transparent);
+  border-radius: 8px;
+  padding: 8px 12px;
+  background: var(--danger-tint);
+  margin: 0 0 14px;
+}
+
+.issues p {
+  margin: 0;
+  font-size: 12px;
+}
+
+/* ------------------------------------------------------------ empty state -- */
+
+.empty-state {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  color: var(--secondary);
+  text-align: center;
+}
+
+.empty-state p {
+  margin: 0;
+}
+
+.empty-state .primary {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.empty-state .secondary {
+  font-size: 11.5px;
+}
+
+/* ---------------------------------------------------------------- history -- */
+
+.rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.rows li {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  position: relative;
+}
+
+.rows li + li {
+  /* Hairline between rows, drawn inside so the hover shape stays a clean
+     rounded rect. */
+  border-top: 1px solid var(--border-faint);
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+.rows li:has(+ li:hover),
+.rows li:hover + li {
+  border-top-color: transparent;
+}
+
+.rows li:hover {
+  background: var(--surface-hover);
+  border-radius: 8px;
+  border-top-color: transparent;
+}
+
+.row-text {
+  flex: 1;
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.row-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  flex: none;
+}
+
+.row-side time {
+  font-size: 11px;
+  color: var(--secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* A dictation that never landed is the row the user came here to find
+   (braindump §12.5), so it stays marked — by one signal, not three
+   (braindump §7.7): a short red label under the time. */
+.row-flag {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--danger);
+  white-space: nowrap;
+}
+
+.rows .row-copy {
+  align-self: center;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.rows li:hover .row-copy,
+.rows .row-copy:focus-visible,
+.rows .row-copy.copied {
+  opacity: 1;
+}
+
+.row-copy.copied {
+  color: var(--ok);
+}
+
+/* ------------------------------------------------------------- scratchpad -- */
+
+/* No visible chrome: the window is the text (braindump §11.1.7). The window
+   frame already signals focus, so the textarea carries no border and no ring. */
+.pad {
+  width: 100%;
+  height: 100%;
+  resize: none;
+  border: none;
+  background: transparent;
+  padding: 2px 0;
+  line-height: 1.6;
+}
+
+.pad:focus-visible {
+  outline: none;
+  border: none;
+  box-shadow: none;
+}
+
+.scratchpad .panel-body {
+  display: flex;
+}
+
+/* --------------------------------------------------------------- settings -- */
+
+.group {
+  margin: 0 0 18px;
+}
+
+.group-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--secondary);
+  margin: 0 0 6px 2px;
+}
+
+/* The grouped inset box macOS System Settings uses: label left, control
+   right, hairlines between rows (braindump §4.7). */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border-faint);
+  border-radius: 10px;
+}
+
+.card-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 40px;
+  padding: 7px 14px;
+}
+
+.card-row + .card-row,
+.card-row + .card-stack,
+.card-stack + .card-row {
+  border-top: 1px solid var(--border-faint);
+}
+
+.card-row .row-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+
+.card-row .control {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
+}
+
+.card-row .unit {
+  color: var(--secondary);
+  font-size: 12px;
+}
+
+/* A card section that stacks content vertically (the keyterms editor). */
+.card-stack {
+  padding: 10px 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* In a stack the label row spans the card, so a `.spacer` inside it can push
+   a counter to the right edge. */
+.card-stack .row-label {
+  display: flex;
+  align-items: center;
+}
+
+.card-caption {
+  margin: 4px 2px 0;
+  font-size: 11.5px;
+  color: var(--secondary);
+}
+
+/* Inputs sitting inside a card need to read against the card, not vanish
+   into it. */
+.card input[type='number'],
+.card textarea {
+  background: var(--background);
+}
+
+.keyterms {
+  min-height: 120px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+kbd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: var(--secondary);
+  background: var(--background);
+  border: 1px solid var(--border-faint);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  padding: 1px 7px;
+}
+
+/* ----------------------------------------------------------------- switch -- */
+
+/* Hand-built NSSwitch: the native checkbox reads as a web page
+   (braindump §4.7). The real input stays in the tree for keyboard and
+   assistive access; the track and thumb are drawn. */
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 34px;
+  height: 20px;
+  flex: none;
+}
+
+.switch input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+}
+
+.switch .track {
+  position: absolute;
+  inset: 0;
+  border-radius: 99px;
+  background: color-mix(in srgb, var(--secondary) 32%, transparent);
+  transition: background 160ms ease;
+  pointer-events: none;
+}
+
+.switch .track::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow:
+    0 0 0 0.5px rgba(0, 0, 0, 0.06),
+    0 1px 2px rgba(0, 0, 0, 0.25);
+  transition: transform 160ms ease;
+}
+
+.switch input:checked + .track {
+  background: var(--accent);
+}
+
+.switch input:checked + .track::after {
+  transform: translateX(14px);
+}
+
+.switch input:focus-visible + .track {
+  box-shadow: 0 0 0 3px var(--ring);
+}
+
+/* -------------------------------------------------------------- segmented -- */
+
+.segmented {
+  display: inline-flex;
+  background: var(--background);
+  border: 1px solid var(--border-faint);
+  border-radius: 8px;
+  padding: 2px;
+  gap: 2px;
+}
+
+.segmented button {
+  border: none;
+  background: transparent;
+  color: var(--secondary);
+  border-radius: 6px;
+  padding: 3px 11px;
+  font-size: 12px;
+}
+
+.segmented button:hover:not(.on) {
+  background: var(--surface-hover);
+  color: var(--foreground);
+}
+
+.segmented button.on {
+  background: var(--surface);
+  color: var(--foreground);
+  box-shadow:
+    0 0 0 0.5px var(--border-faint),
+    0 1px 2px rgba(0, 0, 0, 0.12);
+}
+
+@media (prefers-color-scheme: dark) {
+  .segmented {
+    background: rgba(0, 0, 0, 0.25);
+  }
+
+  .segmented button.on {
+    background: #47474c;
+  }
+}
+
+/* ---------------------------------------------------------------- infotip -- */
+
+/* The explanatory prose the old Settings pane printed under every control is
+   genuinely valuable — it exists because the settings do less than their
+   names suggest — but as body copy it made the pane read as documentation
+   (braindump §4.7). It moves behind a small ⓘ that reveals on hover or
+   keyboard focus. CSS-only: no positioning code to get wrong. */
+.infotip {
+  position: relative;
+  display: inline-flex;
+}
+
+.infotip > button {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--secondary);
+  opacity: 0.7;
+}
+
+.infotip > button:hover {
+  opacity: 1;
+  background: transparent;
+}
+
+.infotip .tip {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: -8px;
+  z-index: 10;
+  width: max-content;
+  max-width: 300px;
+  background: var(--elevated);
+  border-radius: 9px;
+  box-shadow: var(--shadow-pop);
+  padding: 9px 12px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--foreground);
+  visibility: hidden;
+  opacity: 0;
+  transition:
+    opacity 140ms ease,
+    visibility 0s 140ms;
+}
+
+.infotip:hover .tip,
+.infotip:focus-within .tip {
+  visibility: visible;
+  opacity: 1;
+  transition-delay: 0s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition-duration: 0.01ms !important;
+  }
+}

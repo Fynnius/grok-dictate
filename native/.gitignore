@@ -1,0 +1,10 @@
+# SwiftPM build state. `build.sh` copies the finished binary to `native/build/`,
+# which is also not tracked — it is a build artefact, rebuilt by `build.sh`.
+.build/
+build/
+*.xcodeproj
+.swiftpm/
+
+# Output written by the human-test probes (`--probe-insert`), kept out of the
+# repository because it is scratch evidence, not source.
+probe-out/

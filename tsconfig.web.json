@@ -1,0 +1,24 @@
+{
+  "extends": "./tsconfig.base.json",
+  /* Only the renderer and the contracts it consumes. `src/shared/**` is
+     deliberately NOT a root here: those modules are Node-side, and pulling them
+     all in would demand @types/node in a DOM project. Anything a renderer
+     genuinely imports (e.g. contracts → shared/result) is still typechecked
+     transitively. */
+  "include": [
+    "contracts/**/*.ts",
+    "src/renderer/**/*.ts",
+    "src/renderer/**/*.tsx",
+    "src/shared/result.ts",
+    "src/shared/constants.ts",
+    "src/shared/hud-view.ts"
+  ],
+  "exclude": ["**/* [0-9].*"],
+  "compilerOptions": {
+    "composite": true,
+    "noEmit": true,
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["vite/client"],
+    "jsx": "react-jsx"
+  }
+}

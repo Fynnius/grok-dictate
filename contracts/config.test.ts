@@ -1,0 +1,71 @@
+import { describe, expect, it } from 'vitest';
+import { AppConfigSchema, DEFAULT_CONFIG, parseConfig, resolveWireLanguage } from './config.js';
+
+describe('config defaults', () => {
+  it('defaults to auto language and no keyterms', () => {
+    expect(DEFAULT_CONFIG.languageMode).toBe('auto');
+    expect(DEFAULT_CONFIG.keyterms).toEqual([]);
+  });
+
+  it('defaults `useFinalize` to false on the evidence of spike 2', () => {
+    // `finalize` measured 318-344 ms, the same as `audio.done`, and produced no
+    // `transcript.done` — so no duration telemetry and no clean close.
+    expect(DEFAULT_CONFIG.useFinalize).toBe(false);
+  });
+
+  it('keeps the Grok CLI endpointing default', () => {
+    expect(DEFAULT_CONFIG.endpointingMs).toBe(400); // config.rs:36-48
+  });
+});
+
+describe('parseConfig', () => {
+  it('accepts a valid config unchanged', () => {
+    const { config, issues } = parseConfig({ ...DEFAULT_CONFIG, languageMode: 'de' });
+    expect(issues).toEqual([]);
+    expect(config.languageMode).toBe('de');
+  });
+
+  it('salvages the good fields when one is invalid, rather than discarding the file', () => {
+    const { config, issues } = parseConfig({ languageMode: 'klingon', endpointingMs: 250 });
+    expect(issues.length).toBeGreaterThan(0);
+    expect(config.languageMode).toBe('auto'); // fell back
+    expect(config.endpointingMs).toBe(250); // survived
+  });
+
+  it('rejects a keyterm list that exceeds the documented limits', () => {
+    // 100 terms x 50 chars.
+    expect(AppConfigSchema.safeParse({ keyterms: [`${'x'.repeat(51)}`] }).success).toBe(false);
+    expect(AppConfigSchema.safeParse({ keyterms: new Array<string>(101).fill('x') }).success).toBe(
+      false,
+    );
+    expect(AppConfigSchema.safeParse({ keyterms: new Array<string>(100).fill('x') }).success).toBe(
+      true,
+    );
+  });
+
+  it('never throws on garbage', () => {
+    for (const bad of [null, 42, 'nope', [], { keyterms: 'not an array' }]) {
+      expect(() => parseConfig(bad)).not.toThrow();
+    }
+  });
+});
+
+describe('resolveWireLanguage', () => {
+  // Spike 1/3: the server detects the language acoustically and reports it, so
+  // `auto` omits the parameter rather than guessing a code.
+  it('omits the parameter for auto', () => {
+    expect(resolveWireLanguage('auto', undefined, 'de')).toBeNull();
+    expect(resolveWireLanguage('auto', 'de', 'en')).toBeNull();
+  });
+
+  it('sends the explicit code for de and en', () => {
+    expect(resolveWireLanguage('de', undefined, undefined)).toBe('de');
+    expect(resolveWireLanguage('en', undefined, undefined)).toBe('en');
+  });
+
+  it('never returns the string "auto" — `language.rs:176-186`', () => {
+    for (const mode of ['auto', 'de', 'en'] as const) {
+      expect(resolveWireLanguage(mode, 'auto', 'auto')).not.toBe('auto');
+    }
+  });
+});

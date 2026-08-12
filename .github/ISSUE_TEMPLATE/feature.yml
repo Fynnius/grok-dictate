@@ -1,0 +1,22 @@
+name: Feature request
+description: A change you would like
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What is painful or missing today?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: The idea
+      description: What would a good version of this look like?
+    validations:
+      required: true
+  - type: markdown
+    attributes:
+      value: |
+        Please read [CONTRIBUTING.md](../../CONTRIBUTING.md) before opening a large PR.

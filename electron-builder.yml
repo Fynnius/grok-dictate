@@ -1,0 +1,56 @@
+# Packaging. Prefer `npm run package` (`scripts/package.sh`) over a bare
+# `electron-builder` — that script builds the Swift helper first, then the
+# JS bundles, then ad-hoc signs the .app so TCC grants stick to a stable
+# identity on this machine.
+#
+# A packaged .app is its own TCC identity. Microphone, Accessibility and
+# Input Monitoring start from nothing and must be granted once. The helper
+# binary must already exist at native/build/grok-dictate-helper
+# (`./native/build.sh`); extraResources copies whatever is on disk.
+
+appId: com.fynnius.grokdictate
+productName: Grok Dictate
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - out/**/*
+  # `native/build.sh` redirects the Swift package's scratch path here to keep
+  # `native/.build` out of the tree (it broke repo-wide `prettier --check`).
+  # Without this exclusion it is swept into the asar: 260 MB of Swift object
+  # files for a 6 MB application.
+  - '!out/native-build'
+  - package.json
+
+# The Swift helper. `resolveHelperBinary()` checks `process.resourcesPath`
+# second, after the `GROK_DICTATE_HELPER` override and before the development
+# tree, so this is the path a packaged build resolves.
+extraResources:
+  - from: native/build/grok-dictate-helper
+    to: grok-dictate-helper
+
+mac:
+  category: public.app-category.productivity
+  target:
+    - target: dir
+      arch: arm64
+    - target: zip
+      arch: arm64
+  artifactName: ${name}-${version}-mac-${arch}.${ext}
+  # LSUIElement: menu-bar app, no Dock icon. `app.dock.hide()` does the same at
+  # runtime; this stops the icon appearing at all during launch.
+  minimumSystemVersion: '14.0'
+  extendInfo:
+    LSUIElement: true
+    NSMicrophoneUsageDescription: >-
+      Grok Dictate records audio only while you hold the dictation key, and
+      sends it to xAI to be transcribed.
+    NSAppleEventsUsageDescription: >-
+      Grok Dictate inserts the transcript into the app you were typing in.
+  # Skip signing here. This repo lives under iCloud Drive, and codesign
+  # refuses Finder detritus. `scripts/package.sh` ditto's the bundle to
+  # ~/Applications and ad-hoc signs it there.
+  identity: null
+  hardenedRuntime: false
+  forceCodeSigning: false

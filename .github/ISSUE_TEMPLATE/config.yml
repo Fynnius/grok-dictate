@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: xAI speech-to-text docs
+    url: https://docs.x.ai/developers/model-capabilities/audio/speech-to-text
+    about: Official API reference for the service Grok Dictate talks to
+  - name: Security report
+    url: https://github.com/Fynnius/grok-dictate/security/advisories/new
+    about: Please do not file a public issue for a token leak or helper-privilege problem
