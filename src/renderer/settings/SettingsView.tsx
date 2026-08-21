@@ -183,7 +183,7 @@ export function SettingsView(): React.JSX.Element {
           <div className="card-row">
             <span className="row-label">
               Endpointing
-              <InfoTip text="How long a pause has to be before the server ends a segment. It does not affect how fast a transcript arrives after you let go of the key — measured, that is the same at 50 ms and at 400 ms." />
+              <InfoTip text="How long a pause has to be before the server cuts your dictation into a new segment. Each segment is transcribed on its own, so every cut is a chance to lose the word across it — shorter values mean more cuts and worse text. It does not delay your transcript when you let go of the key: measured, that is the same at 50 ms and at 2,000 ms." />
             </span>
             <span className="control">
               <input
@@ -209,6 +209,17 @@ export function SettingsView(): React.JSX.Element {
               />
               <span className="unit">ms of silence</span>
             </span>
+          </div>
+          <div className="card-row">
+            <span className="row-label">
+              Repair segment joins
+              <InfoTip text="A long dictation is cut into segments, each transcribed without seeing the one before it, which leaves a duplicated word, a capital letter mid-sentence, or a stray “Thank you.” where the two meet. This tidies those joins before the text is inserted. It is the only thing in the app that edits what you said — turn it off to get the transcript exactly as the server sent it." />
+            </span>
+            <Switch
+              checked={config.repairSeams}
+              onChange={(next) => save({ repairSeams: next })}
+              ariaLabel="Repair the joins between transcript segments"
+            />
           </div>
         </div>
       </div>
@@ -321,6 +332,17 @@ export function SettingsView(): React.JSX.Element {
               checked={config.launchAtLogin}
               onChange={(next) => save({ launchAtLogin: next })}
               ariaLabel="Open Grok Dictate at login"
+            />
+          </div>
+          <div className="card-row">
+            <span className="row-label">
+              Keep the Grok CLI login signed in
+              <InfoTip text="A Grok CLI login lasts a few hours. Rather than failing a dictation and asking you to run `grok` yourself, Grok Dictate runs `grok models` in the background shortly before the token expires and lets the CLI renew its own login. It never handles the token itself. Does nothing if you signed in with an xAI API key, which does not expire." />
+            </span>
+            <Switch
+              checked={config.autoRenewLogin}
+              onChange={(next) => save({ autoRenewLogin: next })}
+              ariaLabel="Keep the Grok CLI login signed in"
             />
           </div>
         </div>

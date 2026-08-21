@@ -33,6 +33,21 @@
  * The spike saw that difference directly: mid-stream partials read
  * "…ungefähr **20 Minuten**", the `speech_final` re-transcription reads
  * "…ungefähr **zwanzig Minuten**", with punctuation and casing added.
+ *
+ * ## "of the whole turn" is wrong, and it cost us
+ *
+ * A `speech_final` re-transcribes **one endpointed segment**, not the turn. A
+ * turn emits one every time the user pauses longer than `endpointing`, which
+ * across 67 measured dictations was **4.9 times per hold** (worst case 41) —
+ * and `docs/spike-results.md` §4 said so all along: *"one hold can emit many
+ * `speech_final`s"*.
+ *
+ * The distinction is the whole ball game. Each segment is transcribed with no
+ * knowledge of the one before it, so the caller is not concatenating a
+ * transcript, it is splicing several — and splices lose words. What that looks
+ * like in a real user's history, and what can be done about it deterministically,
+ * is in `src/shared/stitch.ts`. Fewer splices is better than better splices:
+ * see `DEFAULT_ENDPOINTING_MS`.
  */
 
 import { z } from 'zod';

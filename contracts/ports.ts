@@ -131,8 +131,15 @@ export interface AuthPort {
    * There is **no refresh path anywhere in this app, by design**. Refreshing
    * without writing the rotated token back under `auth.json.lock` can silently
    * invalidate the user's Grok CLI login, and the failure surfaces later, in a
-   * different program. On expiry this returns an error whose
-   * hint says to run `grok`. Phase 5 audits that no refresh exists (§5b).
+   * different program. Phase 5 audits that no refresh exists (§5b).
+   *
+   * What this *may* do on expiry is run the Grok CLI and read the file again.
+   * That is not a refresh path and the distinction is the whole point: `grok`
+   * owns `auth.json`, owns its lock and owns the rotation, so asking it to renew
+   * is the same act as the user typing `grok` themselves — which is what the
+   * error hint used to tell them to do. No token is minted, rotated or written
+   * here. See `src/main/auth/renew.ts`, and note that §5b's source scan passes
+   * over it unchanged.
    */
   getBearer(): Promise<Result<Bearer>>;
 }

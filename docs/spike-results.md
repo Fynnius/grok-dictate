@@ -26,7 +26,20 @@ Every run saw: `duration`, `id`, `is_final`, `language`, `speech_final`, `start`
 
 ## 2. End of turn
 
-`audio.done` → `speech_final` in ~318–344 ms. `endpointing` did not change that latency when the client ended the turn. It only affects mid-hold auto-splits. Keep 400 ms.
+`audio.done` → `speech_final` in ~318–344 ms. `endpointing` did not change that latency when the client ended the turn. It only affects mid-hold auto-splits.
+
+> **Superseded 2026-08-21: "keep 400 ms" was wrong, and this section is why.**
+> Measuring the latency and finding it flat made `endpointing` look like a free
+> parameter, so nobody measured what the mid-hold auto-splits _cost_. Over 67
+> real dictations at 400 ms a hold was cut into **4.9 segments on average** (one
+> every ~8 s, worst case 41) — and finding 4 below already said each segment is
+> re-transcribed on its own. Every split is therefore a splice between two
+> transcriptions that never saw each other, and the splices lose words. From a
+> real user's history: `From the Mac.` + `A book at home.` for "MacBook";
+> `you` + `You have like index?`; `and it should` + `Do any code changes yet`
+> for "it shouldn't do any code changes yet".
+> The default is now 2,000 ms. Latency is unaffected, exactly as measured here.
+> See `DEFAULT_ENDPOINTING_MS` and `src/shared/stitch.ts`.
 
 `finalize` flushes the current utterance and leaves the socket open: no `transcript.done`, no duration, no server close.
 

@@ -29,8 +29,14 @@ import {
   setLogLevel,
   type LogRecord,
 } from '@shared/logger.js';
-import { DictateAuth, GrokAuthProvider, parseAuthDocument } from './index.js';
+import {
+  DictateAuth,
+  GrokAuthProvider,
+  parseAuthDocument,
+  type DictateAuthOptions,
+} from './index.js';
 import { CredentialStore, type SecretBox } from './store.js';
+import type { GrokCliRenewer } from './renew.js';
 
 /**
  * A structurally real JWT: `eyJ` header, three segments, 838 characters — the
@@ -327,6 +333,138 @@ describe('DictateAuth', () => {
       cli: { path: join(dir, 'missing.json'), now: () => NOW },
     });
     await expect(auth.status()).resolves.toEqual({ state: 'signed-out' });
+  });
+
+  /**
+   * Renewal by delegation.
+   *
+   * The renewer is a stub whose `renew` rewrites `auth.json` — which is exactly
+   * what the real one causes, one process removed. What is asserted here is the
+   * policy around it: when we are willing to spend a second of a key press on
+   * spawning something, and when we are not.
+   */
+  describe('automatic login renewal', () => {
+    /** Stands in for `GrokCliRenewer`, recording what it was asked to do. */
+    function stubRenewer(onRun: () => void): {
+      renewer: GrokCliRenewer;
+      calls: () => number;
+      outcomes: boolean[];
+    } {
+      let calls = 0;
+      const outcomes: boolean[] = [];
+      const renewer = {
+        renew: (): Promise<{ kind: 'ran'; exitCode: number | null; durationMs: number }> => {
+          calls++;
+          onRun();
+          return Promise.resolve({ kind: 'ran' as const, exitCode: 0, durationMs: 5 });
+        },
+        recordOutcome: (renewed: boolean): void => {
+          outcomes.push(renewed);
+        },
+      };
+      return {
+        renewer: renewer as unknown as GrokCliRenewer,
+        calls: () => calls,
+        outcomes,
+      };
+    }
+
+    function build(options: Partial<DictateAuthOptions>): DictateAuth {
+      return new DictateAuth(createLogger('test'), {
+        store: new CredentialStore(join(dir, 'credentials.json'), box(), createLogger('test')),
+        cli: { path, now: () => NOW },
+        ...options,
+      });
+    }
+
+    it('renews an expired token and returns the renewed bearer', async () => {
+      write(authDocument({ expires_at: new Date(NOW - 1000).toISOString() }));
+      const { renewer, calls, outcomes } = stubRenewer(() => {
+        // What the CLI does: a fresh token, written in place under its own lock.
+        write(authDocument({ expires_at: new Date(NOW + 3 * 60 * 60 * 1000).toISOString() }));
+      });
+
+      const bearer = await build({ renewer }).getBearer();
+
+      expect(calls()).toBe(1);
+      expect(bearer.ok).toBe(true);
+      if (!bearer.ok) return;
+      expect(bearer.value.expiresAt.getTime()).toBe(NOW + 3 * 60 * 60 * 1000);
+      // The verdict comes from re-reading the file, never from the exit code.
+      expect(outcomes).toEqual([true]);
+    });
+
+    it('reports the original error when the renewal changes nothing', async () => {
+      write(authDocument({ expires_at: new Date(NOW - 1000).toISOString() }));
+      const { renewer, calls, outcomes } = stubRenewer(() => undefined);
+
+      const bearer = await build({ renewer }).getBearer();
+
+      expect(calls()).toBe(1);
+      expect(bearer.ok).toBe(false);
+      if (bearer.ok) return;
+      expect(bearer.error.code).toBe('auth_expired');
+      expect(outcomes).toEqual([false]);
+    });
+
+    it('does not spawn anything when there is nothing to refresh from', async () => {
+      // No file at all: the user never signed in, or a rejected refresh made the
+      // CLI clear it. Either way `grok` cannot help, and a second of latency on
+      // every key press to prove it is not a trade worth making.
+      const { renewer, calls } = stubRenewer(() => undefined);
+      const bearer = await build({
+        cli: { path: join(dir, 'missing.json'), now: () => NOW },
+        renewer,
+      }).getBearer();
+
+      expect(calls()).toBe(0);
+      expect(bearer.ok).toBe(false);
+      if (bearer.ok) return;
+      expect(bearer.error.code).toBe('auth_missing');
+    });
+
+    it('does not spawn anything for a malformed file', async () => {
+      write({ 'some-scope': { nonsense: true } });
+      const { renewer, calls } = stubRenewer(() => undefined);
+      const bearer = await build({ renewer }).getBearer();
+      expect(calls()).toBe(0);
+      expect(bearer.ok).toBe(false);
+    });
+
+    it('honours the setting being switched off', async () => {
+      write(authDocument({ expires_at: new Date(NOW - 1000).toISOString() }));
+      const { renewer, calls } = stubRenewer(() => undefined);
+      const bearer = await build({ renewer, autoRenew: () => false }).getBearer();
+      expect(calls()).toBe(0);
+      expect(bearer.ok).toBe(false);
+    });
+
+    it('never spawns for an API key, which cannot expire', async () => {
+      write(authDocument({ expires_at: new Date(NOW - 1000).toISOString() }));
+      const { renewer, calls } = stubRenewer(() => undefined);
+      const auth = build({ renewer });
+      await auth.setApiKey('xai-a-perfectly-good-api-key');
+
+      expect((await auth.getBearer()).ok).toBe(true);
+      await auth.renewIfExpiringSoon();
+      expect(calls()).toBe(0);
+    });
+
+    it('renews ahead of expiry, inside the window the CLI will act on', async () => {
+      // Three minutes left: inside this app's four-minute margin, and inside the
+      // CLI's own five-minute one, so the spawn actually accomplishes something.
+      write(authDocument({ expires_at: new Date(Date.now() + 3 * 60_000).toISOString() }));
+      const { renewer, calls } = stubRenewer(() => undefined);
+      await build({ renewer, cli: { path } }).renewIfExpiringSoon();
+      expect(calls()).toBe(1);
+    });
+
+    it('leaves a token with plenty of life alone', async () => {
+      write(authDocument({ expires_at: new Date(Date.now() + 60 * 60_000).toISOString() }));
+      const { renewer, calls } = stubRenewer(() => undefined);
+      await build({ renewer, cli: { path } }).renewIfExpiringSoon();
+      expect(calls()).toBe(0);
+    });
   });
 });
 

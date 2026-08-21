@@ -118,6 +118,7 @@ Carried alongside the state; not part of it.
 | `INSERT_RESULT(!ok)` | `idle`, or `recording` if `pendingStart` | `hud(not_inserted, full text)`, `history_append`, set `lastTranscript`   |
 | `INSERT_TIMEOUT`     | `idle`                                   | treated exactly as `INSERT_RESULT(tier:'none', ok:false)`                |
 | `TURN_ENDED`         | `inserting`                              | absorbs `durationSec` into the context so the history row carries it     |
+| `TRANSCRIPT_FINAL`   | `inserting`                              | appended to `committed` and logged at `warn`; **not typed** — see §7     |
 | **`PTT_DOWN`**       | `inserting`                              | **`pendingStart = true`** — the §11.3 resolution, see §5                 |
 | `PTT_UP`             | `inserting`                              | `pendingStart = false`                                                   |
 | `CANCEL`             | —                                        | an insert in flight cannot be recalled; the events may already be posted |
@@ -195,7 +196,7 @@ Two more, about retries specifically:
 
 ## 7. Why a `speech_final` during `recording` is not inserted immediately
 
-With `endpointing=400`, a pause longer than 400 ms mid-hold makes the server emit `speech_final` while the user is still holding Fn. The Grok CLI appends each one to its prompt box (`pipeline.rs:310-330`) — fine for a text field, wrong here.
+A pause longer than `endpointingMs` mid-hold makes the server emit `speech_final` while the user is still holding Fn. The Grok CLI appends each one to its prompt box (`pipeline.rs:310-330`) — fine for a text field, wrong here.
 
 **This machine accumulates them into `committed` and inserts once, at end of turn.** One hold produces exactly one insertion. That is what makes the rest coherent:
 
@@ -204,7 +205,9 @@ With `endpointing=400`, a pause longer than 400 ms mid-hold makes the server emi
 - history holds one entry per hold;
 - §5's queueing has a well-defined "busy" window.
 
-`committed` segments are joined with a single space.
+**A `speech_final` that arrives during `inserting` is kept but not typed.** `processing` inserts on the _first_ final it sees, so a server that flushes two segments after `audio.done` — which it does when the buffered tail contains a pause — used to lose the second one entirely: not typed, not in the pill, not in history, not on ⌃⌘V. It is now appended to `committed`, which is what the pill, the history row and ⌃⌘V are built from, and logged at `warn`. It is still not typed, because the helper is already committed and one hold produces one insertion.
+
+**`committed` segments are not joined with a single space.** Each `speech_final` re-transcribes one endpointed segment with no knowledge of the one before it, so the joins are splices, and splices lose words — a duplicated seam word, a mid-sentence capital, a "Thank you." hallucinated out of the closing silence. [`src/shared/stitch.ts`](../src/shared/stitch.ts) holds the measured evidence and the three deterministic repairs; the `repairSeams` setting turns them off and restores the plain join.
 
 ---
 

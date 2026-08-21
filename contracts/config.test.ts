@@ -13,8 +13,17 @@ describe('config defaults', () => {
     expect(DEFAULT_CONFIG.useFinalize).toBe(false);
   });
 
-  it('keeps the Grok CLI endpointing default', () => {
-    expect(DEFAULT_CONFIG.endpointingMs).toBe(400); // config.rs:36-48
+  it('departs from the Grok CLI endpointing default, deliberately', () => {
+    // `config.rs:36-48` sets 400, which is right for a TUI prompt box and wrong
+    // here: at 400 ms a hold was cut into 4.9 independently-transcribed segments
+    // on average across 67 measured dictations, and every cut costs text. Ending
+    // the turn does not wait for silence (spike 2), so a longer value is free.
+    // See `DEFAULT_ENDPOINTING_MS`.
+    expect(DEFAULT_CONFIG.endpointingMs).toBe(2_000);
+  });
+
+  it('repairs segment joins by default', () => {
+    expect(DEFAULT_CONFIG.repairSeams).toBe(true);
   });
 });
 

@@ -21,7 +21,7 @@
  * than something reached in normal use.
  */
 
-import type { MainToRenderer, RendererToMain } from '@contracts/events.js';
+import type { CaptureTrackSettings, MainToRenderer, RendererToMain } from '@contracts/events.js';
 import type { AudioHandlers, AudioSourcePort } from '@contracts/ports.js';
 import { CHUNK_BYTES, MAX_UTTERANCE_BUFFER_BYTES, SAMPLE_RATE_HZ } from '@shared/constants.js';
 import type { Logger } from '@shared/logger.js';
@@ -187,7 +187,7 @@ export class CaptureCoordinator implements AudioSourcePort {
       return true;
     }
     if (message.type === 'capture-started') {
-      this.#onStarted(message.sessionId, message.actualSampleRate);
+      this.#onStarted(message.sessionId, message.actualSampleRate, message.trackSettings);
       return true;
     }
     if (message.type === 'capture-error') {
@@ -220,9 +220,25 @@ export class CaptureCoordinator implements AudioSourcePort {
     session.handlers.onChunk(pcm);
   }
 
-  #onStarted(sessionId: string, actualSampleRate: number): void {
+  #onStarted(
+    sessionId: string,
+    actualSampleRate: number,
+    trackSettings?: CaptureTrackSettings,
+  ): void {
     const session = this.#forSession(sessionId);
     if (session === null) return;
+
+    // What Chromium's audio processing actually applied, as opposed to what the
+    // renderer asked for. It is tuned for telephony rather than for a
+    // recogniser, and whether it helps accuracy here has never been measured —
+    // which is impossible without these values sitting in the log beside the
+    // transcript they produced. See `AUDIO_CONSTRAINTS` in the capture renderer.
+    if (trackSettings !== undefined) {
+      this.#log.info('microphone processing as applied by the device', {
+        sessionId,
+        ...trackSettings,
+      });
+    }
 
     if (actualSampleRate !== SAMPLE_RATE_HZ) {
       // Assumption 10.4 was "Electron `getUserMedia` + AudioWorklet at 16 kHz

@@ -58,11 +58,31 @@ export const STT_READY_TIMEOUT_MS = 10_000;
 
 /**
  * Silence, in ms, before the server declares end of utterance.
- * `config.rs:36-48` sets 400; xAI's documented default is 10.
- * 400 was tuned for a TUI prompt box, not push-to-talk, where the user defines
- * the turn boundary — see spike 2 in docs/spike-results.md.
+ *
+ * **This is the one constant here that is deliberately not the Rust CLI's.**
+ * `config.rs:36-48` sets 400 and xAI documents 10; both are tuned for a TUI
+ * prompt box, where each endpointed segment is its own submitted line. Here the
+ * user defines the turn boundary by letting go of a key, and every mid-hold
+ * split is pure cost: the server re-transcribes each segment independently, so
+ * a split loses the word straddling it, re-capitalises the next one, and
+ * sometimes hallucinates a "Thank you." into the pause.
+ *
+ * Measured over 67 real dictations at 400 ms (a user's own `main.log`): **4.9
+ * segments per turn on average**, one every ~8 s, worst case 41 in a single
+ * hold. Their transcripts carry the damage verbatim — `run? From the Mac.` +
+ * `A book at home.` for "MacBook", `you You have like index?`, `and it should
+ * Do any code changes yet` for "it shouldn't do".
+ *
+ * 2,000 ms is longer than a thinking pause and shorter than the gap that means
+ * the user has genuinely stopped. It costs nothing at the end of a turn: spike 2
+ * measured `audio.done` → `speech_final` at 318-344 ms *regardless* of this
+ * value, because ending the turn explicitly does not wait for silence. It only
+ * suppresses mid-hold splits, which is the entire point.
+ *
+ * `src/shared/stitch.ts` repairs the seams that remain. Fewer seams first,
+ * though — a repaired seam is still worse than one that never happened.
  */
-export const DEFAULT_ENDPOINTING_MS = 400;
+export const DEFAULT_ENDPOINTING_MS = 2_000;
 
 /** `keyterm`: max 100 terms of 50 chars each. */
 export const KEYTERM_MAX_COUNT = 100;

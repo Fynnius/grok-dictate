@@ -37,6 +37,7 @@ import { envString } from '@shared/env.js';
 import { createAudioSource } from './audio/index.js';
 import { createAuthProvider } from './auth/index.js';
 import { CredentialStore, credentialsPath } from './auth/store.js';
+import { GrokCliRenewer } from './auth/renew.js';
 import { fileSink, logFilePath } from './log-file.js';
 import { createConfigStore } from './config/index.js';
 import { createHistoryStore } from './history/index.js';
@@ -93,6 +94,10 @@ function main(): void {
       log,
     ),
     envToken: envString('XAI_API_KEY'),
+    // Spawns `grok models` so the CLI renews its own login. The app still never
+    // touches a refresh token — see the header of `auth/renew.ts`.
+    renewer: new GrokCliRenewer({ logger: log }),
+    autoRenew: () => config.get().autoRenewLogin,
   });
   const panels = new PanelWindows(log);
   const signIn = new SignInWindow(log);
@@ -323,6 +328,11 @@ function main(): void {
   void app.whenReady().then(async () => {
     await hud.create();
     ui.ready();
+    // Before deciding whether to put a sign-in window in front of the user:
+    // a token that expired while the app was closed is the CLI's to renew, and
+    // asking it takes about a second. Awaited so the decision below sees the
+    // outcome rather than racing it.
+    await auth.renewIfExpiringSoon();
     const status = await auth.refresh();
     log.info('grok-dictate ready', {
       helper: native.isReady,
@@ -333,6 +343,9 @@ function main(): void {
     if (status.state !== 'signed-in') {
       await signIn.open();
     }
+    // From here the token is kept alive in the background, so a dictation should
+    // never meet an expired one.
+    auth.startAutoRenew();
   });
 
   app.on('window-all-closed', () => {
@@ -344,6 +357,7 @@ function main(): void {
     // going to restart — correct, and not something to put on screen while the
     // app is closing.
     isQuitting = true;
+    auth.stopAutoRenew();
     orchestrator.dispose();
     ui.dispose();
     preview.dispose();

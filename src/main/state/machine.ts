@@ -19,6 +19,7 @@ import type {
 } from '@contracts/events.js';
 import type { AppError } from '@shared/result.js';
 import type { LogLevel } from '@shared/logger.js';
+import { stitchSegments } from '@shared/stitch.js';
 
 /* ------------------------------------------------------------------ *
  * Events in
@@ -110,6 +111,15 @@ export interface SessionContext {
   readonly durationSec: number | null;
   /** Text handed to the helper, held until `insert_result` comes back. */
   readonly inserting: string | null;
+  /**
+   * Whether `committedText` repairs the joins between `speech_final` segments
+   * (`src/shared/stitch.ts`).
+   *
+   * Snapshotted per turn from the config rather than read at join time, so
+   * toggling the setting mid-dictation cannot change how the dictation already
+   * in flight is assembled.
+   */
+  readonly repairSeams: boolean;
 }
 
 export interface Snapshot {
@@ -120,6 +130,11 @@ export interface Snapshot {
 export interface MachineEnv {
   newSessionId(): string;
   now(): number;
+  /**
+   * The `repairSeams` setting, read once per turn. Optional so that a test may
+   * supply a two-field env and get the shipping behaviour.
+   */
+  repairSeams?: () => boolean;
 }
 
 export interface Step {
@@ -143,6 +158,7 @@ export const INITIAL_CONTEXT: SessionContext = {
   elapsedMs: 0,
   durationSec: null,
   inserting: null,
+  repairSeams: true,
 };
 
 export const INITIAL_SNAPSHOT: Snapshot = { state: 'idle', ctx: INITIAL_CONTEXT };
@@ -151,9 +167,17 @@ export const INITIAL_SNAPSHOT: Snapshot = { state: 'idle', ctx: INITIAL_CONTEXT 
  * Helpers
  * ------------------------------------------------------------------ */
 
-/** Committed segments joined into the text that will actually be inserted. */
+/**
+ * Committed segments joined into the text that will actually be inserted.
+ *
+ * The join is not a `' '` — one hold routinely produces several `speech_final`
+ * segments (4.9 on average across 67 measured dictations), each re-transcribed
+ * with no knowledge of the one before it, and the joins are where the text goes
+ * wrong. `src/shared/stitch.ts` documents the three artefacts and what is done
+ * about them.
+ */
 export function committedText(ctx: SessionContext): string {
-  return ctx.committed.join(' ').trim();
+  return stitchSegments(ctx.committed, ctx.repairSeams);
 }
 
 function recordingView(ctx: SessionContext): HudView {
@@ -214,6 +238,7 @@ function startSession(ctx: SessionContext, mode: SessionMode, env: MachineEnv): 
     elapsedMs: 0,
     durationSec: null,
     inserting: null,
+    repairSeams: env.repairSeams?.() ?? true,
   };
   return step('recording', next, [
     // The frontmost app is captured *now*, at press time, and verified before
@@ -284,7 +309,15 @@ function finishInsert(
 ): Step {
   const { ctx } = snapshot;
   const reasonWhenFailed = notInsertedReason(outcome, fallbackReason);
-  const text = ctx.inserting ?? committedText(ctx);
+  // The segments win over `ctx.inserting` whenever there are any. In the
+  // ordinary case the two are the same string — `beginInsert` derives one from
+  // the other — but a `speech_final` that arrives *after* the insert was
+  // dispatched appends to `committed` only (see `reduceInserting`), and the
+  // pill, the history row and ⌃⌘V should all carry the whole transcript rather
+  // than the prefix that happened to be typed. An ad-hoc insert (⌃⌘V, a history
+  // row, a Scratchpad edit) has no segments at all and falls back to the text it
+  // was handed.
+  const text = ctx.committed.length > 0 ? committedText(ctx) : (ctx.inserting ?? '');
   const effects: Effect[] = [];
 
   // History gets one row per *dictation*, not per insertion attempt. A
@@ -855,12 +888,36 @@ function reduceInserting(snapshot: Snapshot, event: PostSecureEvent, env: Machin
     case 'TURN_ENDED':
       return step('inserting', { ...ctx, durationSec: event.durationSec }, []);
 
+    /**
+     * A `speech_final` that lands after the insert was dispatched.
+     *
+     * Until this case existed it was dropped on the floor, and with it the last
+     * segment of the turn: `processing` inserts on the *first* final it sees, so
+     * a server that flushes two segments after `audio.done` — which it does when
+     * the buffered tail contains a pause — lost the second one from the pill,
+     * from history and from ⌃⌘V. Silent truncation, no warning anywhere.
+     *
+     * It still is not typed: one hold produces one insertion (§7), and the
+     * helper is already committed. But it is kept, so every recovery surface has
+     * the whole transcript, and it is logged, because text the user said and did
+     * not get is worth a line in the log.
+     */
+    case 'TRANSCRIPT_FINAL':
+      return step('inserting', { ...ctx, committed: [...ctx.committed, event.text], interim: '' }, [
+        {
+          type: 'log',
+          level: 'warn',
+          message:
+            'a speech_final arrived after the insert was dispatched — kept in history and on ⌃⌘V, but not typed',
+          fields: { chars: event.text.length },
+        },
+      ]);
+
     case 'TOGGLE':
     case 'RETRY_INSERT':
     case 'INSERT_TEXT':
     case 'FRONTMOST':
     case 'TRANSCRIPT_INTERIM':
-    case 'TRANSCRIPT_FINAL':
     case 'RECORDING_CAP_REACHED':
     case 'LEVEL':
     case 'TICK':

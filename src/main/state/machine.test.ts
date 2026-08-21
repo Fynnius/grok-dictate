@@ -156,6 +156,100 @@ describe('interim text never reaches insertion', () => {
     expect(inserts(all)).toHaveLength(1);
     expect(inserts(all)[0]?.text).toBe('First part. Second part. Third part.');
   });
+
+  it('repairs the joins between segments on the way to the helper', () => {
+    // Each speech_final is re-transcribed on its own, so the seam carries a
+    // duplicated word and a fresh sentence capital. `src/shared/stitch.ts` has
+    // the evidence; this asserts that the reducer actually routes through it.
+    const { all } = run([
+      { type: 'PTT_DOWN', ts: 1 },
+      { type: 'TRANSCRIPT_FINAL', sessionId: 's1', text: 'at the end of the day, you' },
+      { type: 'PTT_UP', ts: 2 },
+      { type: 'TRANSCRIPT_FINAL', sessionId: 's1', text: 'You have an index of every path' },
+    ]);
+    expect(inserts(all)[0]?.text).toBe('at the end of the day, you have an index of every path');
+  });
+
+  it('leaves the segments alone when the user has turned seam repair off', () => {
+    const env: MachineEnv = { ...testEnv(), repairSeams: () => false };
+    const { all } = run(
+      [
+        { type: 'PTT_DOWN', ts: 1 },
+        { type: 'TRANSCRIPT_FINAL', sessionId: 's1', text: 'and it should' },
+        { type: 'PTT_UP', ts: 2 },
+        { type: 'TRANSCRIPT_FINAL', sessionId: 's1', text: 'Do any code changes yet' },
+      ],
+      env,
+    );
+    expect(inserts(all)[0]?.text).toBe('and it should Do any code changes yet');
+  });
+
+  it('snapshots the setting per turn, so a mid-dictation toggle cannot change it', () => {
+    let repair = true;
+    const env: MachineEnv = { ...testEnv(), repairSeams: () => repair };
+    let snapshot = reduce(INITIAL_SNAPSHOT, { type: 'PTT_DOWN', ts: 1 }, env).snapshot;
+    repair = false;
+    for (const event of [
+      { type: 'TRANSCRIPT_FINAL', sessionId: 's1', text: 'and it should' },
+      { type: 'PTT_UP', ts: 2 },
+      { type: 'TRANSCRIPT_FINAL', sessionId: 's1', text: 'Do any code changes yet' },
+    ] satisfies SessionEvent[]) {
+      snapshot = reduce(snapshot, event, env).snapshot;
+    }
+    expect(snapshot.ctx.inserting).toBe('and it should do any code changes yet');
+  });
+});
+
+describe('a speech_final that arrives after the insert was dispatched', () => {
+  /** Through to `inserting`, with one segment already handed to the helper. */
+  const DISPATCHED: readonly SessionEvent[] = [
+    { type: 'PTT_DOWN', ts: 1 },
+    { type: 'PTT_UP', ts: 2 },
+    { type: 'TRANSCRIPT_FINAL', sessionId: 's1', text: 'The first half of it.' },
+  ];
+
+  it('keeps the straggler instead of dropping it on the floor', () => {
+    const { snapshot } = run([
+      ...DISPATCHED,
+      { type: 'TRANSCRIPT_FINAL', sessionId: 's1', text: 'And the second half.' },
+    ]);
+    expect(snapshot.state).toBe('inserting');
+    expect(committedText(snapshot.ctx)).toBe('The first half of it. And the second half.');
+  });
+
+  it('does not type it — one hold is still one insertion', () => {
+    const { all } = run([
+      ...DISPATCHED,
+      { type: 'TRANSCRIPT_FINAL', sessionId: 's1', text: 'And the second half.' },
+    ]);
+    expect(inserts(all)).toHaveLength(1);
+    expect(inserts(all)[0]?.text).toBe('The first half of it.');
+  });
+
+  it('warns, because text the user said and did not get is worth a log line', () => {
+    const { effects } = run([
+      ...DISPATCHED,
+      { type: 'TRANSCRIPT_FINAL', sessionId: 's1', text: 'And the second half.' },
+    ]);
+    const logs = effects.filter((e) => e.type === 'log');
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatchObject({ level: 'warn' });
+  });
+
+  it('gives history and ⌃⌘V the whole transcript, not the part that was typed', () => {
+    const { all, snapshot } = run([
+      ...DISPATCHED,
+      { type: 'TRANSCRIPT_FINAL', sessionId: 's1', text: 'And the second half.' },
+      {
+        type: 'INSERT_RESULT',
+        sessionId: 's1',
+        outcome: { tier: 'unicode', ok: true, error: null },
+      },
+    ]);
+    const whole = 'The first half of it. And the second half.';
+    expect(histories(all)[0]?.entry.text).toBe(whole);
+    expect(snapshot.ctx.lastTranscript).toBe(whole);
+  });
 });
 
 describe('Fn versus Fn+Space (contract §4)', () => {

@@ -53,7 +53,15 @@ export interface OrchestratorDeps {
   readonly tickIntervalMs?: number;
 }
 
-const defaultEnv: MachineEnv = { newSessionId: () => randomUUID(), now: () => Date.now() };
+function productionEnv(config: ConfigPort): MachineEnv {
+  return {
+    newSessionId: () => randomUUID(),
+    now: () => Date.now(),
+    // Read per turn, not captured once: the settings window can toggle this
+    // between two dictations and the next one should honour it.
+    repairSeams: () => config.get().repairSeams,
+  };
+}
 
 export class Orchestrator {
   readonly #deps: OrchestratorDeps;
@@ -80,7 +88,7 @@ export class Orchestrator {
   constructor(deps: OrchestratorDeps) {
     this.#deps = deps;
     this.#log = deps.logger.child('session');
-    this.#env = deps.env ?? defaultEnv;
+    this.#env = deps.env ?? productionEnv(deps.config);
   }
 
   get snapshot(): Snapshot {

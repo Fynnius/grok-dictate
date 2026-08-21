@@ -88,12 +88,27 @@ export const AppConfigSchema = z.object({
   keyterms: z.array(z.string().min(1).max(KEYTERM_MAX_LENGTH)).max(KEYTERM_MAX_COUNT).default([]),
 
   /**
-   * Silence before the server declares end of utterance. The Grok CLI sends
-   * 400 ms (`config.rs:36-48`); xAI's documented default is 10 ms (§7.2).
-   * 400 was tuned for a TUI prompt box, not push-to-talk — spike 2 measures
-   * what it costs us.
+   * Silence before the server declares end of utterance — and, measured, the
+   * single biggest lever on transcript quality this app has. See
+   * `DEFAULT_ENDPOINTING_MS` for the field data behind the default.
    */
   endpointingMs: z.number().int().min(10).max(5000).default(DEFAULT_ENDPOINTING_MS),
+
+  /**
+   * Repair the joins between `speech_final` segments before inserting.
+   *
+   * One hold produces several segments, each re-transcribed with no knowledge
+   * of the one before it, and the joins are where the text goes wrong —
+   * duplicated seam words, mid-sentence capitals, "Thank you." hallucinated out
+   * of the closing silence. `src/shared/stitch.ts` has the evidence and the
+   * three rules.
+   *
+   * On by default because every rule is a measured artefact, and a setting
+   * because this is the one thing in the app that rewrites what a person said:
+   * a user who disagrees with a repair must be able to switch it off without
+   * waiting for a release. Off restores the historical `segments.join(' ')`.
+   */
+  repairSeams: z.boolean().default(true),
 
   hotkeys: HotkeyBindingsSchema.default({
     ptt: 'fn',
@@ -113,6 +128,23 @@ export const AppConfigSchema = z.object({
   audioCues: z.boolean().default(true),
 
   launchAtLogin: z.boolean().default(false),
+
+  /**
+   * Keep the Grok CLI login alive by running `grok models` in the background
+   * when the token is near expiry, instead of failing the dictation and telling
+   * the user to run `grok` themselves.
+   *
+   * **This is not the refresh path §5.6 forbids** — the CLI does the refresh,
+   * the rotation and the locked write, exactly as it does when a human runs it.
+   * `src/main/auth/renew.ts` documents the measured behaviour, including the one
+   * surprising case (a refresh the *server* rejects makes the CLI clear
+   * `auth.json`; a network failure leaves it alone).
+   *
+   * A setting because it spawns a process and talks to the network on the user's
+   * behalf, and somebody will reasonably want neither. Off means the previous
+   * behaviour: an expired token is an error that says to run `grok`.
+   */
+  autoRenewLogin: z.boolean().default(true),
 
   /**
    * Emit `{"type":"finalize"}` instead of `{"type":"audio.done"}` at end of turn.

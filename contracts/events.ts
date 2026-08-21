@@ -175,7 +175,38 @@ export type RendererToMain =
   | { type: 'capture-level'; sessionId: string; level: number }
   | { type: 'capture-error'; sessionId: string; error: AppError }
   /** The capture renderer confirms the device is open and streaming. */
-  | { type: 'capture-started'; sessionId: string; actualSampleRate: number };
+  | {
+      type: 'capture-started';
+      sessionId: string;
+      actualSampleRate: number;
+      /**
+       * What the device actually agreed to, from `MediaStreamTrack.getSettings()`.
+       *
+       * Chromium treats `echoCancellation`, `noiseSuppression` and
+       * `autoGainControl` as requests, and its own processing is tuned for
+       * telephony intelligibility rather than for a recogniser. Whether that
+       * helps or hurts accuracy here is an open question that can only be
+       * settled by comparing transcripts, and it cannot be compared at all
+       * unless the applied values are in the log next to the transcript they
+       * produced. Optional because a device may report none of them.
+       */
+      trackSettings?: CaptureTrackSettings;
+    };
+
+/** The subset of `MediaTrackSettings` worth carrying across the IPC boundary. */
+export interface CaptureTrackSettings {
+  readonly deviceId?: string;
+  readonly channelCount?: number;
+  readonly sampleRate?: number;
+  /**
+   * `boolean | string`, not `boolean`: the spec lets a device report *which*
+   * canceller it used (`"all"`, `"remote-only"`) rather than merely that it did,
+   * and for a diagnostic the distinction is the interesting part.
+   */
+  readonly echoCancellation?: boolean | string;
+  readonly noiseSuppression?: boolean;
+  readonly autoGainControl?: boolean;
+}
 
 export const RENDERER_TO_MAIN_CHANNEL = 'grok-dictate:renderer-to-main';
 

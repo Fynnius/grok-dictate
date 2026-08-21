@@ -43,6 +43,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "probe:stt": "tsx scripts/probe-stt.ts",
+    "replay:history": "tsx scripts/replay-history.ts",
     "package": "./scripts/package.sh"
   },
   "dependencies": {

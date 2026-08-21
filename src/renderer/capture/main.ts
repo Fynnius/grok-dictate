@@ -32,7 +32,7 @@
 
 import type { AppError } from '@shared/result.js';
 import { appError } from '@shared/result.js';
-import type { MainToRenderer } from '@contracts/events.js';
+import type { CaptureTrackSettings, MainToRenderer } from '@contracts/events.js';
 import { PcmEncoder, rmsOf } from './pcm.js';
 import { PCM_WORKLET_NAME, pcmWorkletUrl } from './pcm-worklet.js';
 
@@ -42,8 +42,15 @@ const api = window.grokDictate;
  * Chromium's default input processing. Kept on deliberately rather than
  * requesting raw audio: noise suppression and gain control help a laptop
  * microphone at conversational distance, and echo cancellation stops the app's
- * own start/stop cues being transcribed. A tuning knob, not
- * a correctness decision — noted for Phase 5 if accuracy disappoints.
+ * own start/stop cues being transcribed.
+ *
+ * **Still a tuning knob, and still unmeasured.** Chromium's WebRTC processing
+ * is tuned for telephony intelligibility, not for a recogniser, and the Rust
+ * CLI this app is modelled on takes raw `cpal` capture with none of it — so
+ * "the CLI sounds better" has a plausible cause here as well as in the
+ * segmentation. What settles it is a transcript comparison, not an opinion, and
+ * that needs the *applied* values on the record: they now travel with
+ * `capture-started` and are logged next to every dictation.
  */
 const AUDIO_CONSTRAINTS: MediaTrackConstraints = {
   channelCount: { ideal: 1 },
@@ -194,7 +201,12 @@ async function startCapture(
 
   // `actualSampleRate` is how assumption 10.4 gets checked: main logs it, and a
   // value that is not 16,000 means the explicit resampler is doing the work.
-  api.send({ type: 'capture-started', sessionId, actualSampleRate: context.sampleRate });
+  api.send({
+    type: 'capture-started',
+    sessionId,
+    actualSampleRate: context.sampleRate,
+    ...trackSettingsOf(stream),
+  });
 }
 
 function stopCapture(sessionId: string): void {
@@ -305,6 +317,7 @@ async function restartDevice(capture: ActiveCapture): Promise<void> {
     type: 'capture-started',
     sessionId: capture.sessionId,
     actualSampleRate: capture.context.sampleRate,
+    ...trackSettingsOf(stream),
   });
 }
 
@@ -314,6 +327,26 @@ async function restartDevice(capture: ActiveCapture): Promise<void> {
 
 function stopTracks(stream: MediaStream): void {
   for (const track of stream.getTracks()) track.stop();
+}
+
+/**
+ * What the device actually agreed to, as opposed to what `AUDIO_CONSTRAINTS`
+ * asked for. Absent keys are omitted rather than sent as `undefined`, so the
+ * log distinguishes "the device says echo cancellation is off" from "the device
+ * does not report echo cancellation at all".
+ */
+function trackSettingsOf(stream: MediaStream): { trackSettings?: CaptureTrackSettings } {
+  const track = stream.getAudioTracks()[0];
+  if (track === undefined) return {};
+  const applied = track.getSettings();
+  const settings: { -readonly [K in keyof CaptureTrackSettings]?: CaptureTrackSettings[K] } = {};
+  if (applied.deviceId !== undefined) settings.deviceId = applied.deviceId;
+  if (applied.channelCount !== undefined) settings.channelCount = applied.channelCount;
+  if (applied.sampleRate !== undefined) settings.sampleRate = applied.sampleRate;
+  if (applied.echoCancellation !== undefined) settings.echoCancellation = applied.echoCancellation;
+  if (applied.noiseSuppression !== undefined) settings.noiseSuppression = applied.noiseSuppression;
+  if (applied.autoGainControl !== undefined) settings.autoGainControl = applied.autoGainControl;
+  return { trackSettings: settings };
 }
 
 /** Exactly-sized, so IPC transfers the chunk and nothing around it. */
