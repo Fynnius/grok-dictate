@@ -116,6 +116,10 @@ export class HelperClient implements NativeHelperPort {
         ok: false,
         error: 'the text-insertion helper is not running',
         reason: null,
+        // Nothing was posted, so there is nothing to have verified. `null`
+        // rather than `false`: `false` is the helper's word for "I checked and
+        // it did not land", and the app must not put words in its mouth.
+        verified: null,
       });
     }
     return new Promise<InsertOutcome>((resolve) => {
@@ -127,6 +131,7 @@ export class HelperClient implements NativeHelperPort {
           ok: false,
           error: 'the helper did not answer in time',
           reason: null,
+          verified: null,
         });
       }, INSERT_TIMEOUT_MS);
       timer.unref?.();
@@ -222,8 +227,12 @@ export class HelperClient implements NativeHelperPort {
           tier: frame.tier,
           ok: frame.ok,
           error: frame.error,
-          // `nullish` on the wire: an older helper build sends neither field.
+          // `nullish` on the wire: an older helper build sends none of these
+          // three fields. `verified: null` from such a build is the truthful
+          // answer — it could not check — and the app renders it as
+          // "typed, unconfirmed" rather than as a confirmed insert.
           reason: frame.reason ?? null,
+          verified: frame.verified ?? null,
           frontmost: {
             bundleId: frame.frontmostBundleId ?? null,
             name: frame.frontmostName ?? null,
@@ -252,7 +261,7 @@ export class HelperClient implements NativeHelperPort {
     for (const [id, pending] of this.#pendingInserts) {
       clearTimeout(pending.timer);
       this.#pendingInserts.delete(id);
-      pending.resolve({ tier: 'none', ok: false, error: reason, reason: null });
+      pending.resolve({ tier: 'none', ok: false, error: reason, reason: null, verified: null });
     }
     for (const [id, pending] of this.#pendingFrontmost) {
       clearTimeout(pending.timer);

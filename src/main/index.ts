@@ -142,6 +142,9 @@ function main(): void {
   // `ipcMain.emit` with a synthetic event (docs/phase-4-report.md §5.5).
   let cancelFromEscape = (): void => {};
 
+  /** The last `state` message actually sent; see the `onChange` below. */
+  let lastBroadcastState = '';
+
   const ui = createUiServices({
     app,
     globalShortcut,
@@ -167,7 +170,15 @@ function main(): void {
     onChange: (snapshot) => {
       // Every transition, not only the ones that emit a `tray` effect — which
       // is what makes Escape arm and disarm reliably (see `src/main/ui/`).
+      // `setSessionState` is a local call and already ignores a repeat.
       ui.setSessionState(snapshot.state);
+      // The broadcast is not local: it is an IPC send to every open panel.
+      // `onChange` fires once per *event*, and while recording that includes
+      // every microphone level and every HUD tick — none of which change any
+      // of the three fields below (2026-08-09 incident, BUG-7).
+      const key = `${snapshot.state}|${snapshot.ctx.mode}|${snapshot.ctx.sessionId ?? ''}`;
+      if (key === lastBroadcastState) return;
+      lastBroadcastState = key;
       broadcast({
         type: 'state',
         state: snapshot.state,
@@ -261,6 +272,7 @@ function main(): void {
       case 'capture-level':
       case 'capture-error':
       case 'capture-started':
+      case 'capture-drained':
         // Handled by the `capture-` branch above; named so the switch stays
         // exhaustive and a new message type is a compile error.
         return;

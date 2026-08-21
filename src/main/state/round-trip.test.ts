@@ -131,11 +131,15 @@ describe('the mocked dictation round-trip', () => {
       kind: 'inserted',
       text: DEFAULT_SCRIPT.finalText,
       tier: 'ax',
+      // The mock helper confirms, as the real one does on the AX tier. Without
+      // this the pill would be the amber "typed, unconfirmed" one instead.
+      verified: true,
     });
     expect(h.history.entries).toHaveLength(1);
     expect(h.history.entries[0]).toMatchObject({
       text: DEFAULT_SCRIPT.finalText,
       inserted: true,
+      verified: true,
       tier: 'ax',
       // The app captured the frontmost app at press time.
       frontmostBundleId: 'com.apple.TextEdit',
@@ -221,6 +225,54 @@ describe('the mocked dictation round-trip', () => {
     expect(h.history.entries[0]).toMatchObject({ inserted: false, tier: 'none' });
   });
 
+  it('does not present an unverified insert as a success (2026-08-09 incident)', async () => {
+    // The incident, end to end: the helper posts Unicode keystrokes and cannot
+    // confirm they landed. `ok: true` used to mean a green check with no text
+    // and `inserted: true` in history, so a target that silently dropped every
+    // event looked exactly like one that took them.
+    const h = await harness();
+    h.mock({ action: 'set_insert_outcome', tier: 'unicode', ok: true });
+    await new Promise((r) => setTimeout(r, 20));
+
+    await dictate(h);
+    await waitFor(() => h.orchestrator.snapshot.state === 'idle');
+
+    expect(h.hud.last).toEqual({
+      kind: 'inserted',
+      text: DEFAULT_SCRIPT.finalText,
+      tier: 'unicode',
+      // Not `true` — the helper did not say so, and absent is not a yes.
+      verified: null,
+    });
+    expect(h.history.entries[0]).toMatchObject({ inserted: true, verified: null });
+    // The text is still reachable, which is what makes the pill's Re-insert work.
+    expect(h.orchestrator.snapshot.ctx.lastTranscript).toBe(DEFAULT_SCRIPT.finalText);
+  });
+
+  it('reports a proven-not-landed insert as a real failure', async () => {
+    const h = await harness();
+    h.mock({
+      action: 'set_insert_outcome',
+      tier: 'unicode',
+      ok: false,
+      verified: false,
+      error: 'the text of the focused element did not change',
+    });
+    await new Promise((r) => setTimeout(r, 20));
+
+    await dictate(h);
+    await waitFor(() => h.orchestrator.snapshot.state === 'idle');
+
+    expect(h.hud.last).toMatchObject({
+      kind: 'not_inserted',
+      text: DEFAULT_SCRIPT.finalText,
+      // Its own reason, not the generic "neither tier worked".
+      reason: 'verification_failed',
+    });
+    expect(h.history.entries[0]).toMatchObject({ inserted: false, verified: false });
+    expect(h.sound.cues).toContain('error');
+  });
+
   it('re-inserts on Ctrl+Cmd+V, targeting wherever focus is now', async () => {
     const h = await harness();
     h.mock({ action: 'set_insert_outcome', tier: 'none', ok: false, error: 'no AX element' });
@@ -229,7 +281,7 @@ describe('the mocked dictation round-trip', () => {
 
     // Focus has moved, and insertion now works.
     h.mock({ action: 'frontmost', bundleId: 'com.apple.Notes', name: 'Notes' });
-    h.mock({ action: 'set_insert_outcome', tier: 'unicode', ok: true });
+    h.mock({ action: 'set_insert_outcome', tier: 'unicode', ok: true, verified: true });
     await new Promise((r) => setTimeout(r, 50));
 
     h.mock({ action: 'hotkey', hotkeyAction: 'retry_insert' });
@@ -239,6 +291,7 @@ describe('the mocked dictation round-trip', () => {
       kind: 'inserted',
       text: DEFAULT_SCRIPT.finalText,
       tier: 'unicode',
+      verified: true,
     });
     // One dictation, one history row — the retry does not add a second.
     expect(h.history.entries).toHaveLength(1);
@@ -334,8 +387,10 @@ describe('the mocked dictation round-trip', () => {
       ok: false,
       // §4: "Errors carry actionable text."
       error: 'the text-insertion helper is not running',
-      // Synthesised by the app, so there is nothing the helper classified.
+      // Synthesised by the app, so there is nothing the helper classified —
+      // and nothing was posted, so there is nothing to have verified either.
       reason: null,
+      verified: null,
     });
   });
 });

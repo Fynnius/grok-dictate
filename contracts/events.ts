@@ -59,13 +59,31 @@ export type NotInsertedReason =
   | 'target_changed' // focus moved during processing
   | 'helper_unavailable' // the Swift helper died mid-request
   /**
+   * The helper posted the keystrokes and then proved that the target's text
+   * did not change. Added by the 2026-08-09 incident (BUG-1) together with
+   * `InsertDeclineReason.verification_failed`: this is the case that used to
+   * arrive as `ok: true` and render as a green check, so it needs copy of its
+   * own — "we typed it and it did not arrive" is a different instruction to
+   * the user from "no tier would take it".
+   */
+  | 'verification_failed'
+  /**
    * The dictation itself failed — the network dropped, the token expired, the
    * server errored — after some text had already been transcribed. Added in
    * Phase 5: until then `toIdleWithError` discarded whatever was already
    * committed, so a drop after a minute of good dictation lost all of it and
    * `Ctrl+Cmd+V` had nothing to re-insert (docs/phase-3-report.md §5.2).
    */
-  | 'session_error';
+  | 'session_error'
+  /**
+   * The same, but the turn died mid-sentence, so the tail of what is shown was
+   * still interim text that the server never confirmed. Added by the
+   * 2026-08-09 incident (BUG-3): speaking continuously produces no
+   * `speech_final` at all, so a drop used to lose the whole minute rather than
+   * salvaging an imperfect version of it. Separate from `session_error`
+   * because the user has to be told the end may be wrong.
+   */
+  | 'session_error_unconfirmed';
 
 /**
  * Everything the HUD needs to render, as one value. Phase 4 owns the pixels;
@@ -75,12 +93,18 @@ export type NotInsertedReason =
  * decoration:  — Unicode injection can half-succeed silently,
  * and seeing the full text next to what actually landed is the only way a user
  * catches it at a glance.
+ *
+ * `inserted.verified` is what decides whether the transcript is *shown*.
+ * `true` renders the bare green check (overhaul §16.4, the user's own call);
+ * anything else renders the amber "typed, unconfirmed" pill with the whole
+ * text and the recovery buttons, because a silent drop and a confirmed insert
+ * must not look the same — which they did until the 2026-08-09 incident.
  */
 export type HudView =
   | { kind: 'hidden' }
   | { kind: 'recording'; elapsedMs: number; level: number; interim: string; mode: SessionMode }
   | { kind: 'processing'; interim: string }
-  | { kind: 'inserted'; text: string; tier: InsertTier }
+  | { kind: 'inserted'; text: string; tier: InsertTier; verified: boolean | null }
   | { kind: 'not_inserted'; text: string; reason: NotInsertedReason; detail: string | null }
   | { kind: 'blocked' }
   | { kind: 'error'; message: string; hint: string | null };
@@ -108,6 +132,34 @@ export interface HistoryEntry {
   readonly frontmostName: string | null;
   readonly tier: InsertTier;
   readonly inserted: boolean;
+  /**
+   * Whether the helper **confirmed** the text landed, as opposed to having
+   * posted it and hoped. `true` confirmed, `false` proved-not-landed, `null`
+   * not checkable for that target.
+   *
+   * **Optional, and old rows must keep loading.** The file on disk predates
+   * this field by every dictation the user has ever made, and `isHistoryEntry`
+   * in `src/main/history/index.ts` drops any row it does not recognise — so a
+   * required field here would silently delete the user's entire history on the
+   * first launch after the update. Absent means "written before the app could
+   * tell", which is exactly what it was.
+   *
+   * Added by the 2026-08-09 incident (BUG-1), where `inserted: true` was
+   * written for a 60.3 s dictation that never reached the screen. History is
+   * the recovery surface; a row that overstates what happened is worse than no
+   * row at all.
+   */
+  readonly verified?: boolean | null;
+  /**
+   * Whether the tail of `text` is unconfirmed interim text rather than a
+   * `speech_final` the server stood behind.
+   *
+   * Only ever `true` on a salvage row — a turn that died mid-sentence
+   * (BUG-3). Optional for the same reason as `verified`: absent means the row
+   * predates the field, or the whole row is confirmed, which is the same
+   * assurance every row before it carried.
+   */
+  readonly unconfirmedTail?: boolean;
 }
 
 /* ------------------------------------------------------------------ *
@@ -172,6 +224,24 @@ export type RendererToMain =
   | { type: 'open-window'; window: 'settings' | 'history' | 'scratchpad' | 'signin' }
   /** PCM16 mono @16 kHz, 100 ms / 3200-byte chunks. */
   | { type: 'capture-chunk'; sessionId: string; pcm: ArrayBuffer }
+  /**
+   * **The last `capture-chunk` of this session has been sent.** The renderer's
+   * answer to `capture-stop`, and the reason `stop` is two-phase.
+   *
+   * Added by the 2026-08-09 incident (BUG-2). The capture renderer flushes its
+   * encoder tail as one final chunk *after* `capture-stop` arrives — "the last
+   * 100 ms of a hold is the end of the last word" — but the main process
+   * dropped its session synchronously inside `stop()`, so that chunk was
+   * discarded and `audio.done` had already gone out anyway. The tail-flush was
+   * dead code, and the final ~100–300 ms of speech never reached the server on
+   * any dictation.
+   *
+   * The main process holds the session addressable until this arrives, then
+   * ends the turn. It is a promise the renderer may fail to keep — a dead or
+   * wedged window sends nothing — so the drain is also bounded by a timer
+   * (`DRAIN_TIMEOUT_MS` in `src/main/audio/coordinator.ts`).
+   */
+  | { type: 'capture-drained'; sessionId: string }
   | { type: 'capture-level'; sessionId: string; level: number }
   | { type: 'capture-error'; sessionId: string; error: AppError }
   /** The capture renderer confirms the device is open and streaming. */

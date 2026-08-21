@@ -139,6 +139,21 @@ const PREVIEW_VIEWS: readonly { id: string; label: string; view: HudView }[] = [
       kind: 'inserted',
       text: 'Deployed that on the staging server and then ran the migration.',
       tier: 'ax',
+      verified: true,
+    },
+  },
+  {
+    // Two entries for one `HudView` kind, because `verified` selects between
+    // two entirely different surfaces — a wordless check and a transcript pill
+    // with four buttons (2026-08-09 incident). Previewing only the happy one
+    // is how the silent-drop rendering would go unlooked-at again.
+    id: 'preview.inserted_unconfirmed',
+    label: 'Inserted (unconfirmed)',
+    view: {
+      kind: 'inserted',
+      text: 'Deployed that on the staging server and then ran the migration.',
+      tier: 'unicode',
+      verified: null,
     },
   },
   {

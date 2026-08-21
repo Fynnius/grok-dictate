@@ -220,6 +220,14 @@ function stopCapture(sessionId: string): void {
   if (tail !== null) {
     api.send({ type: 'capture-chunk', sessionId, pcm: toArrayBuffer(tail) });
   }
+  // **Then say so.** Until the 2026-08-09 incident this function's tail-flush
+  // was dead code: the main process dropped the session synchronously when it
+  // sent `capture-stop`, so the chunk above arrived with nowhere to go and
+  // `audio.done` had gone out before it anyway. The ack is what makes the two
+  // sides agree on when a turn's audio is complete — sent unconditionally,
+  // including when there was no tail, because it means "that was all of it"
+  // rather than "here is one more".
+  api.send({ type: 'capture-drained', sessionId });
 
   capture.node.port.onmessage = null;
   try {

@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { HudView } from '@contracts/events.js';
-import { hudInteractive, hudLayer } from './hud-view.js';
+import { hudInteractive, hudLayer, sameHudView } from './hud-view.js';
 
 const VIEWS: Record<HudView['kind'], HudView> = {
   hidden: { kind: 'hidden' },
   recording: { kind: 'recording', elapsedMs: 3_000, level: 0.3, interim: 'hallo', mode: 'hold' },
   processing: { kind: 'processing', interim: 'hallo' },
-  inserted: { kind: 'inserted', text: 'hallo', tier: 'ax' },
+  inserted: { kind: 'inserted', text: 'hallo', tier: 'ax', verified: true },
   not_inserted: { kind: 'not_inserted', text: 'hallo', reason: 'insert_failed', detail: null },
   blocked: { kind: 'blocked' },
   error: { kind: 'error', message: 'boom', hint: null },
@@ -54,5 +54,47 @@ describe('hudInteractive', () => {
     expect(
       hudInteractive({ kind: 'recording', elapsedMs: 0, level: 0, interim: '', mode: 'toggle' }),
     ).toBe(true);
+  });
+
+  it('takes the mouse for an unconfirmed insert, which has buttons to press', () => {
+    expect(
+      hudInteractive({ kind: 'inserted', text: 'hallo', tier: 'unicode', verified: null }),
+    ).toBe(true);
+  });
+});
+
+describe('sameHudView', () => {
+  it('is true only when every field matches', () => {
+    expect(sameHudView(VIEWS.recording, { ...VIEWS.recording })).toBe(true);
+    expect(sameHudView(VIEWS.recording, VIEWS.processing)).toBe(false);
+    expect(
+      sameHudView(VIEWS.recording, {
+        kind: 'recording',
+        elapsedMs: 3_000,
+        level: 0.4,
+        interim: 'hallo',
+        mode: 'hold',
+      }),
+    ).toBe(false);
+  });
+
+  it('separates a confirmed insert from an unconfirmed one', () => {
+    // They differ by one boolean and render two completely different pills, so
+    // this is the comparison the deduplication must not get wrong.
+    expect(
+      sameHudView(
+        { kind: 'inserted', text: 'hallo', tier: 'ax', verified: true },
+        { kind: 'inserted', text: 'hallo', tier: 'ax', verified: null },
+      ),
+    ).toBe(false);
+  });
+
+  it('covers every view kind without a false positive', () => {
+    const all = Object.values(VIEWS);
+    for (const a of all) {
+      for (const b of all) {
+        expect(sameHudView(a, b)).toBe(a === b);
+      }
+    }
   });
 });

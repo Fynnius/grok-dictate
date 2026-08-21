@@ -22,8 +22,16 @@
 const PROTOCOL_VERSION = 1;
 const VERSION = '0.1.0-mock';
 
-/** What the next `insert` should report. Driven by `__mock.setInsertOutcome`. */
-let insertOutcome = { tier: 'ax', ok: true, error: null };
+/**
+ * What the next `insert` should report. Driven by `__mock.set_insert_outcome`.
+ *
+ * `verified` mirrors the real helper's post-insert check (contract §12.5, added
+ * by the 2026-08-09 incident): `true` confirmed, `false` proved-not-landed,
+ * `null` not checkable for this target. The default is `true` because the mock
+ * declares the `ax` tier, which is the tier that genuinely reports success —
+ * so the debug window can drive all three app-side paths by setting it.
+ */
+let insertOutcome = { tier: 'ax', ok: true, error: null, verified: true };
 
 /** Simulated frontmost application. */
 let frontmost = { bundleId: 'com.apple.TextEdit', name: 'TextEdit' };
@@ -68,6 +76,8 @@ function handle(line) {
           ok: false,
           error: `frontmost app is ${frontmost.bundleId ?? 'unknown'}, expected ${message.targetBundleId}`,
           reason: 'target_changed',
+          // Declined before anything was posted, so there is nothing to verify.
+          verified: null,
           frontmostBundleId: frontmost.bundleId,
           frontmostName: frontmost.name,
         });
@@ -82,7 +92,15 @@ function handle(line) {
         tier: insertOutcome.tier,
         ok: insertOutcome.ok,
         error: insertOutcome.error,
-        reason: insertOutcome.ok ? null : 'no_tier',
+        // `verified: false` is the incident shape — posted, and provably not
+        // landed — and the contract pairs it with `ok: false` and its own
+        // decline reason rather than a generic one.
+        reason: insertOutcome.ok
+          ? null
+          : insertOutcome.verified === false
+            ? 'verification_failed'
+            : 'no_tier',
+        verified: insertOutcome.verified,
         frontmostBundleId: frontmost.bundleId,
         frontmostName: frontmost.name,
       });
@@ -135,8 +153,15 @@ function handle(line) {
             tier: message.tier ?? 'ax',
             ok: Boolean(message.ok),
             error: message.error ?? null,
+            // Absent means "the caller did not say", which for a successful
+            // insert is exactly the honest `null` an older helper build sends:
+            // posted, unverifiable. Drive the confirmed path by asking for it.
+            verified: message.verified ?? null,
           };
-          log('info', `insert outcome set to ${insertOutcome.tier}/${String(insertOutcome.ok)}`);
+          log(
+            'info',
+            `insert outcome set to ${insertOutcome.tier}/${String(insertOutcome.ok)}/verified=${String(insertOutcome.verified)}`,
+          );
           return;
         case 'crash':
           // Used to prove the supervisor restarts a dead helper.

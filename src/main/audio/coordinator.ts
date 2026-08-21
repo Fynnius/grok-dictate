@@ -36,6 +36,8 @@ export interface CoordinatorOptions {
   readonly transport: CaptureTransport;
   readonly logger: Logger;
   readonly maxBufferBytes?: number;
+  /** Test seam for `DRAIN_TIMEOUT_MS`; production always uses the constant. */
+  readonly drainTimeoutMs?: number;
   /**
    * Pre-flight microphone check, before the renderer is asked to do anything.
    * Returns an actionable error when the device may not be opened, `null` to go
@@ -55,6 +57,12 @@ interface ActiveSession {
   readonly sessionId: string;
   readonly handlers: AudioHandlers;
   started: boolean;
+  /**
+   * `stop()` has been sent and we are waiting for the renderer's tail chunk.
+   * The session is still addressable — that is the entire point.
+   */
+  draining: boolean;
+  drainTimer: NodeJS.Timeout | null;
 }
 
 /**
@@ -64,11 +72,32 @@ interface ActiveSession {
  */
 const RETAINED_UTTERANCES = 2;
 
+/**
+ * How long to wait for the renderer's `capture-drained` before ending the turn
+ * anyway.
+ *
+ * **Chosen, not measured.** What has to fit inside it is one IPC round trip and
+ * one `encoder.flush()` — microseconds of work in a window that has just been
+ * told to stop, so the interesting figure is not the happy path but the ceiling
+ * on a busy or wedged renderer. 250 ms is the largest delay that stays under
+ * the ~300 ms end-of-audio → `speech_final` latency the spikes measured, so in
+ * the worst case the drain hides inside a wait the user was already having; and
+ * it is short enough that a renderer which has died outright costs a pause
+ * rather than a hang.
+ *
+ * The timer exists because a dead renderer must not be able to hang a turn. The
+ * dictation is held open until the drain completes, so this is the only thing
+ * standing between a wedged capture window and a session parked in `processing`
+ * for ever. It fires, it logs, and the turn goes on with whatever arrived.
+ */
+export const DRAIN_TIMEOUT_MS = 250;
+
 export class CaptureCoordinator implements AudioSourcePort {
   readonly #transport: CaptureTransport;
   readonly #log: Logger;
   readonly #maxBufferBytes: number;
   readonly #checkPermission: () => AppError | null;
+  readonly #drainTimeoutMs: number;
 
   readonly #buffers = new Map<string, Utterance>();
   #active: ActiveSession | null = null;
@@ -78,6 +107,7 @@ export class CaptureCoordinator implements AudioSourcePort {
     this.#log = options.logger.child('audio');
     this.#maxBufferBytes = options.maxBufferBytes ?? MAX_UTTERANCE_BUFFER_BYTES;
     this.#checkPermission = options.checkPermission ?? (() => null);
+    this.#drainTimeoutMs = options.drainTimeoutMs ?? DRAIN_TIMEOUT_MS;
   }
 
   /* ---------------- AudioSourcePort ---------------- */
@@ -86,11 +116,17 @@ export class CaptureCoordinator implements AudioSourcePort {
     // Press supersedes press (`pipeline.rs:50-63`): a rapid stop→start must
     // abort the previous capture rather than leave two sessions on the device.
     if (this.#active !== null && this.#active.sessionId !== sessionId) {
+      const previous = this.#active;
       this.#log.debug('superseding an active capture', {
-        previous: this.#active.sessionId,
+        previous: previous.sessionId,
         next: sessionId,
       });
-      this.#transport.send({ type: 'capture-stop', sessionId: this.#active.sessionId });
+      // A session already draining has had its `capture-stop`; sending a second
+      // would be noise. Either way its drain ends here — there is no longer
+      // anywhere for a late chunk of it to go, and the waiter must be released
+      // rather than left for the timer.
+      if (previous.draining) this.#endDrain(previous, 'superseded');
+      else this.#transport.send({ type: 'capture-stop', sessionId: previous.sessionId });
     }
 
     const denied = this.#checkPermission();
@@ -105,7 +141,7 @@ export class CaptureCoordinator implements AudioSourcePort {
       return;
     }
 
-    this.#active = { sessionId, handlers, started: false };
+    this.#active = { sessionId, handlers, started: false, draining: false, drainTimer: null };
     this.#buffers.set(sessionId, { chunks: [], bytes: 0, truncated: false });
     this.#prune();
 
@@ -117,16 +153,69 @@ export class CaptureCoordinator implements AudioSourcePort {
     });
   }
 
-  /** Graceful end of turn: close the device, keep the audio. */
+  /**
+   * Graceful end of turn: close the device, keep the audio — **in two phases**.
+   *
+   * Phase one is this method: tell the renderer to stop, and mark the session
+   * `draining`. Phase two is `capture-drained` (or the timeout), which releases
+   * the session and calls `onDrained`.
+   *
+   * Until the 2026-08-09 incident this method set `#active = null` on the spot.
+   * The renderer flushes its encoder tail as a final `capture-chunk` *after*
+   * `capture-stop` reaches it — its own comment says "the last 100 ms of a hold
+   * is the end of the last word" — so that chunk arrived to a `#forSession`
+   * that returned null and was dropped, on every dictation, while the
+   * orchestrator had already sent `audio.done` regardless. The renderer's
+   * tail-flush was dead code and the last ~100–300 ms of every utterance never
+   * reached the server: clipped or wrong final words, and a full-utterance
+   * buffer that was missing the same tail.
+   */
   stop(sessionId: string): void {
-    if (this.#active?.sessionId !== sessionId) return;
-    this.#active = null;
+    const session = this.#active;
+    if (session === null || session.sessionId !== sessionId) return;
+    if (session.draining) return; // already asked; the tail is in flight
+
+    session.draining = true;
     this.#transport.send({ type: 'capture-stop', sessionId });
-    const buffer = this.#buffers.get(sessionId);
+
+    const timer = setTimeout(() => {
+      // The renderer never answered. Proceed rather than hold the turn open —
+      // and say so, because a renderer that stops acknowledging is a real
+      // failure even though the dictation survives it.
+      this.#log.warn('the capture renderer did not acknowledge the tail; ending the turn anyway', {
+        sessionId,
+        timeoutMs: this.#drainTimeoutMs,
+      });
+      this.#endDrain(session, 'timeout');
+    }, this.#drainTimeoutMs);
+    timer.unref?.();
+    session.drainTimer = timer;
+  }
+
+  /**
+   * Release a draining session and let the turn end.
+   *
+   * `draining` is the latch as well as the flag, so an ack that races the
+   * timeout — or a duplicate ack, or a supersede on top of either — produces
+   * exactly **one** `onDrained`. That is what the port promises its caller, and
+   * the caller ends the turn from it.
+   */
+  #endDrain(session: ActiveSession, reason: 'ack' | 'timeout' | 'superseded' | 'cancelled'): void {
+    if (!session.draining) return;
+    session.draining = false;
+    if (session.drainTimer !== null) {
+      clearTimeout(session.drainTimer);
+      session.drainTimer = null;
+    }
+    if (this.#active === session) this.#active = null;
+
+    const buffer = this.#buffers.get(session.sessionId);
     this.#log.debug('capture stopped', {
-      sessionId,
+      sessionId: session.sessionId,
+      reason,
       seconds: buffer === undefined ? 0 : Number((buffer.bytes / 32_000).toFixed(2)),
     });
+    session.handlers.onDrained();
   }
 
   /**
@@ -152,7 +241,18 @@ export class CaptureCoordinator implements AudioSourcePort {
    * as much as to the history file.
    */
   cancel(sessionId: string): void {
-    this.stop(sessionId);
+    const session = this.#active;
+    if (session !== null && session.sessionId === sessionId) {
+      if (!session.draining) {
+        session.draining = true;
+        this.#transport.send({ type: 'capture-stop', sessionId });
+      }
+      // Closed at once rather than drained. Esc throws the audio away, so there
+      // is nothing for a tail chunk to be kept for, and holding the session
+      // open would delay teardown by the drain timeout for no gain.
+      this.#endDrain(session, 'cancelled');
+    }
+
     const buffer = this.#buffers.get(sessionId);
     this.#buffers.delete(sessionId);
     if (buffer === undefined || buffer.bytes === 0) return;
@@ -192,6 +292,11 @@ export class CaptureCoordinator implements AudioSourcePort {
     }
     if (message.type === 'capture-error') {
       this.#onError(message.sessionId, message.error);
+      return true;
+    }
+    if (message.type === 'capture-drained') {
+      const session = this.#forSession(message.sessionId);
+      if (session !== null) this.#endDrain(session, 'ack');
       return true;
     }
     return false;
@@ -262,12 +367,25 @@ export class CaptureCoordinator implements AudioSourcePort {
   #onError(sessionId: string, error: AppError): void {
     const session = this.#forSession(sessionId);
     if (session === null) return;
+    // A device that failed mid-drain has no tail to deliver, and the pending
+    // timer would otherwise fire `onDrained` on a session the machine has
+    // already torn down.
+    if (session.drainTimer !== null) {
+      clearTimeout(session.drainTimer);
+      session.drainTimer = null;
+    }
+    session.draining = false;
     this.#active = null;
     this.#log.warn('capture failed', { sessionId, code: error.code });
     session.handlers.onError(error);
   }
 
-  /** Late frames from a superseded session must never reach the new one. */
+  /**
+   * Late frames from a superseded session must never reach the new one.
+   *
+   * A *draining* session is deliberately still addressable: the whole point of
+   * the two-phase stop is that its tail chunk still counts (BUG-2).
+   */
   #forSession(sessionId: string): ActiveSession | null {
     const active = this.#active;
     if (active === null || active.sessionId !== sessionId) return null;
@@ -284,8 +402,14 @@ export class CaptureCoordinator implements AudioSourcePort {
 
   /** Close the device and forget everything. Called on quit. */
   dispose(): void {
-    if (this.#active !== null) {
-      this.#transport.send({ type: 'capture-stop', sessionId: this.#active.sessionId });
+    const session = this.#active;
+    if (session !== null) {
+      if (session.drainTimer !== null) clearTimeout(session.drainTimer);
+      // No `onDrained` here: the application is quitting, and calling back into
+      // a machine that is being torn down is how a shutdown grows a race.
+      if (!session.draining) {
+        this.#transport.send({ type: 'capture-stop', sessionId: session.sessionId });
+      }
       this.#active = null;
     }
     this.#buffers.clear();

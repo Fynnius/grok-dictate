@@ -1,10 +1,18 @@
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  appendFileSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { HistoryEntry } from '@contracts/events.js';
 import { addLogSink, clearLogSinks, createLogger, type LogRecord } from '@shared/logger.js';
-import { createHistoryStore, historyPath } from './index.js';
+import { createHistoryStore, historyJournalPath, historyPath } from './index.js';
 
 const log = createLogger('test');
 
@@ -162,10 +170,169 @@ describe('createHistoryStore', () => {
     });
   });
 
+  describe('fields added after the first release', () => {
+    /**
+     * `isHistoryEntry` is a filter, not a validator: a row it rejects is
+     * dropped without asking. A field added as *required* would therefore
+     * delete every row the user had ever written on the first launch after the
+     * update — the exact opposite of what the recovery surface is for.
+     */
+    it('loads rows written before `verified` and `unconfirmedTail` existed', async () => {
+      const old = {
+        id: 'pre-incident',
+        at: new Date('2026-08-01T09:00:00.000Z').toISOString(),
+        text: 'written by v0.1.0, with no verification field anywhere',
+        durationSec: 3.5,
+        language: 'en',
+        frontmostBundleId: 'com.apple.Notes',
+        frontmostName: 'Notes',
+        tier: 'unicode',
+        inserted: true,
+      };
+      writeFileSync(historyPath(dir), JSON.stringify([old]), 'utf8');
+
+      const store = createHistoryStore(dir, log);
+      expect(await store.count()).toBe(1);
+      const [row] = await store.list(null, 1);
+      expect(row?.id).toBe('pre-incident');
+      expect(row?.verified).toBeUndefined();
+      // …and nothing was reported as malformed, which is what would have
+      // preceded the rows being thrown away.
+      expect(records.some((r) => r.msg.includes('malformed'))).toBe(false);
+    });
+
+    it('round-trips the new fields and still rejects a wrong type', async () => {
+      const store = createHistoryStore(dir, log);
+      await store.append(entry({ id: 'a', verified: null }));
+      await store.append(entry({ id: 'b', verified: false, unconfirmedTail: true }));
+      const reloaded = await createHistoryStore(dir, log).list(null, 10);
+      expect(reloaded.map((e) => [e.id, e.verified, e.unconfirmedTail])).toEqual([
+        ['b', false, true],
+        ['a', null, undefined],
+      ]);
+
+      writeFileSync(
+        historyPath(dir),
+        JSON.stringify([entry({ id: 'good' }), { ...entry({ id: 'bad' }), verified: 'yes' }]),
+        'utf8',
+      );
+      expect((await createHistoryStore(dir, log).list(null, 10)).map((e) => e.id)).toEqual([
+        'good',
+      ]);
+    });
+  });
+
   it('writes atomically, leaving no temp file behind', async () => {
     const store = createHistoryStore(dir, log);
     await store.append(entry());
     expect(readdirSync(dir)).toEqual(['history.json']);
+  });
+
+  /* ---------------------------------------------------------------- *
+   * BUG-7 — appending without rewriting the whole file
+   * ---------------------------------------------------------------- */
+
+  describe('the append journal', () => {
+    const journal = (): string => historyJournalPath(dir);
+    const array = (): unknown => JSON.parse(readFileSync(historyPath(dir), 'utf8'));
+
+    it('does not rewrite the array file for every append', async () => {
+      const store = createHistoryStore(dir, log);
+      await store.append(entry({ id: 'a' })); // creates history.json
+      const afterFirst = readFileSync(store.path, 'utf8');
+
+      await store.append(entry({ id: 'b' }));
+      await store.append(entry({ id: 'c' }));
+
+      // The expensive file is untouched…
+      expect(readFileSync(store.path, 'utf8')).toBe(afterFirst);
+      // …and the new rows are one line each in the journal.
+      expect(readFileSync(journal(), 'utf8').trim().split('\n')).toHaveLength(2);
+    });
+
+    it('keeps the array file valid JSON at rest throughout', async () => {
+      const store = createHistoryStore(dir, log);
+      for (let n = 0; n < 12; n += 1) {
+        await store.append(entry({ id: `e${String(n)}` }));
+        expect(() => array()).not.toThrow();
+        expect(Array.isArray(array())).toBe(true);
+      }
+    });
+
+    it('gives readers the journal rows as well as the array', async () => {
+      const store = createHistoryStore(dir, log);
+      await store.append(entry({ id: 'a', text: 'first' }));
+      await store.append(entry({ id: 'b', text: 'second' }));
+
+      expect(await store.count()).toBe(2);
+      // …including a store built fresh from the two files, which is what the
+      // next launch does.
+      const reopened = createHistoryStore(dir, log);
+      expect((await reopened.list(null, 10)).map((e) => e.text)).toEqual(['second', 'first']);
+    });
+
+    it('folds the journal back into the array file at startup', async () => {
+      const store = createHistoryStore(dir, log);
+      await store.append(entry({ id: 'a' }));
+      await store.append(entry({ id: 'b' }));
+      expect(existsSync(journal())).toBe(true);
+
+      createHistoryStore(dir, log);
+      expect(existsSync(journal())).toBe(false);
+      expect(array()).toHaveLength(2);
+    });
+
+    it('drops a torn final line and keeps every complete row before it', async () => {
+      // What a power cut costs: the one dictation that was being written.
+      const store = createHistoryStore(dir, log);
+      await store.append(entry({ id: 'a' }));
+      await store.append(entry({ id: 'b', text: 'complete' }));
+      appendFileSync(journal(), '{"id":"c","at":"2026-08-08T12:00', 'utf8');
+
+      const reopened = createHistoryStore(dir, log);
+      expect((await reopened.list(null, 10)).map((e) => e.id)).toEqual(['b', 'a']);
+      expect(records.some((r) => r.msg.includes('unreadable rows from the history journal'))).toBe(
+        true,
+      );
+    });
+
+    it('does not double a row when a journal outlives its compaction', async () => {
+      // A crash between the atomic rewrite and the journal being removed. The
+      // rows are in both files; `id` is what stops them appearing twice.
+      const store = createHistoryStore(dir, log);
+      await store.append(entry({ id: 'a' }));
+      await store.append(entry({ id: 'b' }));
+      const stale = readFileSync(journal(), 'utf8');
+
+      createHistoryStore(dir, log); // compacts and removes the journal
+      writeFileSync(journal(), stale, 'utf8'); // …but it came back
+
+      const reopened = createHistoryStore(dir, log);
+      expect((await reopened.list(null, 10)).map((e) => e.id)).toEqual(['b', 'a']);
+    });
+
+    it('rewrites the array file on purge and on a sweep, and clears the journal', async () => {
+      const store = createHistoryStore(dir, log);
+      await store.append(entry({ id: 'a' }));
+      await store.append(entry({ id: 'b' }));
+      await store.purge();
+
+      expect(array()).toEqual([]);
+      expect(existsSync(journal())).toBe(false);
+      expect(await createHistoryStore(dir, log).count()).toBe(0);
+    });
+
+    it('survives a journal that is not there when it is expected to be', async () => {
+      // Somebody deleted it, or a sync tool did. The array file is the truth
+      // for everything older, so only the un-compacted rows are at risk.
+      const store = createHistoryStore(dir, log);
+      await store.append(entry({ id: 'a' }));
+      await store.append(entry({ id: 'b' }));
+      rmSync(journal());
+
+      const reopened = createHistoryStore(dir, log);
+      expect((await reopened.list(null, 10)).map((e) => e.id)).toEqual(['a']);
+    });
   });
 
   it('notifies listeners with the new count on every mutation', async () => {

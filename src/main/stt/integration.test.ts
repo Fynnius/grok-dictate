@@ -28,7 +28,7 @@ import { CHUNK_BYTES } from '@shared/constants.js';
 import { clearLogSinks, createLogger } from '@shared/logger.js';
 import { ok, type Result } from '@shared/result.js';
 import { Orchestrator } from '../state/orchestrator.js';
-import { XaiSttClient } from './client.js';
+import { XaiSttClient, type SttTimeouts } from './client.js';
 import { FakeSttServer, waitFor } from './fake-server.js';
 
 /** A helper that always inserts successfully and never touches the clipboard. */
@@ -39,7 +39,10 @@ class StubHelper implements NativeHelperPort {
 
   insert(text: string): Promise<InsertOutcome> {
     this.inserted.push(text);
-    return Promise.resolve({ tier: 'ax', ok: true, error: null });
+    // `verified: true` — this stub stands in for a helper whose AX write
+    // succeeded and was read back. Without it the app would correctly report
+    // every insertion here as "typed, unconfirmed" (2026-08-09 incident).
+    return Promise.resolve({ tier: 'ax', ok: true, error: null, verified: true });
   }
   copy(text: string): void {
     this.copied.push(text);
@@ -84,8 +87,14 @@ let helper: StubHelper;
 let hud: MemoryHud;
 let history: MemoryHistory;
 
-beforeEach(async () => {
-  server = await FakeSttServer.start();
+/**
+ * Wire the real client to the loopback server behind the real orchestrator.
+ *
+ * `timeouts` is a test seam only — production always uses the constants in
+ * `client.ts`. It exists so the finish-timeout backstop can be exercised
+ * without an eight-second test.
+ */
+function buildOrchestrator(timeouts: Partial<SttTimeouts> = {}): void {
   const logger = createLogger('integration');
   helper = new StubHelper();
   hud = new MemoryHud();
@@ -96,7 +105,7 @@ beforeEach(async () => {
     // 10 ms chunk cadence: a 200 ms hold produces ~20 chunks, enough to see the
     // backlog behaviour without making the test slow.
     audio: new MockAudioSource({ chunkIntervalMs: 10, loop: true }),
-    stt: new XaiSttClient({ auth, logger, apiBase: server.base }),
+    stt: new XaiSttClient({ auth, logger, apiBase: server.base, timeouts }),
     hud,
     tray: new MemoryTray(),
     sound: new MemorySound(),
@@ -106,6 +115,11 @@ beforeEach(async () => {
     tickIntervalMs: 0,
   });
   orchestrator.start();
+}
+
+beforeEach(async () => {
+  server = await FakeSttServer.start();
+  buildOrchestrator();
 });
 
 afterEach(async () => {
@@ -141,6 +155,7 @@ describe('press → capture → real socket → insert', () => {
       kind: 'inserted',
       text: 'Hello there, this is a test. Please confirm the details.',
       tier: 'ax',
+      verified: true,
     });
 
     // History records the language the server *detected* (spike 1).
@@ -151,6 +166,61 @@ describe('press → capture → real socket → insert', () => {
     });
     // Nothing reached the pasteboard.
     expect(helper.copied).toEqual([]);
+  });
+
+  it('waits for transcript.done before inserting, so a second final is not lost', async () => {
+    /**
+     * The 2026-08-09 incident, BUG-4. On a long turn where the user pauses just
+     * before releasing, the server owes **two** `speech_final`s at `audio.done`
+     * time: the endpointing-triggered one for the segment before the pause, and
+     * the post-`audio.done` one for the tail. The machine used to insert on the
+     * first, and the pasted text was missing its ending.
+     *
+     * The measured cost of waiting is single-digit milliseconds — in the
+     * incident log the final landed at `.065` and `done` at `.068`.
+     */
+    orchestrator.dispatch({ type: 'PTT_DOWN', ts: Date.now() });
+    await server.waitForConnections(1);
+    orchestrator.dispatch({ type: 'PTT_UP', ts: Date.now() });
+    await waitFor(() => server.text.includes('{"type":"audio.done"}'));
+
+    server.partial({ text: 'The first half of it.', speechFinal: true, language: 'en' });
+    await waitFor(() => orchestrator.snapshot.ctx.committed.length === 1);
+    // Nothing has been typed yet — this is the assertion the old behaviour failed.
+    expect(helper.inserted).toEqual([]);
+    expect(orchestrator.snapshot.state).toBe('processing');
+
+    server.partial({ text: 'And the second half.', speechFinal: true, language: 'en' });
+    server.done(9.5);
+
+    await waitFor(() => orchestrator.snapshot.state === 'idle');
+    expect(helper.inserted).toEqual(['The first half of it. And the second half.']);
+    expect(history.entries).toHaveLength(1);
+  });
+
+  it('still ends the turn and types the text when transcript.done never arrives', async () => {
+    /**
+     * The hang BUG-4 must not create. Insertion now waits for
+     * `transcript.done`, so the question "what if it never comes?" has to have
+     * an answer: **`FINISH_TIMEOUT_MS` in `src/main/stt/client.ts`**, armed by
+     * `finish()` and shortened here to keep the test quick. It synthesises
+     * `onDone(null)` → `TURN_ENDED`, which reaches `endTurn` and inserts what
+     * the turn had. The server below sends the final and then nothing at all:
+     * no `done`, no close.
+     */
+    orchestrator.dispose();
+    buildOrchestrator({ finishMs: 300 });
+
+    orchestrator.dispatch({ type: 'PTT_DOWN', ts: Date.now() });
+    await server.waitForConnections(1);
+    server.partial({ text: 'Der Server bleibt stumm.', speechFinal: true, language: 'de' });
+    await waitFor(() => orchestrator.snapshot.ctx.committed.length === 1);
+    orchestrator.dispatch({ type: 'PTT_UP', ts: Date.now() });
+
+    await waitFor(() => orchestrator.snapshot.state === 'idle', 5000);
+    expect(helper.inserted).toEqual(['Der Server bleibt stumm.']);
+    expect(hud.last).toMatchObject({ kind: 'inserted' });
+    expect(history.entries).toHaveLength(1);
   });
 
   it('carries transcript.done.duration into the history row', async () => {

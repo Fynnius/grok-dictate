@@ -88,13 +88,20 @@ export function createConfigStore(userDataDir: string, logger: Logger): ConfigSt
  * the alternative is an interleaving hazard between two rapid saves for no
  * measurable gain. What it buys is that a crash mid-write leaves the previous
  * settings intact rather than a truncated file the next launch has to salvage.
+ *
+ * **Returns whether the file was actually replaced.** It still never throws —
+ * a failed save is logged and life goes on, which is right for settings. The
+ * history store needs the answer, though: it folds a journal of appended rows
+ * back into `history.json` and may only delete that journal once the rewrite it
+ * replaces has landed. Callers that have nothing to undo can ignore it.
  */
-export function writeAtomically(path: string, contents: string, log: Logger): void {
+export function writeAtomically(path: string, contents: string, log: Logger): boolean {
   const temp = `${path}.tmp`;
   try {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(temp, contents, 'utf8');
     renameSync(temp, path);
+    return true;
   } catch (cause) {
     log.error('could not save', { path, err: cause });
     try {
@@ -102,5 +109,6 @@ export function writeAtomically(path: string, contents: string, log: Logger): vo
     } catch {
       // The temp file may never have been created; nothing to clean up.
     }
+    return false;
   }
 }

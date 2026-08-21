@@ -91,6 +91,10 @@ describe('HelperSupervisor against the real mock helper process', () => {
       ok: true,
       error: null,
       reason: null,
+      // The mock declares the `ax` tier, the one that genuinely reports
+      // success, so it confirms. `verified` is what separates that from a
+      // Unicode post that may have gone nowhere (2026-08-09 incident).
+      verified: true,
       frontmostBundleId: 'com.apple.TextEdit',
       frontmostName: 'TextEdit',
     });

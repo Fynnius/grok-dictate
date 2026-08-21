@@ -270,7 +270,12 @@ describe('§5b — the bearer token cannot leave the auth module except as a hea
     const events = read(resolve(ROOT, 'contracts/events.ts'));
     const entry = /export interface HistoryEntry \{([\s\S]*?)\n\}/.exec(events)?.[1] ?? '';
     expect(entry.length).toBeGreaterThan(0);
-    const fields = [...entry.matchAll(/^\s*readonly (\w+)/gm)].map((m) => m[1]);
+    const fields = [...entry.matchAll(/^\s*readonly (\w+)\??/gm)].map((m) => m[1]);
+    // `verified` and `unconfirmedTail` were added by the 2026-08-09 incident,
+    // and both are booleans about what happened to the text rather than new
+    // places to put one. The property this list defends is unchanged: a
+    // history row holds a transcript, timing, the target app and the outcome —
+    // and nothing with anywhere to hide a credential.
     expect(fields).toEqual([
       'id',
       'at',
@@ -281,6 +286,8 @@ describe('§5b — the bearer token cannot leave the auth module except as a hea
       'frontmostName',
       'tier',
       'inserted',
+      'verified',
+      'unconfirmedTail',
     ]);
   });
 

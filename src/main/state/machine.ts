@@ -120,6 +120,12 @@ export interface SessionContext {
    * in flight is assembled.
    */
   readonly repairSeams: boolean;
+  /**
+   * When the last `recording` frame was emitted, for coalescing (see
+   * `recordingFrame`). Part of the context rather than of the interpreter
+   * because the reducer is where the decision belongs and the reducer is pure.
+   */
+  readonly hudFrameAt: number;
 }
 
 export interface Snapshot {
@@ -159,6 +165,7 @@ export const INITIAL_CONTEXT: SessionContext = {
   durationSec: null,
   inserting: null,
   repairSeams: true,
+  hudFrameAt: 0,
 };
 
 export const INITIAL_SNAPSHOT: Snapshot = { state: 'idle', ctx: INITIAL_CONTEXT };
@@ -180,6 +187,42 @@ export function committedText(ctx: SessionContext): string {
   return stitchSegments(ctx.committed, ctx.repairSeams);
 }
 
+/**
+ * Everything this turn produced when it is about to be thrown away — including
+ * the tail that was still only interim.
+ *
+ * **The 2026-08-09 incident, BUG-3.** `committed` holds `speech_final` segments,
+ * and the server only emits one when it hears an endpoint. Speak continuously
+ * for a minute with no pause long enough to trigger endpointing and `committed`
+ * is *empty* the whole time, while a minute of text streams past as interim. If
+ * the connection then drops — or the liveness watchdog fires — salvaging
+ * `committedText` alone salvaged nothing: not history, not `lastTranscript`,
+ * nothing for ⌃⌘V. The entire minute vanished with no trace, which is exactly
+ * the failure §9.7 forbids.
+ *
+ * Interim text is imperfect: the server revises it, and the last words of it
+ * are the least settled. It is still strictly better than nothing, so it is
+ * kept and **labelled** — `unconfirmedTail` reaches both the HUD copy and the
+ * history row, so the user always knows which half they are reading.
+ *
+ * It is joined through `stitchSegments` like any other segment, because the
+ * seam between the last `speech_final` and the interim that followed it is the
+ * same kind of seam with the same artefacts (`src/shared/stitch.ts`).
+ *
+ * **This never makes text insertable.** Every caller is a path that
+ * deliberately does not type — a failed turn, or Secure Input — and
+ * `contracts/state-machine.md` §9.1 (interim text is never inserted) is
+ * unaffected: `beginInsert` still reads `committed` and only `committed`.
+ */
+function salvage(ctx: SessionContext): { text: string; unconfirmedTail: boolean } {
+  const interim = ctx.interim.trim();
+  if (interim.length === 0) return { text: committedText(ctx), unconfirmedTail: false };
+  return {
+    text: stitchSegments([...ctx.committed, interim], ctx.repairSeams),
+    unconfirmedTail: true,
+  };
+}
+
 function recordingView(ctx: SessionContext): HudView {
   return {
     kind: 'recording',
@@ -188,6 +231,46 @@ function recordingView(ctx: SessionContext): HudView {
     interim: ctx.interim,
     mode: ctx.mode,
   };
+}
+
+/**
+ * The floor between two level/tick HUD frames.
+ *
+ * **Why there is a floor at all** (2026-08-09 incident, BUG-7): `LEVEL` and
+ * `TICK` each emitted a frame, at 10 Hz apiece — one per 100 ms audio chunk and
+ * one per HUD tick — interleaved into roughly **twenty IPC round trips a
+ * second**, every one of them allocating a fresh view object, for as long as
+ * the user held the key.
+ *
+ * 90 ms collapses each interleaved pair into one frame, halving that to ~11 Hz,
+ * and it is deliberately just under the 100 ms cadence of both sources so that
+ * neither is ever throttled against *itself* — every level packet still reaches
+ * the HUD, at worst one half-period late, because the suppressed event still
+ * updates the context and the next frame carries its value. Nothing is dropped;
+ * only the duplicate frame is.
+ *
+ * The number is chosen rather than measured. What backs it is the cadence of
+ * the two sources (`CHUNK_DURATION_MS` and the orchestrator's tick, both 100 ms)
+ * and the fact that the recording capsule renders neither the elapsed time nor
+ * the interim — it is ten bars driven by `level`, animated at 60 fps in the
+ * renderer from its own interpolator, so the frame rate here sets how often the
+ * *target* moves, not how smooth it looks.
+ *
+ * `TRANSCRIPT_INTERIM` frames are deliberately not coalesced: partials arrive
+ * about twice a second and are not part of the churn.
+ */
+const HUD_FRAME_MIN_MS = 90;
+
+/**
+ * A `recording` HUD frame, unless one has just gone out.
+ *
+ * The suppressed event still updates the context, so the next frame carries its
+ * value — the coalescing loses a frame, never a measurement.
+ */
+function recordingFrame(next: SessionContext, now: number): Step {
+  if (now - next.hudFrameAt < HUD_FRAME_MIN_MS) return step('recording', next, []);
+  const framed = { ...next, hudFrameAt: now };
+  return step('recording', framed, [{ type: 'hud', view: recordingView(framed) }]);
 }
 
 function step(state: SessionState, ctx: SessionContext, effects: Effect[]): Step {
@@ -221,6 +304,7 @@ function isStale(ctx: SessionContext, event: SessionEvent): boolean {
 /** Begin a new turn. Shared by `idle` starts and the `pendingStart` drain (§5). */
 function startSession(ctx: SessionContext, mode: SessionMode, env: MachineEnv): Step {
   const sessionId = env.newSessionId();
+  const startedAt = env.now();
   const next: SessionContext = {
     ...ctx,
     sessionId,
@@ -234,11 +318,14 @@ function startSession(ctx: SessionContext, mode: SessionMode, env: MachineEnv): 
     // whether this one's is muted.
     peakLevel: 0,
     pendingStart: false,
-    startedAt: env.now(),
+    startedAt,
     elapsedMs: 0,
     durationSec: null,
     inserting: null,
     repairSeams: env.repairSeams?.() ?? true,
+    // The frame below counts: the first `LEVEL` of a turn arrives ~100 ms later
+    // and has nothing to add to it.
+    hudFrameAt: startedAt,
   };
   return step('recording', next, [
     // The frontmost app is captured *now*, at press time, and verified before
@@ -292,6 +379,11 @@ function notInsertedReason(outcome: InsertOutcome, fallback: NotInsertedReason):
   switch (reason) {
     case 'target_changed':
       return 'target_changed';
+    case 'verification_failed':
+      // Its own reason, not the generic one: the ladder *did* run and the
+      // keystrokes *were* posted — they simply did not arrive. That is a
+      // different sentence and a different instruction to the user.
+      return 'verification_failed';
     case 'empty_text':
     case 'no_tier':
       // Both mean "the ladder had nothing it could do", which is what
@@ -300,7 +392,41 @@ function notInsertedReason(outcome: InsertOutcome, fallback: NotInsertedReason):
   }
 }
 
-/** Complete an insert: HUD, history, `lastTranscript`, then drain `pendingStart`. */
+/**
+ * What the pill shows when an insert completes — three outcomes, not two.
+ *
+ * Until the 2026-08-09 incident this was `outcome.ok ? inserted : not_inserted`,
+ * and `ok` meant "the helper posted the keystrokes". `CGEventKeyboardSetUnicodeString`
+ * has no return channel, so a target that ignores synthetic input (the incident
+ * was an Electron terminal, 38 events in 245 ms, every one dropped) produced a
+ * green check and a `inserted: true` history row for 60.3 seconds of speech the
+ * user never saw again.
+ *
+ *   ok && verified === true   — confirmed. The bare green check, as before.
+ *   ok && verified !== true   — **typed, unconfirmed.** Same as a confirmed
+ *                               insert as far as the machine knows, but the
+ *                               user is shown the whole transcript so a silent
+ *                               drop is catchable at a glance (§12.5).
+ *   !ok                       — a real failure, with the helper's own reason.
+ */
+function insertView(
+  outcome: InsertOutcome,
+  text: string,
+  reasonWhenFailed: NotInsertedReason,
+): HudView {
+  if (!outcome.ok) {
+    return { kind: 'not_inserted', text, reason: reasonWhenFailed, detail: outcome.error };
+  }
+  return { kind: 'inserted', text, tier: outcome.tier, verified: outcome.verified ?? null };
+}
+
+/**
+ * Complete an insert: HUD, history, `lastTranscript`, then drain `pendingStart`.
+ *
+ * Three outcomes since the 2026-08-09 incident, not two — see `insertView`.
+ * `outcome.ok` alone used to pick between a green check and a failure pill, and
+ * "ok" from the Unicode tier means "posted", which is not the same claim.
+ */
 function finishInsert(
   snapshot: Snapshot,
   outcome: InsertOutcome,
@@ -340,6 +466,12 @@ function finishInsert(
         frontmostName: landedIn?.name ?? ctx.targetName,
         tier: outcome.tier,
         inserted: outcome.ok,
+        // `inserted` alone overstated the case: it has always meant "the
+        // helper accepted the request", which for the Unicode tier means
+        // "posted", not "landed". The row now carries both, so History stops
+        // asserting something the app was never in a position to know
+        // (2026-08-09 incident, BUG-1).
+        verified: outcome.verified ?? null,
       },
     });
   }
@@ -355,12 +487,7 @@ function finishInsert(
 
   // Secure Input arrived while the insert was in flight → land in `blocked`.
   if (ctx.secureInput) {
-    effects.push({
-      type: 'hud',
-      view: outcome.ok
-        ? { kind: 'inserted', text, tier: outcome.tier }
-        : { kind: 'not_inserted', text, reason: reasonWhenFailed, detail: outcome.error },
-    });
+    effects.push({ type: 'hud', view: insertView(outcome, text, reasonWhenFailed) });
     effects.push({ type: 'tray', state: 'blocked', secureInput: true });
     return step('blocked', { ...cleared, pendingStart: false }, effects);
   }
@@ -372,16 +499,15 @@ function finishInsert(
     return { snapshot: started.snapshot, effects: [...effects, ...started.effects] };
   }
 
-  effects.push({
-    type: 'hud',
-    // Both states show the FULL transcript — : a half-successful
-    // Unicode injection is silent, and seeing the whole text next to what
-    // landed is the only way to catch it.
-    view: outcome.ok
-      ? { kind: 'inserted', text, tier: outcome.tier }
-      : { kind: 'not_inserted', text, reason: reasonWhenFailed, detail: outcome.error },
-  });
+  effects.push({ type: 'hud', view: insertView(outcome, text, reasonWhenFailed) });
   effects.push({ type: 'tray', state: 'idle', secureInput: false });
+  // The error cue stays tied to `!ok`, and an *unconfirmed* insert deliberately
+  // does not get one. Verification is impossible for a whole class of ordinary
+  // targets, so a cue there would fire on perfectly good dictations and train
+  // the user to ignore the one sound that means something. The amber pill,
+  // carrying the full transcript for twenty seconds, is the signal — see
+  // `src/renderer/hud/presentation.ts`. Stated because it is a real trade: a
+  // genuinely dropped insert makes no sound until the user looks.
   if (!outcome.ok) effects.push({ type: 'cue', cue: 'error' });
   return step('idle', cleared, effects);
 }
@@ -454,9 +580,17 @@ function beginInsert(ctx: SessionContext, extraFinal: string | null): Step {
  * worse than not typing it — but the text is shown in full, stored in history
  * (the recovery surface, ) and made available to ⌃⌘V.
  *
- * With nothing committed the behaviour is unchanged: a plain error pill, which
- * is right for HT-5's three-character fragment and for a failure before any
- * speech arrived.
+ * **Since the 2026-08-09 incident that includes the interim tail** — see
+ * `salvage`, and note what it changes here: a turn that died before the server
+ * confirmed anything used to fall through to the plain error pill, which was
+ * right for a failure before any speech but wrong for a minute of continuous
+ * dictation. The pill now appears whenever there are words of *any* kind, and
+ * says which they are. The cost is that HT-5's three-character fragment gets a
+ * pill instead of an error where it arrives as interim; it is labelled
+ * unconfirmed and never typed, so it informs rather than misleads.
+ *
+ * With nothing at all — no segments, no preview — the behaviour is unchanged:
+ * a plain error pill, which is right for a failure before any speech arrived.
  */
 function toIdleWithError(ctx: SessionContext, error: AppError): Step {
   const effects: Effect[] = [];
@@ -465,7 +599,7 @@ function toIdleWithError(ctx: SessionContext, error: AppError): Step {
     effects.push({ type: 'abort_stt', sessionId: ctx.sessionId });
   }
 
-  const salvaged = committedText(ctx);
+  const { text: salvaged, unconfirmedTail } = salvage(ctx);
   if (salvaged.length > 0) {
     effects.push({
       type: 'history_append',
@@ -476,6 +610,7 @@ function toIdleWithError(ctx: SessionContext, error: AppError): Step {
         frontmostName: ctx.targetName,
         tier: 'none',
         inserted: false,
+        unconfirmedTail,
       },
     });
     effects.push({
@@ -483,7 +618,10 @@ function toIdleWithError(ctx: SessionContext, error: AppError): Step {
       view: {
         kind: 'not_inserted',
         text: salvaged,
-        reason: 'session_error',
+        // Two reasons, because the user has to know whether the words in front
+        // of them were confirmed by the server or scraped out of the live
+        // preview a moment before the link died.
+        reason: unconfirmedTail ? 'session_error_unconfirmed' : 'session_error',
         detail: error.hint === null ? error.message : `${error.message} ${error.hint}`,
       },
     });
@@ -596,7 +734,7 @@ export function reduce(snapshot: Snapshot, event: SessionEvent, env: MachineEnv)
     case 'idle':
       return reduceIdle(snapshot, event, env);
     case 'recording':
-      return reduceRecording(snapshot, event);
+      return reduceRecording(snapshot, event, env);
     case 'processing':
       return reduceProcessing(snapshot, event);
     case 'inserting':
@@ -650,7 +788,7 @@ function reduceIdle(snapshot: Snapshot, event: PostSecureEvent, env: MachineEnv)
   }
 }
 
-function reduceRecording(snapshot: Snapshot, event: PostSecureEvent): Step {
+function reduceRecording(snapshot: Snapshot, event: PostSecureEvent, env: MachineEnv): Step {
   const { ctx } = snapshot;
   const sessionId = ctx.sessionId ?? '';
 
@@ -755,18 +893,23 @@ function reduceRecording(snapshot: Snapshot, event: PostSecureEvent): Step {
         { type: 'log', level: 'warn', message: 'recording cap reached; finishing the turn' },
       ]);
 
-    case 'LEVEL': {
-      const next = { ...ctx, level: event.level, peakLevel: Math.max(ctx.peakLevel, event.level) };
-      return step('recording', next, [{ type: 'hud', view: recordingView(next) }]);
-    }
+    // Both go through `recordingFrame`, which is what stops the two 10 Hz
+    // sources from becoming twenty IPC round trips a second (BUG-7). `LEVEL`
+    // carries no timestamp, so it reads the clock; `TICK` already has one.
+    case 'LEVEL':
+      return recordingFrame(
+        { ...ctx, level: event.level, peakLevel: Math.max(ctx.peakLevel, event.level) },
+        env.now(),
+      );
 
-    case 'TICK': {
-      const next = {
-        ...ctx,
-        elapsedMs: ctx.startedAt === null ? 0 : Math.max(0, event.now - ctx.startedAt),
-      };
-      return step('recording', next, [{ type: 'hud', view: recordingView(next) }]);
-    }
+    case 'TICK':
+      return recordingFrame(
+        {
+          ...ctx,
+          elapsedMs: ctx.startedAt === null ? 0 : Math.max(0, event.now - ctx.startedAt),
+        },
+        event.now,
+      );
 
     case 'SESSION_ERROR':
       return toIdleWithError(ctx, event.error);
@@ -784,8 +927,34 @@ function reduceProcessing(snapshot: Snapshot, event: PostSecureEvent): Step {
   const sessionId = ctx.sessionId ?? '';
 
   switch (event.type) {
+    /**
+     * **Accumulate. The insert waits for `transcript.done`** (2026-08-09
+     * incident, BUG-4).
+     *
+     * This used to call `beginInsert` on the first final it saw, which is
+     * wrong whenever the server owes two. A user who pauses just before
+     * pressing stop leaves the endpointer holding one segment and the
+     * post-`audio.done` flush holding another; both arrive after the key is
+     * up, and inserting on the first typed the sentence without its ending.
+     *
+     * Waiting costs single-digit milliseconds — in the incident log the final
+     * landed at `.065` and `transcript.done` at `.068` — and the protocol
+     * guarantees `done` comes after the last final. If it never comes at all,
+     * the STT client's finish timeout (`FINISH_TIMEOUT_MS`,
+     * `src/main/stt/client.ts`) synthesises `onDone(null)`, and its liveness
+     * watchdog fails the turn into `toIdleWithError`, which salvages rather
+     * than dropping. The turn always ends.
+     *
+     * No `hud` effect: the `processing` capsule is a spinner and shows neither
+     * the interim nor the committed text, so a frame here would be an IPC
+     * round trip that changes no pixels (BUG-7).
+     */
     case 'TRANSCRIPT_FINAL':
-      return beginInsert(ctx, event.text);
+      return step(
+        'processing',
+        { ...ctx, committed: [...ctx.committed, event.text], interim: '' },
+        [],
+      );
 
     case 'TURN_ENDED':
       return endTurn(ctx, event.durationSec);
@@ -892,10 +1061,19 @@ function reduceInserting(snapshot: Snapshot, event: PostSecureEvent, env: Machin
      * A `speech_final` that lands after the insert was dispatched.
      *
      * Until this case existed it was dropped on the floor, and with it the last
-     * segment of the turn: `processing` inserts on the *first* final it sees, so
-     * a server that flushes two segments after `audio.done` — which it does when
-     * the buffered tail contains a pause — lost the second one from the pill,
-     * from history and from ⌃⌘V. Silent truncation, no warning anywhere.
+     * segment of the turn: `processing` used to insert on the *first* final it
+     * saw, so a server that flushes two segments after `audio.done` — which it
+     * does when the buffered tail contains a pause — lost the second one from
+     * the pill, from history and from ⌃⌘V. Silent truncation, no warning
+     * anywhere.
+     *
+     * **This is now the safety net rather than the everyday path.** BUG-4 moved
+     * the insert to `TURN_ENDED`, which the protocol guarantees arrives after
+     * the last final, so the two-segment case is typed in full. What can still
+     * land here is a final that arrives after `transcript.done` — out of
+     * contract, and observed from nobody — or after a turn the finish timeout
+     * ended early. **Keep it.** It costs one branch and it is the difference
+     * between truncated text and truncated text nobody knows about.
      *
      * It still is not typed: one hold produces one insertion (§7), and the
      * helper is already committed. But it is kept, so every recovery surface has
@@ -961,7 +1139,12 @@ function reduceBlocked(snapshot: Snapshot, event: PostSecureEvent, env: MachineE
 
     case 'TURN_ENDED': {
       const withDuration = { ...ctx, durationSec: event.durationSec };
-      const text = committedText(withDuration);
+      // The interim tail counts here for the same reason it counts in
+      // `toIdleWithError` (BUG-3): Secure Input can arrive mid-sentence, and a
+      // turn finalised from `blocked` may carry a preview the server never got
+      // to confirm. Nothing is typed either way (§8), so the only question is
+      // whether the words survive at all.
+      const { text, unconfirmedTail } = salvage(withDuration);
       if (text.length === 0) return step('blocked', { ...withDuration, sessionId: null }, []);
       return step(
         'blocked',
@@ -976,6 +1159,7 @@ function reduceBlocked(snapshot: Snapshot, event: PostSecureEvent, env: MachineE
               frontmostName: ctx.targetName,
               tier: 'none',
               inserted: false,
+              unconfirmedTail,
             },
           },
           {
@@ -983,8 +1167,14 @@ function reduceBlocked(snapshot: Snapshot, event: PostSecureEvent, env: MachineE
             view: {
               kind: 'not_inserted',
               text,
+              // The reason it was not typed is still Secure Input — that is
+              // what the user has to act on — so the unconfirmed tail is said
+              // in the detail line rather than by swapping the reason and
+              // losing the password-field advice.
               reason: 'secure_input',
-              detail: 'A password field had focus, so nothing was typed.',
+              detail: unconfirmedTail
+                ? 'A password field had focus, so nothing was typed. The end of this was still being transcribed and was never confirmed.'
+                : 'A password field had focus, so nothing was typed.',
             },
           },
         ],
@@ -994,10 +1184,44 @@ function reduceBlocked(snapshot: Snapshot, event: PostSecureEvent, env: MachineE
     case 'INSERT_RESULT':
       return finishInsert(snapshot, event.outcome, env);
 
-    case 'SESSION_ERROR':
-      return step('blocked', { ...ctx, sessionId: null, committed: [], interim: '' }, [
+    case 'SESSION_ERROR': {
+      // A turn that dies while blocked used to have everything it had produced
+      // cleared with nothing but a log line — the same silent loss as BUG-3,
+      // and a violation of §9.7 ("a transcript never vanishes without a
+      // trace"). It is stored and made available to ⌃⌘V; the pill is *not*
+      // replaced, because Secure Input is still the thing the user has to
+      // clear and swapping in a transcript would hide the one message that
+      // explains why the hotkey is dead (§8).
+      const { text, unconfirmedTail } = salvage(ctx);
+      const effects: Effect[] = [
         { type: 'log', level: 'warn', message: `error while blocked: ${event.error.message}` },
-      ]);
+      ];
+      if (text.length > 0) {
+        effects.push({
+          type: 'history_append',
+          entry: {
+            text,
+            durationSec: ctx.durationSec,
+            frontmostBundleId: ctx.targetBundleId,
+            frontmostName: ctx.targetName,
+            tier: 'none',
+            inserted: false,
+            unconfirmedTail,
+          },
+        });
+      }
+      return step(
+        'blocked',
+        {
+          ...ctx,
+          sessionId: null,
+          committed: [],
+          interim: '',
+          lastTranscript: text.length > 0 ? text : ctx.lastTranscript,
+        },
+        effects,
+      );
+    }
 
     case 'PTT_UP':
     case 'CANCEL':

@@ -98,14 +98,27 @@ export const FrontmostFrameSchema = z.object({
  * anywhere able to produce it. That made the user-visible half of the
  * frontmost check missing even though the check itself worked.
  *
- *   target_changed — the frontmost app is no longer `targetBundleId` (§11.1.10)
- *   empty_text     — there was nothing to insert
- *   no_tier        — AX declined and Unicode injection failed
+ *   target_changed      — the frontmost app is no longer `targetBundleId` (§11.1.10)
+ *   empty_text          — there was nothing to insert
+ *   no_tier             — AX declined and Unicode injection failed
+ *   verification_failed — Unicode was posted and the target's text did not
+ *                         change. Added by the 2026-08-09 incident (BUG-1): a
+ *                         60.3 s dictation was posted as 38 events in 245 ms
+ *                         into a terminal that dropped every one of them, and
+ *                         `ok: true` meant "posted", so the app showed a green
+ *                         check and wrote `inserted: true` for text the user
+ *                         never got. Sent with `ok: false` and
+ *                         `verified: false` — the helper proved nothing landed.
  *
  * Optional on the wire so an older helper binary still parses; absent means
  * "not stated", which the app treats as `no_tier`'s generic copy.
  */
-export const INSERT_DECLINE_REASONS = ['target_changed', 'empty_text', 'no_tier'] as const;
+export const INSERT_DECLINE_REASONS = [
+  'target_changed',
+  'empty_text',
+  'no_tier',
+  'verification_failed',
+] as const;
 export const InsertDeclineReasonSchema = z.enum(INSERT_DECLINE_REASONS);
 export type InsertDeclineReason = (typeof INSERT_DECLINE_REASONS)[number];
 
@@ -119,6 +132,25 @@ export const InsertResultFrameSchema = z.object({
   error: z.string().nullable(),
   /** Absent on success, and absent from an older helper build. */
   reason: InsertDeclineReasonSchema.nullish(),
+  /**
+   * Whether the helper **confirmed the text actually landed**, as opposed to
+   * merely having posted it.
+   *
+   *   true          — confirmed (an AX caret read-back, or an AX text-length
+   *                   delta measured across the Unicode posting).
+   *   false         — verification ran and proved nothing landed.
+   *   null / absent — verification was not possible for this target, or the
+   *                   helper is an older build that does not report it.
+   *
+   * Added by the 2026-08-09 incident (BUG-1). `CGEventKeyboardSetUnicodeString`
+   * has no return channel, so `ok: true` has always meant "posted", not
+   * "landed" (§12.5) — and the app presented the two identically. **The
+   * invariant the app now relies on: `ok: true` with `verified` not `true`
+   * means "typed, unconfirmed".** Nullish rather than required precisely so an
+   * older helper binary still parses; the app treats absent as "unconfirmed",
+   * which is the honest reading of a build that cannot answer.
+   */
+  verified: z.boolean().nullish(),
   /**
    * The application the ladder actually acted on.
    *

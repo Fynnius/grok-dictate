@@ -19,6 +19,27 @@
 import type { HudView } from '@contracts/events.js';
 
 /**
+ * Whether two views would draw the same pixels.
+ *
+ * Every member of `HudView` is a flat record of primitives, so a shallow
+ * comparison is an exact one — there is nowhere for a nested difference to
+ * hide, and the type keeps it that way.
+ *
+ * Used to drop a redundant `hud.show` (2026-08-09 incident, BUG-7). Sending one
+ * costs an IPC round trip and a re-render for a state the HUD is already in,
+ * and while recording that used to happen about twenty times a second.
+ */
+export function sameHudView(a: HudView, b: HudView): boolean {
+  if (a === b) return true;
+  if (a.kind !== b.kind) return false;
+  const left = a as unknown as Record<string, unknown>;
+  const right = b as unknown as Record<string, unknown>;
+  const keys = Object.keys(left);
+  if (keys.length !== Object.keys(right).length) return false;
+  return keys.every((key) => left[key] === right[key]);
+}
+
+/**
  * Which surfaces a view puts on screen — the overhaul's §16.3 two-pill design.
  *
  * - `none`             — nothing; the window hides.
@@ -35,8 +56,13 @@ export function hudLayer(view: HudView): HudLayer {
       return 'none';
     case 'recording':
     case 'processing':
-    case 'inserted':
       return 'capsule';
+    case 'inserted':
+      // A *confirmed* insert is the bare check (§16.4). An unconfirmed one has
+      // words to say and a transcript to show, so it joins the message states —
+      // the 2026-08-09 incident is what a silent drop dressed as a green check
+      // costs (`contracts/events.ts`, `HudView.inserted.verified`).
+      return view.verified === true ? 'capsule' : 'capsule-message';
     case 'not_inserted':
     case 'blocked':
     case 'error':
@@ -68,11 +94,15 @@ export function hudInteractive(view: HudView): boolean {
   switch (view.kind) {
     case 'not_inserted':
       return true;
+    case 'inserted':
+      // Only when it is unconfirmed, where the pill carries Copy / Re-insert /
+      // Scratchpad and the text exists nowhere else on screen. A confirmed
+      // insert is still a wordless check with nothing to press.
+      return view.verified !== true;
     case 'recording':
       return view.mode === 'toggle';
     case 'hidden':
     case 'processing':
-    case 'inserted':
     case 'blocked':
     case 'error':
       return false;

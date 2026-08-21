@@ -17,7 +17,11 @@ class Recorder implements AudioHandlers {
   readonly levels: number[] = [];
   readonly errors: AppError[] = [];
   readonly started: number[] = [];
+  drained = 0;
 
+  onDrained(): void {
+    this.drained++;
+  }
   onChunk(pcm: Uint8Array): void {
     this.chunks.push(pcm);
   }
@@ -36,7 +40,11 @@ const sent: MainToRenderer[] = [];
 const records: LogRecord[] = [];
 
 function coordinator(
-  options: { checkPermission?: () => AppError | null; maxBufferBytes?: number } = {},
+  options: {
+    checkPermission?: () => AppError | null;
+    maxBufferBytes?: number;
+    drainTimeoutMs?: number;
+  } = {},
 ) {
   return new CaptureCoordinator({
     transport: {
@@ -128,6 +136,114 @@ describe('starting and stopping', () => {
     sent.length = 0;
     audio.stop('an-older-session');
     expect(sent).toHaveLength(0);
+  });
+});
+
+describe('draining the tail after stop (2026-08-09 incident, BUG-2)', () => {
+  /**
+   * The renderer flushes its encoder tail as a final `capture-chunk` *after* it
+   * is told to stop — "the last 100 ms of a hold is the end of the last word".
+   * `stop()` used to drop the session on the spot, so that chunk was discarded
+   * on every dictation and the last ~100–300 ms of every utterance never
+   * reached the server or the full-utterance buffer.
+   */
+  const drained = (sessionId = 's1'): RendererToMain => ({ type: 'capture-drained', sessionId });
+
+  it('still accepts the tail chunk that arrives after capture-stop', () => {
+    const audio = coordinator();
+    const handlers = new Recorder();
+    audio.start('s1', handlers);
+    audio.handleRendererMessage(chunk(1));
+
+    audio.stop('s1');
+    // The renderer's flush lands here, one IPC hop after `capture-stop`.
+    audio.handleRendererMessage(chunk(2));
+    audio.handleRendererMessage(drained());
+
+    expect(handlers.chunks).toHaveLength(2);
+    expect(audio.getUtteranceBuffer('s1')?.byteLength).toBe(CHUNK_BYTES * 2);
+    // …and the tail is the *end* of the buffer, in order.
+    expect(audio.getUtteranceBuffer('s1')?.[CHUNK_BYTES]).toBe(2);
+  });
+
+  it('reports the drain exactly once, and only after the ack', () => {
+    const audio = coordinator();
+    const handlers = new Recorder();
+    audio.start('s1', handlers);
+    audio.stop('s1');
+    expect(handlers.drained).toBe(0);
+
+    audio.handleRendererMessage(drained());
+    expect(handlers.drained).toBe(1);
+    // A duplicate ack, or one racing the timeout, must not fire it twice: the
+    // turn is ended from this callback.
+    audio.handleRendererMessage(drained());
+    expect(handlers.drained).toBe(1);
+  });
+
+  it('closes the session once drained, so a later chunk cannot reopen it', () => {
+    const audio = coordinator();
+    const handlers = new Recorder();
+    audio.start('s1', handlers);
+    audio.stop('s1');
+    audio.handleRendererMessage(drained());
+    audio.handleRendererMessage(chunk(3));
+
+    expect(handlers.chunks).toHaveLength(0);
+  });
+
+  it('gives up on a renderer that never acknowledges, and says so', async () => {
+    // A dead or wedged capture window must not be able to hang a turn: the
+    // dictation is held open until the drain completes, so this timer is the
+    // only thing between it and a session parked in `processing` for ever.
+    const audio = coordinator({ drainTimeoutMs: 20 });
+    const handlers = new Recorder();
+    audio.start('s1', handlers);
+    audio.stop('s1');
+
+    await new Promise((r) => setTimeout(r, 60));
+    expect(handlers.drained).toBe(1);
+    expect(records.some((r) => r.msg.includes('did not acknowledge the tail'))).toBe(true);
+
+    // …and the late ack that finally turns up changes nothing.
+    audio.handleRendererMessage(drained());
+    expect(handlers.drained).toBe(1);
+  });
+
+  it('does not wait for a drain on cancel — the audio is being thrown away', () => {
+    const audio = coordinator({ drainTimeoutMs: 10_000 });
+    const handlers = new Recorder();
+    audio.start('s1', handlers);
+    audio.cancel('s1');
+
+    expect(handlers.drained).toBe(1);
+    expect(sent.at(-1)).toEqual({ type: 'capture-stop', sessionId: 's1' });
+  });
+
+  it('releases a draining session when a new press supersedes it', () => {
+    // Otherwise the old session's waiter sits until the timeout while the new
+    // recording is already running.
+    const audio = coordinator({ drainTimeoutMs: 10_000 });
+    const first = new Recorder();
+    audio.start('s1', first);
+    audio.stop('s1');
+    audio.start('s2', new Recorder());
+
+    expect(first.drained).toBe(1);
+    // The second `capture-stop` is not sent: the renderer already had one.
+    expect(sent.filter((m) => m.type === 'capture-stop')).toHaveLength(1);
+  });
+
+  it('does not drain twice when stop is called twice', () => {
+    const audio = coordinator({ drainTimeoutMs: 10_000 });
+    const handlers = new Recorder();
+    audio.start('s1', handlers);
+    audio.stop('s1');
+    audio.stop('s1');
+    audio.handleRendererMessage(drained());
+
+    expect(handlers.drained).toBe(1);
+    expect(sent.filter((m) => m.type === 'capture-stop')).toHaveLength(1);
   });
 });
 

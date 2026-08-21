@@ -52,15 +52,34 @@ const huds = (effects: readonly Effect[]): Extract<Effect, { type: 'hud' }>[] =>
   effects.filter((e): e is Extract<Effect, { type: 'hud' }> => e.type === 'hud');
 const kinds = (effects: readonly Effect[]): string[] => effects.map((e) => e.type);
 
-/** The happy path: press, speak, release, final, insert. */
+/**
+ * A confirmed insert, as the helper reports one. `verified: true` is not
+ * decoration: since the 2026-08-09 incident, `ok: true` on its own means
+ * "posted", and only this shape renders the bare green check.
+ */
+const CONFIRMED: InsertOutcome = { tier: 'ax', ok: true, error: null, verified: true };
+
+/** The happy path: press, speak, release, final, turn ends, insert. */
 const HAPPY: readonly SessionEvent[] = [
   { type: 'PTT_DOWN', ts: 1 },
   { type: 'FRONTMOST', sessionId: 's1', app: { bundleId: 'com.microsoft.VSCode', name: 'Code' } },
   { type: 'TRANSCRIPT_INTERIM', sessionId: 's1', text: 'hello' },
   { type: 'PTT_UP', ts: 2 },
   { type: 'TRANSCRIPT_FINAL', sessionId: 's1', text: 'Hello there, this is a test.' },
-  { type: 'INSERT_RESULT', sessionId: 's1', outcome: { tier: 'ax', ok: true, error: null } },
+  { type: 'TURN_ENDED', sessionId: 's1', durationSec: 3.1 },
+  { type: 'INSERT_RESULT', sessionId: 's1', outcome: CONFIRMED },
 ];
+
+/**
+ * The prefix of `HAPPY` that ends in `inserting`, with the insert dispatched
+ * and no result yet.
+ *
+ * A named constant rather than `HAPPY.slice(0, 5)`: the insert now fires on
+ * `TURN_ENDED` rather than on the first `TRANSCRIPT_FINAL` (2026-08-09
+ * incident, BUG-4), so the index moved and a slice would have moved silently
+ * with it.
+ */
+const TO_INSERTING: readonly SessionEvent[] = HAPPY.slice(0, 6);
 
 describe('happy path', () => {
   it('walks idle → recording → processing → inserting → idle', () => {
@@ -69,16 +88,12 @@ describe('happy path', () => {
     const states: string[] = [];
     for (const event of HAPPY) {
       snapshot = reduce(snapshot, event, env).snapshot;
-      states.push(snapshot.state);
+      // Consecutive repeats collapsed: this test is about the *route*, and
+      // which event inside `processing` finally dispatches the insert is
+      // pinned separately (see "the insert waits for transcript.done").
+      if (states.at(-1) !== snapshot.state) states.push(snapshot.state);
     }
-    expect(states).toEqual([
-      'recording',
-      'recording',
-      'recording',
-      'processing',
-      'inserting',
-      'idle',
-    ]);
+    expect(states).toEqual(['recording', 'processing', 'inserting', 'idle']);
   });
 
   it('opens the mic and the socket concurrently on ptt_down, with no delay', () => {
@@ -119,12 +134,18 @@ describe('happy path', () => {
       frontmostBundleId: 'com.microsoft.VSCode',
       tier: 'ax',
       inserted: true,
+      // The row records that the helper *confirmed* it, not merely that it
+      // accepted the request (2026-08-09 incident).
+      verified: true,
     });
-    // §12.5: the full transcript is shown even on success.
+    // §12.5: the view carries the full transcript even on success —
+    // `presentation.ts` is what decides whether to draw it, and it draws it
+    // whenever the insert was not confirmed.
     expect(huds(all).at(-1)?.view).toEqual({
       kind: 'inserted',
       text: 'Hello there, this is a test.',
       tier: 'ax',
+      verified: true,
     });
     expect(snapshot.ctx.lastTranscript).toBe('Hello there, this is a test.');
   });
@@ -137,6 +158,7 @@ describe('interim text never reaches insertion', () => {
       { type: 'TRANSCRIPT_INTERIM', sessionId: 's1', text: 'this is only a preview' },
       { type: 'PTT_UP', ts: 2 },
       { type: 'TRANSCRIPT_FINAL', sessionId: 's1', text: 'This is the committed text.' },
+      { type: 'TURN_ENDED', sessionId: 's1', durationSec: 2 },
     ]);
     expect(inserts(all)).toHaveLength(1);
     expect(inserts(all)[0]?.text).toBe('This is the committed text.');
@@ -152,6 +174,7 @@ describe('interim text never reaches insertion', () => {
       { type: 'TRANSCRIPT_FINAL', sessionId: 's1', text: 'Second part.' },
       { type: 'PTT_UP', ts: 2 },
       { type: 'TRANSCRIPT_FINAL', sessionId: 's1', text: 'Third part.' },
+      { type: 'TURN_ENDED', sessionId: 's1', durationSec: 5 },
     ]);
     expect(inserts(all)).toHaveLength(1);
     expect(inserts(all)[0]?.text).toBe('First part. Second part. Third part.');
@@ -166,6 +189,7 @@ describe('interim text never reaches insertion', () => {
       { type: 'TRANSCRIPT_FINAL', sessionId: 's1', text: 'at the end of the day, you' },
       { type: 'PTT_UP', ts: 2 },
       { type: 'TRANSCRIPT_FINAL', sessionId: 's1', text: 'You have an index of every path' },
+      { type: 'TURN_ENDED', sessionId: 's1', durationSec: 5 },
     ]);
     expect(inserts(all)[0]?.text).toBe('at the end of the day, you have an index of every path');
   });
@@ -178,6 +202,7 @@ describe('interim text never reaches insertion', () => {
         { type: 'TRANSCRIPT_FINAL', sessionId: 's1', text: 'and it should' },
         { type: 'PTT_UP', ts: 2 },
         { type: 'TRANSCRIPT_FINAL', sessionId: 's1', text: 'Do any code changes yet' },
+        { type: 'TURN_ENDED', sessionId: 's1', durationSec: 5 },
       ],
       env,
     );
@@ -193,10 +218,90 @@ describe('interim text never reaches insertion', () => {
       { type: 'TRANSCRIPT_FINAL', sessionId: 's1', text: 'and it should' },
       { type: 'PTT_UP', ts: 2 },
       { type: 'TRANSCRIPT_FINAL', sessionId: 's1', text: 'Do any code changes yet' },
+      { type: 'TURN_ENDED', sessionId: 's1', durationSec: 5 },
     ] satisfies SessionEvent[]) {
       snapshot = reduce(snapshot, event, env).snapshot;
     }
     expect(snapshot.ctx.inserting).toBe('and it should do any code changes yet');
+  });
+});
+
+describe('the insert waits for transcript.done (2026-08-09 incident, BUG-4)', () => {
+  /**
+   * On a long turn where the user pauses just before pressing stop, the server
+   * owes **two** `speech_final`s at `audio.done` time: the endpointing-triggered
+   * one for the segment before the pause, and the post-`audio.done` one for the
+   * tail. `processing` used to insert on the first, so the pasted text was
+   * missing its ending — every time, silently.
+   */
+  const twoFinals: readonly SessionEvent[] = [
+    { type: 'PTT_DOWN', ts: 1 },
+    { type: 'PTT_UP', ts: 2 },
+    { type: 'TRANSCRIPT_FINAL', sessionId: 's1', text: 'The first half of it.' },
+    { type: 'TRANSCRIPT_FINAL', sessionId: 's1', text: 'And the second half.' },
+  ];
+
+  it('does not dispatch on the first final', () => {
+    const { snapshot, all } = run(twoFinals);
+    expect(snapshot.state).toBe('processing');
+    expect(inserts(all)).toHaveLength(0);
+  });
+
+  it('types both halves once transcript.done arrives', () => {
+    const { snapshot, all } = run([
+      ...twoFinals,
+      { type: 'TURN_ENDED', sessionId: 's1', durationSec: 61.4 },
+    ]);
+    expect(snapshot.state).toBe('inserting');
+    expect(inserts(all)).toHaveLength(1);
+    expect(inserts(all)[0]?.text).toBe('The first half of it. And the second half.');
+  });
+
+  it('emits no HUD frame per final — the processing capsule is a spinner', () => {
+    // The pill shows neither the interim nor the committed text while
+    // transcribing, so a frame here would be an IPC round trip that changes no
+    // pixels (BUG-7).
+    const { effects } = run(twoFinals);
+    expect(huds(effects)).toHaveLength(0);
+  });
+
+  it('ends the turn with the no-speech copy when done arrives with nothing at all', () => {
+    // The other half of moving the trigger: `TURN_ENDED` is now the only way a
+    // turn leaves `processing` on its own, so it has to handle the empty case
+    // as well as the full one.
+    const { snapshot, effects } = run([
+      { type: 'PTT_DOWN', ts: 1 },
+      { type: 'PTT_UP', ts: 2 },
+      { type: 'TURN_ENDED', sessionId: 's1', durationSec: 0 },
+    ]);
+    expect(snapshot.state).toBe('idle');
+    expect(huds(effects)[0]?.view).toMatchObject({ kind: 'error' });
+  });
+
+  it('salvages rather than dropping when the turn dies before done arrives', () => {
+    // If `transcript.done` never comes, the STT client's finish timeout or its
+    // liveness watchdog ends the turn — the watchdog through `SESSION_ERROR`,
+    // which must keep the text rather than throw away a transcript that was
+    // one frame from being typed.
+    const { snapshot, effects } = run([
+      ...twoFinals,
+      {
+        type: 'SESSION_ERROR',
+        sessionId: 's1',
+        error: appError(
+          'stt_connect',
+          'The connection to the xAI speech service stopped responding.',
+          'Check your network connection and try again — nothing was typed.',
+        ),
+      },
+    ]);
+    expect(snapshot.state).toBe('idle');
+    expect(snapshot.ctx.lastTranscript).toBe('The first half of it. And the second half.');
+    expect(histories(effects)).toHaveLength(1);
+    expect(huds(effects).at(-1)?.view).toMatchObject({
+      kind: 'not_inserted',
+      reason: 'session_error',
+    });
   });
 });
 
@@ -206,6 +311,10 @@ describe('a speech_final that arrives after the insert was dispatched', () => {
     { type: 'PTT_DOWN', ts: 1 },
     { type: 'PTT_UP', ts: 2 },
     { type: 'TRANSCRIPT_FINAL', sessionId: 's1', text: 'The first half of it.' },
+    // `transcript.done` is what dispatches the insert (BUG-4). A final that
+    // arrives after it is the straggler this block is about — rarer now, and
+    // still not allowed to vanish.
+    { type: 'TURN_ENDED', sessionId: 's1', durationSec: 6 },
   ];
 
   it('keeps the straggler instead of dropping it on the floor', () => {
@@ -289,9 +398,9 @@ describe('Fn versus Fn+Space (contract §4)', () => {
 describe('ptt_down while busy —  (contract §5)', () => {
   it('queues a press that arrives while inserting, then starts a NEW session', () => {
     const { snapshot, all } = run([
-      ...HAPPY.slice(0, 5), // through TRANSCRIPT_FINAL → inserting
+      ...TO_INSERTING, // through TURN_ENDED → inserting
       { type: 'PTT_DOWN', ts: 10 },
-      { type: 'INSERT_RESULT', sessionId: 's1', outcome: { tier: 'ax', ok: true, error: null } },
+      { type: 'INSERT_RESULT', sessionId: 's1', outcome: CONFIRMED },
     ]);
     expect(snapshot.state).toBe('recording');
     expect(snapshot.ctx.sessionId).toBe('s2');
@@ -306,6 +415,7 @@ describe('ptt_down while busy —  (contract §5)', () => {
       { type: 'PTT_UP', ts: 2 },
       { type: 'PTT_DOWN', ts: 3 },
       { type: 'TRANSCRIPT_FINAL', sessionId: 's1', text: 'erste Aufnahme' },
+      { type: 'TURN_ENDED', sessionId: 's1', durationSec: 2 },
       {
         type: 'INSERT_RESULT',
         sessionId: 's1',
@@ -320,17 +430,17 @@ describe('ptt_down while busy —  (contract §5)', () => {
     // The user tapped Fn and let go while we were still busy — there is nothing
     // to record, and starting would open a hot mic they are not holding.
     const { snapshot } = run([
-      ...HAPPY.slice(0, 5),
+      ...TO_INSERTING,
       { type: 'PTT_DOWN', ts: 10 },
       { type: 'PTT_UP', ts: 11 },
-      { type: 'INSERT_RESULT', sessionId: 's1', outcome: { tier: 'ax', ok: true, error: null } },
+      { type: 'INSERT_RESULT', sessionId: 's1', outcome: CONFIRMED },
     ]);
     expect(snapshot.state).toBe('idle');
     expect(snapshot.ctx.pendingStart).toBe(false);
   });
 
   it('never silently drops a press: it is either queued or explicitly cleared', () => {
-    const { snapshot } = run([...HAPPY.slice(0, 5), { type: 'PTT_DOWN', ts: 10 }]);
+    const { snapshot } = run([...TO_INSERTING, { type: 'PTT_DOWN', ts: 10 }]);
     expect(snapshot.ctx.pendingStart).toBe(true);
   });
 });
@@ -364,7 +474,7 @@ describe('Ctrl+Cmd+V re-insert (contract §6, )', () => {
 
   it('keeps the last transcript after a failed insert, so retry has something to use', () => {
     const { snapshot } = run([
-      ...HAPPY.slice(0, 5),
+      ...TO_INSERTING,
       {
         type: 'INSERT_RESULT',
         sessionId: 's1',
@@ -400,7 +510,7 @@ describe('cancel (Esc — )', () => {
   });
 
   it('cannot recall an insert already dispatched to the helper', () => {
-    const { snapshot } = run([...HAPPY.slice(0, 5), { type: 'CANCEL' }]);
+    const { snapshot } = run([...TO_INSERTING, { type: 'CANCEL' }]);
     expect(snapshot.state).toBe('inserting');
   });
 });
@@ -460,10 +570,10 @@ describe('Secure Input (contract §8, )', () => {
 
   it('does not auto-start a queued recording when unblocking', () => {
     const { snapshot } = run([
-      ...HAPPY.slice(0, 5),
+      ...TO_INSERTING,
       { type: 'PTT_DOWN', ts: 10 }, // queued while inserting
       { type: 'SECURE_INPUT', enabled: true },
-      { type: 'INSERT_RESULT', sessionId: 's1', outcome: { tier: 'ax', ok: true, error: null } },
+      { type: 'INSERT_RESULT', sessionId: 's1', outcome: CONFIRMED },
       { type: 'SECURE_INPUT', enabled: false },
     ]);
     expect(snapshot.state).toBe('idle');
@@ -472,9 +582,9 @@ describe('Secure Input (contract §8, )', () => {
 
   it('lets an insert already in flight complete, then lands in blocked', () => {
     const { snapshot, all } = run([
-      ...HAPPY.slice(0, 5),
+      ...TO_INSERTING,
       { type: 'SECURE_INPUT', enabled: true },
-      { type: 'INSERT_RESULT', sessionId: 's1', outcome: { tier: 'ax', ok: true, error: null } },
+      { type: 'INSERT_RESULT', sessionId: 's1', outcome: CONFIRMED },
     ]);
     expect(snapshot.state).toBe('blocked');
     expect(histories(all)).toHaveLength(1);
@@ -503,7 +613,7 @@ describe('superseded sessions (pipeline.rs:50-63)', () => {
     const after = run(HAPPY, env);
     const stale = reduce(
       after.snapshot,
-      { type: 'INSERT_RESULT', sessionId: 's1', outcome: { tier: 'ax', ok: true, error: null } },
+      { type: 'INSERT_RESULT', sessionId: 's1', outcome: CONFIRMED },
       env,
     );
     expect(histories(stale.effects)).toHaveLength(0);
@@ -513,7 +623,7 @@ describe('superseded sessions (pipeline.rs:50-63)', () => {
 describe('failure paths', () => {
   it('shows the transcript when both insertion tiers decline', () => {
     const { all } = run([
-      ...HAPPY.slice(0, 5),
+      ...TO_INSERTING,
       {
         type: 'INSERT_RESULT',
         sessionId: 's1',
@@ -533,10 +643,7 @@ describe('failure paths', () => {
   });
 
   it('treats an insert timeout as a failed insert rather than losing the text', () => {
-    const { snapshot, all } = run([
-      ...HAPPY.slice(0, 5),
-      { type: 'INSERT_TIMEOUT', sessionId: 's1' },
-    ]);
+    const { snapshot, all } = run([...TO_INSERTING, { type: 'INSERT_TIMEOUT', sessionId: 's1' }]);
     expect(snapshot.state).toBe('idle');
     expect(huds(all).at(-1)?.view).toMatchObject({
       kind: 'not_inserted',
@@ -651,6 +758,7 @@ describe('contract §9 invariants', () => {
     { type: 'TRANSCRIPT_INTERIM', sessionId: 's1', text: 'interim two' },
     { type: 'TOGGLE', ts: 4 },
     { type: 'TRANSCRIPT_FINAL', sessionId: 's1', text: 'Satz zwei.' },
+    { type: 'TURN_ENDED', sessionId: 's1', durationSec: 7 },
     { type: 'PTT_DOWN', ts: 5 },
     { type: 'INSERT_RESULT', sessionId: 's1', outcome: { tier: 'unicode', ok: true, error: null } },
     { type: 'TRANSCRIPT_INTERIM', sessionId: 's2', text: 'interim three' },
@@ -757,6 +865,88 @@ describe('contract §9 invariants', () => {
   });
 });
 
+describe('level and tick frames are coalesced (2026-08-09 incident, BUG-7)', () => {
+  /**
+   * `LEVEL` fires per 100 ms audio chunk and `TICK` per 100 ms HUD tick, and
+   * each used to emit its own `hud` effect — roughly twenty IPC round trips a
+   * second for as long as the key was held, every one allocating a fresh view.
+   *
+   * A clock the test moves by hand, because the coalescing window is the whole
+   * subject and a real one would make the assertions a race.
+   */
+  function clockEnv(): MachineEnv & { at: (ms: number) => void } {
+    let n = 0;
+    let now = 1_000_000;
+    return {
+      newSessionId: () => `s${String(++n)}`,
+      now: () => now,
+      at: (ms: number) => {
+        now = 1_000_000 + ms;
+      },
+    };
+  }
+
+  it('emits one frame, not two, for a level and a tick in the same window', () => {
+    const env = clockEnv();
+    let snapshot = reduce(INITIAL_SNAPSHOT, { type: 'PTT_DOWN', ts: 1 }, env).snapshot;
+
+    env.at(50);
+    const level = reduce(snapshot, { type: 'LEVEL', sessionId: 's1', level: 0.4 }, env);
+    snapshot = level.snapshot;
+    const tick = reduce(snapshot, { type: 'TICK', now: 1_000_060 }, env);
+
+    expect(huds(level.effects)).toHaveLength(0); // 50 ms after the start frame
+    expect(huds(tick.effects)).toHaveLength(0); // 60 ms
+  });
+
+  it('loses the frame but never the measurement', () => {
+    // The suppressed event still updates the context, so the next frame that
+    // does go out carries its value.
+    const env = clockEnv();
+    let snapshot = reduce(INITIAL_SNAPSHOT, { type: 'PTT_DOWN', ts: 1 }, env).snapshot;
+
+    env.at(40);
+    snapshot = reduce(snapshot, { type: 'LEVEL', sessionId: 's1', level: 0.77 }, env).snapshot;
+    env.at(150);
+    const tick = reduce(snapshot, { type: 'TICK', now: 1_000_150 }, env);
+
+    expect(huds(tick.effects)).toHaveLength(1);
+    expect(huds(tick.effects)[0]?.view).toMatchObject({ level: 0.77, elapsedMs: 150 });
+  });
+
+  it('roughly halves the frames over a second of recording', () => {
+    // Ten levels and ten ticks, interleaved at 50 ms as they arrive in
+    // production: twenty events, and no longer twenty frames.
+    const env = clockEnv();
+    let snapshot = reduce(INITIAL_SNAPSHOT, { type: 'PTT_DOWN', ts: 1 }, env).snapshot;
+    const frames: Effect[] = [];
+
+    for (let ms = 100; ms <= 1000; ms += 50) {
+      env.at(ms);
+      const event: SessionEvent =
+        ms % 100 === 0
+          ? { type: 'LEVEL', sessionId: 's1', level: (ms % 700) / 1000 }
+          : { type: 'TICK', now: 1_000_000 + ms };
+      const stepped = reduce(snapshot, event, env);
+      snapshot = stepped.snapshot;
+      frames.push(...huds(stepped.effects));
+    }
+
+    expect(frames.length).toBeLessThanOrEqual(11);
+    expect(frames.length).toBeGreaterThanOrEqual(9);
+  });
+
+  it('still tracks the peak level from a suppressed frame (§19.4)', () => {
+    // `peakLevel` is what separates "the microphone is dead" from "nobody
+    // spoke", and it must not depend on whether a frame was drawn.
+    const env = clockEnv();
+    let snapshot = reduce(INITIAL_SNAPSHOT, { type: 'PTT_DOWN', ts: 1 }, env).snapshot;
+    env.at(10);
+    snapshot = reduce(snapshot, { type: 'LEVEL', sessionId: 's1', level: 0.9 }, env).snapshot;
+    expect(snapshot.ctx.peakLevel).toBe(0.9);
+  });
+});
+
 describe('every event is handled in every state without throwing', () => {
   const ALL_EVENTS: readonly SessionEvent[] = [
     { type: 'PTT_DOWN', ts: 1 },
@@ -794,6 +984,7 @@ describe('every event is handled in every state without throwing', () => {
       { type: 'PTT_DOWN', ts: 1 },
       { type: 'PTT_UP', ts: 2 },
       { type: 'TRANSCRIPT_FINAL', sessionId: 's1', text: 'text' },
+      { type: 'TURN_ENDED', sessionId: 's1', durationSec: 1 },
     ],
     blocked: [{ type: 'SECURE_INPUT', enabled: true }],
   };
@@ -824,6 +1015,7 @@ describe("the helper's decline reason drives the HUD copy", () => {
     },
     { type: 'PTT_UP', ts: 2 },
     { type: 'TRANSCRIPT_FINAL', sessionId: 's1', text: 'Hello there, this is a test.' },
+    { type: 'TURN_ENDED', sessionId: 's1', durationSec: 3 },
   ];
 
   it('maps target_changed to its own reason rather than "neither tier worked"', () => {
@@ -880,6 +1072,109 @@ describe("the helper's decline reason drives the HUD copy", () => {
   });
 });
 
+describe('an insert the helper could not verify (2026-08-09 incident, BUG-1)', () => {
+  /**
+   * `CGEventKeyboardSetUnicodeString` has no return channel, so `ok: true` has
+   * always meant "posted". On 2026-08-09 a 60.3 s dictation was posted as 38
+   * events in 245 ms into an Electron terminal that dropped every one; the app
+   * showed a green check, played no error cue and wrote `inserted: true`. The
+   * text was gone and nothing on screen said so.
+   */
+  const unverified = (verified: boolean | null): InsertOutcome => ({
+    tier: 'unicode',
+    ok: true,
+    error: null,
+    verified,
+  });
+
+  it('marks the pill unconfirmed rather than claiming the insert landed', () => {
+    const { all } = run([
+      ...TO_INSERTING,
+      { type: 'INSERT_RESULT', sessionId: 's1', outcome: unverified(null) },
+    ]);
+    expect(huds(all).at(-1)?.view).toEqual({
+      kind: 'inserted',
+      text: 'Hello there, this is a test.',
+      tier: 'unicode',
+      verified: null,
+    });
+  });
+
+  it('treats a helper that never mentions verification as unconfirmed, not as confirmed', () => {
+    // An older helper binary sends no `verified` at all. Reading absent as
+    // "yes" is the whole bug.
+    const { all } = run([
+      ...TO_INSERTING,
+      {
+        type: 'INSERT_RESULT',
+        sessionId: 's1',
+        outcome: { tier: 'unicode', ok: true, error: null },
+      },
+    ]);
+    expect(huds(all).at(-1)?.view).toMatchObject({ kind: 'inserted', verified: null });
+  });
+
+  it('records the distinction in history instead of asserting inserted: true alone', () => {
+    const { all } = run([
+      ...TO_INSERTING,
+      { type: 'INSERT_RESULT', sessionId: 's1', outcome: unverified(null) },
+    ]);
+    expect(histories(all)[0]?.entry).toMatchObject({ inserted: true, verified: null });
+  });
+
+  it('still plays no error cue — nothing has necessarily failed', () => {
+    // The trade is stated in `finishInsert`: verification is impossible for a
+    // whole class of ordinary targets, so a cue here would fire on good
+    // dictations and train the user to ignore the one sound that means
+    // something. The amber pill carrying the full transcript is the signal.
+    const { effects } = run([
+      ...TO_INSERTING,
+      { type: 'INSERT_RESULT', sessionId: 's1', outcome: unverified(null) },
+    ]);
+    expect(effects.filter((e) => e.type === 'cue')).toHaveLength(0);
+  });
+
+  it('a confirmed insert keeps the plain green check', () => {
+    const { all, effects } = run([
+      ...TO_INSERTING,
+      { type: 'INSERT_RESULT', sessionId: 's1', outcome: CONFIRMED },
+    ]);
+    expect(huds(all).at(-1)?.view).toMatchObject({ kind: 'inserted', verified: true });
+    expect(effects.filter((e) => e.type === 'cue')).toHaveLength(0);
+  });
+
+  it('a proven-not-landed insert is a failure with its own reason and an error cue', () => {
+    const { all, effects } = run([
+      ...TO_INSERTING,
+      {
+        type: 'INSERT_RESULT',
+        sessionId: 's1',
+        outcome: {
+          tier: 'unicode',
+          ok: false,
+          error: 'the focused element’s text did not change',
+          reason: 'verification_failed',
+          verified: false,
+        },
+      },
+    ]);
+    expect(huds(all).at(-1)?.view).toMatchObject({
+      kind: 'not_inserted',
+      text: 'Hello there, this is a test.',
+      reason: 'verification_failed',
+    });
+    // The helper reports `tier: 'unicode'` here — it *did* act, the text just
+    // did not arrive — so the row records the tier that ran rather than `none`,
+    // and nothing anywhere may use `tier === 'none'` to mean "it failed".
+    expect(histories(all)[0]?.entry).toMatchObject({
+      inserted: false,
+      verified: false,
+      tier: 'unicode',
+    });
+    expect(effects).toContainEqual({ type: 'cue', cue: 'error' });
+  });
+});
+
 describe('a mid-utterance failure keeps what was already transcribed', () => {
   const NETWORK_DROP = {
     type: 'SESSION_ERROR',
@@ -931,6 +1226,136 @@ describe('a mid-utterance failure keeps what was already transcribed', () => {
     expect(snapshot.ctx.lastTranscript).toBeNull();
     expect(huds(effects).at(-1)?.view).toMatchObject({ kind: 'error' });
     expect(histories(effects)).toHaveLength(0);
+  });
+
+  /* ---------------------------------------------------------------- *
+   * BUG-3 — the interim tail
+   * ---------------------------------------------------------------- */
+
+  /**
+   * Speaking continuously produces no `speech_final` at all: the server emits
+   * one when it hears an endpoint, and there is none. So `committed` stays
+   * empty for the whole minute while the text streams past as interim, and a
+   * drop used to salvage exactly nothing — not history, not `lastTranscript`,
+   * nothing for ⌃⌘V. Total silent loss (2026-08-09 incident, BUG-3).
+   */
+  const CONTINUOUS: readonly SessionEvent[] = [
+    { type: 'PTT_DOWN', ts: 1 },
+    { type: 'TRANSCRIPT_INTERIM', sessionId: 's1', text: 'so the first thing to do is' },
+    {
+      type: 'TRANSCRIPT_INTERIM',
+      sessionId: 's1',
+      text: 'so the first thing to do is open the terminal and run the migration',
+    },
+  ];
+
+  it('salvages the interim tail when nothing was ever confirmed', () => {
+    const { snapshot, effects } = run([...CONTINUOUS, NETWORK_DROP]);
+    const spoken = 'so the first thing to do is open the terminal and run the migration';
+
+    expect(snapshot.ctx.lastTranscript).toBe(spoken);
+    expect(huds(effects).at(-1)?.view).toMatchObject({ kind: 'not_inserted', text: spoken });
+    expect(histories(effects)[0]?.entry).toMatchObject({ text: spoken, inserted: false });
+  });
+
+  it('says out loud that the tail was never confirmed, in the pill and in the row', () => {
+    const { effects } = run([...CONTINUOUS, NETWORK_DROP]);
+    expect(huds(effects).at(-1)?.view).toMatchObject({ reason: 'session_error_unconfirmed' });
+    expect(histories(effects)[0]?.entry).toMatchObject({ unconfirmedTail: true });
+  });
+
+  it('appends the interim to the confirmed segments rather than replacing them', () => {
+    const { snapshot, effects } = run([
+      { type: 'PTT_DOWN', ts: 1 },
+      { type: 'TRANSCRIPT_FINAL', sessionId: 's1', text: 'First sentence.' },
+      { type: 'TRANSCRIPT_INTERIM', sessionId: 's1', text: 'and then the second one was' },
+      NETWORK_DROP,
+    ]);
+    expect(snapshot.ctx.lastTranscript).toBe('First sentence. And then the second one was');
+    expect(histories(effects)[0]?.entry).toMatchObject({ unconfirmedTail: true });
+  });
+
+  it('leaves a fully confirmed salvage unlabelled', () => {
+    // The interim is cleared by every `speech_final`, so a turn that died just
+    // after one has nothing unconfirmed to declare.
+    const { effects } = run([
+      { type: 'PTT_DOWN', ts: 1 },
+      { type: 'TRANSCRIPT_INTERIM', sessionId: 's1', text: 'first sen' },
+      { type: 'TRANSCRIPT_FINAL', sessionId: 's1', text: 'First sentence.' },
+      NETWORK_DROP,
+    ]);
+    expect(huds(effects).at(-1)?.view).toMatchObject({ reason: 'session_error' });
+    expect(histories(effects)[0]?.entry).toMatchObject({ unconfirmedTail: false });
+  });
+
+  it('never types it — unconfirmed text must not reach the editor', () => {
+    // The whole point of the interim/committed split (§9.1). Salvage makes the
+    // words *reachable*; it does not make them insertable.
+    const { all } = run([...CONTINUOUS, NETWORK_DROP]);
+    expect(inserts(all)).toHaveLength(0);
+    expect(JSON.stringify(inserts(all))).not.toContain('terminal');
+  });
+
+  it('salvages the interim tail when the watchdog kills the turn, too', () => {
+    // The liveness watchdog reaches the same reducer path, and it is the one
+    // that fires when the link dies silently — HT-5's shape, and the one that
+    // combined with this bug to lose a whole dictation.
+    const { snapshot } = run([
+      ...CONTINUOUS,
+      {
+        type: 'SESSION_ERROR',
+        sessionId: 's1',
+        error: appError(
+          'stt_connect',
+          'The connection to the xAI speech service stopped responding.',
+          'Check your network connection and try again — nothing was typed.',
+        ),
+      },
+    ]);
+    expect(snapshot.ctx.lastTranscript).toContain('run the migration');
+  });
+});
+
+describe('a turn that dies while Secure Input is blocking (BUG-3)', () => {
+  const blockedMidSentence: readonly SessionEvent[] = [
+    { type: 'PTT_DOWN', ts: 1 },
+    { type: 'TRANSCRIPT_INTERIM', sessionId: 's1', text: 'the deploy went out at half past' },
+    { type: 'SECURE_INPUT', enabled: true },
+  ];
+
+  it('keeps the unconfirmed tail when the turn is finalised from blocked', () => {
+    const { snapshot, all } = run([
+      ...blockedMidSentence,
+      { type: 'TURN_ENDED', sessionId: 's1', durationSec: 4 },
+    ]);
+    expect(snapshot.ctx.lastTranscript).toBe('the deploy went out at half past');
+    expect(histories(all)[0]?.entry).toMatchObject({ inserted: false, unconfirmedTail: true });
+    // Secure Input is still the reason nothing was typed — that is the advice
+    // the user needs — so the tail is disclosed in the detail line.
+    const view = huds(all).at(-1)?.view;
+    expect(view).toMatchObject({ kind: 'not_inserted', reason: 'secure_input' });
+    expect(view && 'detail' in view ? view.detail : '').toContain('never confirmed');
+    expect(inserts(all)).toHaveLength(0);
+  });
+
+  it('no longer discards everything when the session then errors', () => {
+    // §9.7: "a transcript never vanishes without a trace". This path used to
+    // clear `committed` and `interim` and emit nothing but a log line.
+    const { snapshot, all } = run([
+      ...blockedMidSentence,
+      { type: 'TRANSCRIPT_FINAL', sessionId: 's1', text: 'The deploy went out at half past.' },
+      {
+        type: 'SESSION_ERROR',
+        sessionId: 's1',
+        error: appError('stt_connect', 'The connection dropped.', 'Try again.'),
+      },
+    ]);
+    expect(snapshot.state).toBe('blocked');
+    expect(snapshot.ctx.lastTranscript).toBe('The deploy went out at half past.');
+    expect(histories(all).at(-1)?.entry).toMatchObject({ inserted: false, tier: 'none' });
+    // The blocked pill stays: Secure Input is still what the user must clear.
+    expect(huds(all).at(-1)?.view).toEqual({ kind: 'blocked' });
+    expect(inserts(all)).toHaveLength(0);
   });
 });
 
@@ -1070,6 +1495,7 @@ describe('history records the application the text actually reached', () => {
       },
       { type: 'PTT_UP', ts: 2 },
       { type: 'TRANSCRIPT_FINAL', sessionId: 's1', text: 'Ein Satz.' },
+      { type: 'TURN_ENDED', sessionId: 's1', durationSec: 2 },
       { type: 'INSERT_RESULT', sessionId: 's1', outcome },
     ]);
 

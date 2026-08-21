@@ -2,6 +2,8 @@
 
 **Status: frozen at the end of Phase 1, reopened by Phase 5** — the only phase permitted to change a contract (IMPLEMENTATION-PLAN.md §2). The single source of truth for session state (§3.1.2).
 
+**Reopened again by the 2026-08-09 incident**, which found four defects in this document as much as in the code: insertion fired on the first final rather than on `transcript.done` (§12), the audio tail was dropped before the turn ended (§13), interim text was discarded when a turn died (§10), and a posted insert was presented as a landed one (§14). Each is written up below in the section it belongs to; the transition tables above them are current.
+
 **Phase 5 changed four things**, each because the integration found the original wrong rather than incomplete:
 
 1. `TURN_ENDED` in `recording` now emits `stop_capture`. It did not, so a turn the server ended while the key was still held left the microphone open — the macOS orange indicator lit through insertion and beyond, and the elapsed and cap timers still running.
@@ -100,7 +102,7 @@ Carried alongside the state; not part of it.
 
 | Event                                   | →            | Effects                                                                  |
 | --------------------------------------- | ------------ | ------------------------------------------------------------------------ |
-| `TRANSCRIPT_FINAL`                      | `inserting`  | append to `committed`; `insert(committed, targetBundleId)`               |
+| `TRANSCRIPT_FINAL`                      | `processing` | append to `committed`; **no insert, no HUD frame** — see §12             |
 | `TRANSCRIPT_INTERIM`                    | `processing` | `hud(processing)`                                                        |
 | `TURN_ENDED` with `committed` non-empty | `inserting`  | `insert(committed, targetBundleId)`                                      |
 | `TURN_ENDED` with `committed` empty     | `idle`       | `hud(error "no speech detected")`                                        |
@@ -117,7 +119,7 @@ Carried alongside the state; not part of it.
 | `INSERT_RESULT(ok)`  | `idle`, or `recording` if `pendingStart` | `hud(inserted, full text)`, `history_append`, set `lastTranscript`       |
 | `INSERT_RESULT(!ok)` | `idle`, or `recording` if `pendingStart` | `hud(not_inserted, full text)`, `history_append`, set `lastTranscript`   |
 | `INSERT_TIMEOUT`     | `idle`                                   | treated exactly as `INSERT_RESULT(tier:'none', ok:false)`                |
-| `TURN_ENDED`         | `inserting`                              | absorbs `durationSec` into the context so the history row carries it     |
+| `TURN_ENDED`         | `inserting`                              | absorbs `durationSec`; reachable only for an ad-hoc insert since §12     |
 | `TRANSCRIPT_FINAL`   | `inserting`                              | appended to `committed` and logged at `warn`; **not typed** — see §7     |
 | **`PTT_DOWN`**       | `inserting`                              | **`pendingStart = true`** — the §11.3 resolution, see §5                 |
 | `PTT_UP`             | `inserting`                              | `pendingStart = false`                                                   |
@@ -127,15 +129,16 @@ Carried alongside the state; not part of it.
 
 ### From `blocked`
 
-| Event                 | →         | Effects                                                                                            |
-| --------------------- | --------- | -------------------------------------------------------------------------------------------------- |
-| `SECURE_INPUT(false)` | `idle`    | `hud(hidden)`, `tray(idle)`; `pendingStart` cleared                                                |
-| `PTT_DOWN` / `TOGGLE` | `blocked` | **refused**; `hud(blocked)`, `cue(error)`                                                          |
-| `RETRY_INSERT`        | `blocked` | refused — see §8                                                                                   |
-| `INSERT_TEXT`         | `blocked` | refused — every insertion path is, without exception                                               |
-| `TRANSCRIPT_FINAL`    | `blocked` | appended to `committed`                                                                            |
-| `TURN_ENDED`          | `blocked` | `hud(not_inserted, reason='secure_input')`, `history_append(inserted:false)`, set `lastTranscript` |
-| `INSERT_RESULT`       | `blocked` | an insert that was already in flight completes normally and is recorded                            |
+| Event                 | →         | Effects                                                                                                                              |
+| --------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `SECURE_INPUT(false)` | `idle`    | `hud(hidden)`, `tray(idle)`; `pendingStart` cleared                                                                                  |
+| `PTT_DOWN` / `TOGGLE` | `blocked` | **refused**; `hud(blocked)`, `cue(error)`                                                                                            |
+| `RETRY_INSERT`        | `blocked` | refused — see §8                                                                                                                     |
+| `INSERT_TEXT`         | `blocked` | refused — every insertion path is, without exception                                                                                 |
+| `TRANSCRIPT_FINAL`    | `blocked` | appended to `committed`                                                                                                              |
+| `TURN_ENDED`          | `blocked` | `hud(not_inserted, reason='secure_input')`, `history_append(inserted:false)`, set `lastTranscript` — including the interim tail, §10 |
+| `SESSION_ERROR`       | `blocked` | `history_append(inserted:false)` and set `lastTranscript`; the pill stays `blocked` — §10                                            |
+| `INSERT_RESULT`       | `blocked` | an insert that was already in flight completes normally and is recorded                                                              |
 
 ---
 
@@ -205,7 +208,9 @@ A pause longer than `endpointingMs` mid-hold makes the server emit `speech_final
 - history holds one entry per hold;
 - §5's queueing has a well-defined "busy" window.
 
-**A `speech_final` that arrives during `inserting` is kept but not typed.** `processing` inserts on the _first_ final it sees, so a server that flushes two segments after `audio.done` — which it does when the buffered tail contains a pause — used to lose the second one entirely: not typed, not in the pill, not in history, not on ⌃⌘V. It is now appended to `committed`, which is what the pill, the history row and ⌃⌘V are built from, and logged at `warn`. It is still not typed, because the helper is already committed and one hold produces one insertion.
+**A `speech_final` that arrives during `inserting` is kept but not typed.** `processing` used to insert on the _first_ final it saw, so a server that flushes two segments after `audio.done` — which it does when the buffered tail contains a pause — lost the second one entirely: not typed, not in the pill, not in history, not on ⌃⌘V. It is appended to `committed`, which is what the pill, the history row and ⌃⌘V are built from, and logged at `warn`. It is still not typed, because the helper is already committed and one hold produces one insertion.
+
+Since §12 the everyday version of that case no longer reaches `inserting` at all — both segments are typed — and this rule is the safety net for a final that arrives after `transcript.done` or after the finish timeout ended the turn early. It stays, because the difference between truncated text and truncated text nobody knows about is the whole point of it.
 
 **`committed` segments are not joined with a single space.** Each `speech_final` re-transcribes one endpointed segment with no knowledge of the one before it, so the joins are splices, and splices lose words — a duplicated seam word, a mid-sentence capital, a "Thank you." hallucinated out of the closing silence. [`src/shared/stitch.ts`](../src/shared/stitch.ts) holds the measured evidence and the three deterministic repairs; the `repairSeams` setting turns them off and restores the plain join.
 
@@ -238,16 +243,19 @@ Phase 5 (§5b) checks these. Each is covered by a unit test in `src/main/state/m
 
 ## 10. A session that fails part-way through
 
-`SESSION_ERROR` reaches `idle`, and what happens there depends on whether anything had already been transcribed.
+`SESSION_ERROR` reaches `idle`, and what happens there depends on what the turn had produced.
 
-| `committed` | HUD                                    | History                    | `lastTranscript` |
-| ----------- | -------------------------------------- | -------------------------- | ---------------- |
-| empty       | `error(message, hint)`                 | nothing                    | unchanged        |
-| non-empty   | `not_inserted(reason='session_error')` | one row, `inserted: false` | set              |
+| `committed` | `interim` | HUD                                                | History                                             | `lastTranscript` |
+| ----------- | --------- | -------------------------------------------------- | --------------------------------------------------- | ---------------- |
+| empty       | empty     | `error(message, hint)`                             | nothing                                             | unchanged        |
+| non-empty   | empty     | `not_inserted(reason='session_error')`             | one row, `inserted: false`                          | set              |
+| any         | non-empty | `not_inserted(reason='session_error_unconfirmed')` | one row, `inserted: false`, `unconfirmedTail: true` | set              |
 
-**Insertion is never attempted either way.** The turn is incomplete, and half a sentence appearing in the user's editor is worse than none — the recovery is ⌃⌘V once they have decided they want it.
+**Insertion is never attempted in any of them.** The turn is incomplete, and half a sentence appearing in the user's editor is worse than none — the recovery is ⌃⌘V once they have decided they want it. Salvaged interim text is emphatically not an exception: §9.1 still holds, and `beginInsert` still reads `committed` alone.
 
 Phase 1 wrote only the first row, so the second case lost everything: a network drop after a minute of good dictation cleared `committed`, left `lastTranscript` alone, and gave ⌃⌘V nothing to re-insert. docs/phase-3-report.md §5.2 recorded that as "a product judgement, not a defect, but it should be a conscious one". This is the conscious one.
+
+**The third row is the 2026-08-09 incident.** The server emits a `speech_final` when it hears an endpoint, so speaking continuously with no pause long enough to trigger one leaves `committed` **empty** for the whole utterance while a minute of text streams past as interim. A drop then salvaged nothing at all — the minute was in neither history nor `lastTranscript` nor reachable by ⌃⌘V. Interim text is imperfect and its last words are the least settled, which is why it is kept _and labelled_: the HUD reason and the history row's `unconfirmedTail` both say which half of the text the server stood behind. The same salvage runs when a turn dies or is finalised while `blocked`; there the reason stays `secure_input` — that is what the user must act on — and the unconfirmed tail is disclosed in the detail line.
 
 ---
 
@@ -256,3 +264,46 @@ Phase 1 wrote only the first row, so the second case lost everything: a network 
 Since §6 removed the target check, the app that was frontmost when a turn started is no longer the app that received the text. A history row built from the press-time value would therefore name the wrong one — and history is the recovery surface, so "which window did that go into?" is the question it most needs to answer correctly.
 
 `insert_result` carries `frontmostBundleId` / `frontmostName`: the application the helper's ladder actually acted on, resolved once inside `run()` alongside the AX skip list. The row prefers those and falls back to `ctx.targetBundleId` when the helper reported none — a decline before it resolved one, or an outcome the app synthesised for a helper that never answered.
+
+---
+
+## 12. Insertion fires on `transcript.done`, not on the first final
+
+`processing` + `TRANSCRIPT_FINAL` used to go straight to `inserting`. On a long turn where the user pauses just before pressing stop, the server owes **two** `speech_final`s at `audio.done` time — the endpointing-triggered one for the segment before the pause, and the post-`audio.done` one for the tail — so inserting on the first typed the sentence without its ending, every time, with nothing on screen to say so.
+
+**`processing` now accumulates finals and inserts on `TURN_ENDED`**, which the protocol guarantees arrives after the last one. The measured cost is single-digit milliseconds: in the 2026-08-09 incident log the final landed at `.065` and `transcript.done` at `.068`.
+
+The obvious risk is a turn that never ends. It is covered twice over, and neither cover is new:
+
+- **`FINISH_TIMEOUT_MS`** (`src/main/stt/client.ts`, 8 s) is armed by `finish()` and synthesises `onDone(null)` → `TURN_ENDED`, which inserts what the turn had. A benign close after `audio.done` does the same thing immediately.
+- **The liveness watchdog** (§13 of that file) fails a dead link into `SESSION_ERROR` → §10, which salvages rather than dropping.
+
+`TRANSCRIPT_FINAL` in `processing` emits no `hud` effect: the transcribing capsule is a spinner and shows neither the interim nor the committed text, so a frame there would be an IPC round trip that changes no pixels (§14).
+
+---
+
+## 13. `audio.done` waits for the capture tail
+
+`stop_capture` and `finish_stt` are emitted in the same step and always have been. What changed is how the composition root interprets them: **`finish_stt` is held until the audio source reports the session drained** (`AudioHandlers.onDrained`).
+
+The capture renderer flushes its encoder tail as one final `capture-chunk` _after_ `capture-stop` reaches it — up to 100 ms, and "the last 100 ms of a hold is the end of the last word". The main process used to drop the session synchronously inside `stop()`, so that chunk was discarded and `audio.done` had gone out before it anyway. The renderer's tail-flush was dead code and the last ~100–300 ms of speech never reached the server on any dictation: clipped or wrong final words, and a full-utterance buffer missing the same tail.
+
+The drain is bounded by a short timer in `CaptureCoordinator` (`DRAIN_TIMEOUT_MS`, 250 ms) and the port requires `onDrained` to fire exactly once within a bounded time. **A dead or slow renderer must not be able to hang a turn**, so when the timer wins it logs and the turn proceeds with whatever arrived. `cancel_capture` never drains: Esc throws the audio away, so there is nothing for a tail to be kept for.
+
+---
+
+## 14. What an insert is allowed to claim
+
+`insert_result.ok` means the helper **posted** the text. For the Unicode tier that is not the same as the text having arrived — `CGEventKeyboardSetUnicodeString` has no return channel — and on 2026-08-09 a 60.3 s dictation was posted as 38 events in 245 ms into a terminal that dropped every one. The app showed a green check, played no error cue and wrote `inserted: true`.
+
+`insert_result.verified` closes it. Three outcomes now leave `inserting`:
+
+| Outcome                | HUD                                                     | History                          | Cue     |
+| ---------------------- | ------------------------------------------------------- | -------------------------------- | ------- |
+| `ok`, `verified: true` | `inserted` — the bare green check                       | `inserted: true, verified: true` | none    |
+| `ok`, otherwise        | `inserted` — amber, **full transcript**, rescue buttons | `inserted: true, verified: null` | none    |
+| `!ok`                  | `not_inserted(reason)`                                  | `inserted: false`                | `error` |
+
+**`ok: true` with `verified` not `true` means "typed, unconfirmed"**, and an absent `verified` — an older helper binary — reads as unconfirmed rather than confirmed. It also covers a _partial_ injection, which the helper reports as `null` rather than `false` because it will not claim nothing landed unless it measured no change at all; showing the whole transcript is what lets a user notice a truncated paste.
+
+Two deliberate trades. The unconfirmed pill plays **no error cue**: verification is impossible for a whole class of ordinary targets, so a cue there would fire on good dictations and train the user to ignore the one sound that means something. And `verification_failed` — posted, and proven not to have landed — arrives with `tier: 'unicode'`, because the tier that _ran_ is what a history row should name; nothing may read `tier === 'none'` as "it failed".

@@ -61,8 +61,29 @@ function rowDetail(entry: HistoryEntry): string {
   if (entry.frontmostName !== null) parts.push(entry.frontmostName);
   parts.push(entry.language);
   if (entry.durationSec !== null) parts.push(`${entry.durationSec.toFixed(1)}s`);
-  parts.push(entry.inserted ? `inserted · ${entry.tier}` : 'not inserted');
+  parts.push(outcomeLabel(entry));
+  if (entry.unconfirmedTail === true) parts.push('the end was never confirmed');
   return parts.join('  ·  ');
+}
+
+/**
+ * What actually happened to the text.
+ *
+ * `inserted` alone used to be rendered as "inserted · unicode", which asserts
+ * more than the app has ever known: for the Unicode tier `inserted` means the
+ * keystrokes were *posted*, and on 2026-08-09 a whole dictation was posted into
+ * a terminal that dropped every one of them. History is the recovery surface —
+ * the one place a user goes to find out whether they still have their words —
+ * so it says which of the two it is (`HistoryEntry.verified`).
+ *
+ * A row from before the field existed has `undefined`, which reads as
+ * unconfirmed rather than as confirmed: that is exactly what it was.
+ */
+function outcomeLabel(entry: HistoryEntry): string {
+  if (!entry.inserted) return 'not inserted';
+  return entry.verified === true
+    ? `inserted · ${entry.tier}`
+    : `typed, unconfirmed · ${entry.tier}`;
 }
 
 export function HistoryView(): React.JSX.Element {
@@ -200,7 +221,15 @@ export function HistoryView(): React.JSX.Element {
               <p className="row-text">{entry.text}</p>
               <span className="row-side">
                 <time dateTime={entry.at}>{when(entry.at, now)}</time>
-                {entry.inserted ? null : <span className="row-flag">Not inserted</span>}
+                {entry.inserted ? (
+                  // The same distinction the HUD makes, in the surface the user
+                  // comes to when they suspect something went missing.
+                  entry.verified === true ? null : (
+                    <span className="row-flag">Unconfirmed</span>
+                  )
+                ) : (
+                  <span className="row-flag">Not inserted</span>
+                )}
               </span>
               <button
                 type="button"

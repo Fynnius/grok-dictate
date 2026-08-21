@@ -115,6 +115,31 @@ const LIVENESS_CHECK_INTERVAL_MS = 500;
 const LIVENESS_TIMEOUT_MS = 6_000;
 const FINISH_LIVENESS_TIMEOUT_MS = 3_000;
 
+/**
+ * How late a liveness firing has to be before it is read as **the process not
+ * running** rather than as the link being silent.
+ *
+ * The 2026-08-09 incident, BUG-6: `idle` is `now - lastInboundAt` measured
+ * inside a `setInterval`, which quietly assumes the interval actually ran. If
+ * the Mac sleeps mid-dictation, or the main process's event loop stalls past
+ * the timeout under heavy GC or system pressure, the callback runs before the
+ * queued WebSocket `message` events are processed. `idle` then measures **our
+ * own absence**, looks enormous, and the turn is killed with "the connection
+ * stopped responding" — error cue, no insert, and combined with BUG-3 the
+ * interim text lost with it — on a link that is perfectly fine.
+ *
+ * The gap between two firings is the thing that separates the two cases: a
+ * silent server still lets the interval run on time, and a sleeping laptop does
+ * not. Both bounds are **chosen, not measured**. 2 s absolute is two orders of
+ * magnitude above ordinary timer jitter (single-digit milliseconds) and far
+ * below any sleep or stall worth calling one; the ×4 factor keeps the rule
+ * proportionate if the period is ever shortened. The absolute floor is what
+ * stops a short test timeout from turning normal scheduling noise into a
+ * suppressed failure.
+ */
+const LIVENESS_STALL_MS = 2_000;
+const LIVENESS_STALL_FACTOR = 4;
+
 type TimerName = 'ready' | 'noSpeech' | 'finish' | 'retry';
 
 /* ------------------------------------------------------------------ *
@@ -626,10 +651,33 @@ class SttTurnImpl implements SttTurn {
     const timeout = this.#livenessTimeoutMs;
     const period = Math.max(20, Math.min(LIVENESS_CHECK_INTERVAL_MS, Math.floor(timeout / 4)));
     const pingAfter = Math.floor(timeout / 3);
+    const stallThreshold = Math.max(LIVENESS_STALL_MS, period * LIVENESS_STALL_FACTOR);
+    let lastTickAt = this.#deps.now();
 
     const timer = setInterval(() => {
       if (this.#terminal) return;
-      const idle = this.#deps.now() - this.#lastInboundAt;
+      const now = this.#deps.now();
+      const sinceTick = now - lastTickAt;
+      lastTickAt = now;
+
+      // The process was not running (BUG-6). Everything the socket delivered
+      // during the gap is still sitting in the event queue behind us, so `idle`
+      // measures our absence rather than the link's silence. Re-arm and ask the
+      // connection directly: the turn can only die after a full timeout of
+      // silence *from here*, during which at least one explicit ping goes
+      // unanswered, so a genuinely dead link is still caught one window later.
+      if (sinceTick >= stallThreshold) {
+        this.#log.warn('the liveness check fired late; re-arming rather than blaming the link', {
+          sinceTickMs: sinceTick,
+          periodMs: period,
+          finished: this.#finishRequested,
+        });
+        this.#lastInboundAt = now;
+        this.#pingNow();
+        return;
+      }
+
+      const idle = now - this.#lastInboundAt;
       if (idle >= this.#livenessTimeoutMs) {
         this.#log.warn('no response from the xAI speech service; treating the link as dead', {
           idleMs: idle,
@@ -647,6 +695,11 @@ class SttTurnImpl implements SttTurn {
       }
       if (idle >= pingAfter) this.#pingNow();
     }, period);
+    // `unref()` does nothing in the Electron main process, which stays alive on
+    // its own — but it is not decoration either: this client also runs under
+    // Vitest and in `scripts/probe-stt.ts`, both short-lived Node processes
+    // where a live interval on a leaked turn would keep the process from
+    // exiting. Kept for those, harmless in the app. Same for `#arm` below.
     timer.unref?.();
     this.#livenessTimer = timer;
   }

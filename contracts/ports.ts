@@ -57,6 +57,24 @@ export interface InsertOutcome {
    */
   readonly reason?: InsertDeclineReason | null;
   /**
+   * Whether the helper **confirmed the text landed**, rather than merely having
+   * posted it. `true` confirmed, `false` proved-not-landed, `null` could not be
+   * checked for this target.
+   *
+   * Added by the 2026-08-09 incident (BUG-1): Unicode injection has no return
+   * channel, so `ok` alone cannot tell a successful insert from a silent drop —
+   * a 60.3 s dictation posted into a terminal that ignored every event was
+   * reported as a success. **`ok: true` with `verified` not `true` means
+   * "typed, unconfirmed"**, and the app says so.
+   *
+   * Optional in the same style as `reason` and `frontmost` above, and for the
+   * same two reasons: an older helper binary sends no `verified`, and every
+   * outcome the app synthesises for itself (a dead helper, a timeout) has
+   * nothing to verify — no text was posted, so there is nothing to confirm.
+   * Absent means "not stated", which reads as unconfirmed.
+   */
+  readonly verified?: boolean | null;
+  /**
    * The application the helper actually inserted into, which since Phase 5 is
    * whatever was frontmost at the end of the turn rather than at the start —
    * see `contracts/state-machine.md` §11. This is what a history row records.
@@ -154,6 +172,21 @@ export interface AudioHandlers {
   /** RMS 0..1 for the HUD meter. */
   onLevel(level: number): void;
   onError(error: AppError): void;
+  /**
+   * **Every chunk of this session has now been delivered.** Fired once after
+   * `stop()`, and it is what tells the caller it may end the turn.
+   *
+   * Added by the 2026-08-09 incident (BUG-2): the capture renderer flushes its
+   * encoder tail *after* it is told to stop, so a `stop()` that closed the
+   * session synchronously threw away the last ~100–300 ms of every dictation —
+   * the end of the last word — while `audio.done` had already been sent.
+   *
+   * **An implementation must call this exactly once per `stop()`, and within a
+   * bounded time even when whatever it is waiting for never answers.** The turn
+   * is held open until it fires; a port that stays silent hangs the dictation.
+   * `CaptureCoordinator` honours that with a short timer and says so in the log.
+   */
+  onDrained(): void;
   /** Fired once the device is genuinely open. `actualSampleRate` exists to
    *  check assumption 10.4 — that the AudioContext really runs at 16 kHz and
    *  is not double-resampling. */
@@ -163,7 +196,12 @@ export interface AudioHandlers {
 export interface AudioSourcePort {
   /** Opens the device. Returns immediately; failures arrive via `onError`. */
   start(sessionId: string, handlers: AudioHandlers): void;
-  /** Graceful end of turn: stop the device, keep the buffered audio. */
+  /**
+   * Graceful end of turn: stop the device, keep the buffered audio.
+   *
+   * **Two-phase.** It returns immediately, but the session stays addressable —
+   * still delivering `onChunk` — until `onDrained` fires. See `onDrained`.
+   */
   stop(sessionId: string): void;
   /** Discard everything, including the buffer (Esc — ). */
   cancel(sessionId: string): void;

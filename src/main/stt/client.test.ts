@@ -421,6 +421,81 @@ describe('liveness — the HT-5 regression', () => {
     expect(handlers.dones).toHaveLength(0);
   });
 
+  /**
+   * A clock the test can push forward, standing in for the two things that
+   * make wall-clock time jump under a running process: the Mac sleeping, and
+   * the main process's event loop stalling past the timeout (BUG-6). Both look
+   * identical from inside the interval — it simply runs much later than it was
+   * asked to — and both used to be read as "the link is dead".
+   */
+  function jumpyClock(): { now: () => number; jump: (ms: number) => void } {
+    let offset = 0;
+    return {
+      now: () => Date.now() + offset,
+      jump: (ms: number) => {
+        offset += ms;
+      },
+    };
+  }
+
+  it('survives the Mac going to sleep mid-dictation (2026-08-09 incident, BUG-6)', async () => {
+    // The link is healthy throughout: the server is answering pings. Only the
+    // clock moves. The old code compared `now - lastInboundAt` against the
+    // timeout with no regard for whether it had been running, so a sleep of any
+    // length killed the turn — error cue, no insert, transcript lost.
+    const clock = jumpyClock();
+    const { handlers } = start(
+      {},
+      { timeouts: { livenessMs: 400, noSpeechMs: 60_000 }, now: clock.now },
+    );
+    await waitFor(() => handlers.ready > 0);
+
+    clock.jump(30 * 60_000); // half an hour in a closed lid
+    await new Promise((r) => setTimeout(r, 400));
+
+    expect(handlers.errors).toHaveLength(0);
+    expect(records.some((r) => r.msg.includes('fired late'))).toBe(true);
+
+    // …and the session is still usable afterwards, which is the point.
+    server.partial({ text: 'wieder da', language: 'de' });
+    await waitFor(() => handlers.interim.length === 1);
+  });
+
+  it('still catches a link that is genuinely dead after such a gap', async () => {
+    // Re-arming must postpone the verdict, not cancel it: the turn dies if the
+    // connection stays silent for a full timeout measured from the moment the
+    // process came back, with at least one explicit ping unanswered inside it.
+    const clock = jumpyClock();
+    const { handlers } = start(
+      {},
+      { timeouts: { livenessMs: 400, noSpeechMs: 60_000 }, now: clock.now },
+    );
+    await waitFor(() => handlers.ready > 0);
+
+    clock.jump(60_000);
+    server.blackhole();
+
+    await waitFor(() => handlers.errors.length === 1, 3000);
+    expect(handlers.errors[0]?.message).toContain('stopped responding');
+  });
+
+  it('does not mistake ordinary timer jitter for a stall', async () => {
+    // The suppression is bounded on purpose. A gap of a few hundred
+    // milliseconds is scheduling noise, not a sleeping laptop, and must not
+    // buy a dead link another window.
+    const clock = jumpyClock();
+    const { handlers } = start(
+      {},
+      { timeouts: { livenessMs: 400, noSpeechMs: 60_000 }, now: clock.now },
+    );
+    await waitFor(() => handlers.ready > 0);
+    server.blackhole();
+    clock.jump(150);
+
+    await waitFor(() => handlers.errors.length === 1, 3000);
+    expect(records.some((r) => r.msg.includes('fired late'))).toBe(false);
+  });
+
   it('leaves a healthy but silent connection alone', async () => {
     // The server sends nothing at all during silence in this test, so only the
     // pong keeps the session alive. If liveness were keyed on transcripts

@@ -46,6 +46,15 @@ const HISTORY_PATH = join(
   'history.json',
 );
 
+/** The append journal beside it; see `readJournal`. */
+const HISTORY_JOURNAL_PATH = join(
+  homedir(),
+  'Library',
+  'Application Support',
+  'grok-dictate',
+  'history.pending.jsonl',
+);
+
 /** How much of each altered entry to show on either side of the first change. */
 const CONTEXT_CHARS = 70;
 
@@ -66,10 +75,41 @@ function readHistory(path: string): HistoryRow[] {
     console.error('history.json is not an array of entries.');
     process.exit(1);
   }
-  return parsed.filter(
-    (row): row is HistoryRow =>
-      typeof row === 'object' && row !== null && typeof (row as HistoryRow).text === 'string',
-  );
+  return [...parsed.filter(isRow), ...readJournal(HISTORY_JOURNAL_PATH)];
+}
+
+function isRow(row: unknown): row is HistoryRow {
+  return typeof row === 'object' && row !== null && typeof (row as HistoryRow).text === 'string';
+}
+
+/**
+ * The rows appended since the store last folded them into `history.json`.
+ *
+ * `src/main/history/index.ts` writes each new dictation as one line in a
+ * sidecar rather than rewriting the whole array every time, and folds it back
+ * at launch. Reading only the array would quietly miss the most recent
+ * transcripts — which are the ones most worth replaying after a rule change.
+ * A torn final line is skipped, exactly as the store skips it.
+ */
+function readJournal(path: string): HistoryRow[] {
+  let raw: string;
+  try {
+    raw = readFileSync(path, 'utf8');
+  } catch {
+    return []; // usually just means the store compacted at launch
+  }
+  const rows: HistoryRow[] = [];
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0) continue;
+    try {
+      const parsed: unknown = JSON.parse(trimmed);
+      if (isRow(parsed)) rows.push(parsed);
+    } catch {
+      // The line that was being written when the app was last killed.
+    }
+  }
+  return rows;
 }
 
 /** Where the two strings first diverge, or -1 if they do not. */

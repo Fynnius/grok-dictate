@@ -53,6 +53,8 @@ export class MockAudioSource implements AudioSourcePort {
   readonly #options: MockAudioOptions;
   readonly #pcm: Buffer;
   readonly #buffers = new Map<string, Buffer[]>();
+  /** Held so `stop()` can report the drain, per `AudioHandlers.onDrained`. */
+  readonly #handlers = new Map<string, AudioHandlers>();
   #timer: NodeJS.Timeout | null = null;
   #activeSession: string | null = null;
 
@@ -65,6 +67,7 @@ export class MockAudioSource implements AudioSourcePort {
     this.#stopTimer();
     this.#activeSession = sessionId;
     this.#buffers.set(sessionId, []);
+    this.#handlers.set(sessionId, handlers);
 
     if (this.#options.failWith !== undefined) {
       const error =
@@ -117,6 +120,13 @@ export class MockAudioSource implements AudioSourcePort {
     if (this.#activeSession !== sessionId) return;
     this.#stopTimer();
     this.#activeSession = null;
+    // Synchronously, because this mock has no renderer to wait for and nothing
+    // is in flight: everything it was going to emit has been emitted. The real
+    // coordinator's drain is asynchronous and bounded by a timer
+    // (`AudioHandlers.onDrained`); the port allows either.
+    const handlers = this.#handlers.get(sessionId);
+    this.#handlers.delete(sessionId);
+    handlers?.onDrained();
   }
 
   cancel(sessionId: string): void {

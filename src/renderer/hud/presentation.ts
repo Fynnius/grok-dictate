@@ -18,9 +18,11 @@
  *
  *   - **`not_inserted` carries the full transcript** (§12.5, §16.5a). It is
  *     the one state where the words exist and are nowhere else on screen.
- *     `message.body` is therefore never truncated for it. (`inserted` no
- *     longer shows the transcript at all — that trade is argued in overhaul
- *     §16.4 and was the user's call, not an accident.)
+ *     `message.body` is therefore never truncated for it. A *confirmed*
+ *     `inserted` shows no transcript at all — that trade is argued in overhaul
+ *     §16.4 and was the user's call, not an accident — but an **unconfirmed**
+ *     one does, because it is the same situation: the words may be nowhere.
+ *     See `unconfirmedInsertCopy` for the incident that made the distinction.
  *   - **Every not-inserted reason gets its own words** (`NotInsertedReason`).
  *     "We couldn't type it" and "you were in a password field" call for
  *     different actions, and IMPLEMENTATION-PLAN.md §4 requires the actionable
@@ -80,6 +82,42 @@ export interface HudPresentation {
 
 const RETRY_HINT = 'Press ⌃⌘V to try again wherever you are now pointing.';
 
+/** The four buttons that rescue a transcript. Shared by every state that can. */
+const RESCUE_ACTIONS: readonly HudAction[] = [
+  { id: 'copy', label: 'Copy' },
+  { id: 'retry', label: 'Re-insert' },
+  { id: 'scratchpad', label: 'Scratchpad' },
+  { id: 'dismiss', label: 'Dismiss' },
+];
+
+/**
+ * Copy for an insert the helper posted but could not confirm.
+ *
+ * The 2026-08-09 incident in one sentence: 60.3 seconds of dictation was posted
+ * as 38 Unicode events in 245 ms into an Electron terminal, which dropped every
+ * one; the app showed the green check and wrote `inserted: true`, and the user
+ * lost the text with no signal of any kind. `CGEventKeyboardSetUnicodeString`
+ * has no return channel (§12.5), so this state is not an edge case — it is
+ * every insert into a target the helper cannot read back.
+ *
+ * The words therefore have to do two things at once: not cry wolf (most
+ * unconfirmed inserts did land) and not reassure (this one may not have). Hence
+ * "check it", the transcript in full, and the same rescue buttons as a failure.
+ *
+ * **This state also covers a partial drop.** The helper reports a *partial*
+ * injection — some characters landed, not all — as `verified: null` rather than
+ * `false`, because it refuses to claim "nothing landed" unless it measured no
+ * change at all. So "missing or cut short" below is literal: the full
+ * transcript sitting next to a truncated paste is the only way that case is
+ * ever noticed, which is why the body is never abbreviated here.
+ */
+export function unconfirmedInsertCopy(): { title: string; detail: string } {
+  return {
+    title: 'Typed — not confirmed',
+    detail: `Grok Dictate typed this but could not verify that the app received it. Check it: if it is missing or cut short, the full text is below and in history. ${RETRY_HINT}`,
+  };
+}
+
 export function tierLabel(tier: InsertTier): string {
   switch (tier) {
     case 'ax':
@@ -115,6 +153,21 @@ export function notInsertedCopy(reason: NotInsertedReason): { title: string; det
         title: 'Not inserted — helper unavailable',
         detail: `The input helper did not answer. Your text is safe below and in history. ${RETRY_HINT}`,
       };
+    case 'verification_failed':
+      // Distinct from `insert_failed` on purpose: the keystrokes *were* sent
+      // and the helper measured that the target's text did not change. The
+      // advice differs too — retrying into the same window will most likely be
+      // dropped the same way, so the useful move is to go somewhere else or
+      // to copy. This is the incident case (2026-08-09), reported honestly.
+      //
+      // The helper's own `error` on this path is prose written for the user and
+      // names the application, so `present` prefers it and this is the fallback
+      // for an outcome that carried none. Keeping the action here anyway is
+      // what stops that fallback being a dead end (IMPLEMENTATION-PLAN.md §4).
+      return {
+        title: 'Not inserted — the app ignored the keystrokes',
+        detail: `Grok Dictate typed this and the app's text did not change — some terminals and remote desktops discard synthetic keystrokes. Copy it, or click into a different field and press ⌃⌘V.`,
+      };
     case 'session_error':
       // The turn itself failed part-way through. What is shown below is what
       // was transcribed before it did, and it is deliberately *not* typed —
@@ -123,6 +176,16 @@ export function notInsertedCopy(reason: NotInsertedReason): { title: string; det
       return {
         title: 'Not inserted — dictation interrupted',
         detail: `This is what had been transcribed before it failed. It was not typed, and it is in history. ${RETRY_HINT}`,
+      };
+    case 'session_error_unconfirmed':
+      // The turn died while the user was still speaking, so the tail below is
+      // live preview text the server never confirmed (BUG-3). Saying so is the
+      // whole point: it is better than losing the minute outright, and worse
+      // than a real transcript, and the user has to know which they are
+      // reading before they re-insert it.
+      return {
+        title: 'Not inserted — interrupted mid-sentence',
+        detail: `This is what had been transcribed before it failed, and the end of it was never confirmed — check the last sentence. It was not typed, and it is in history. ${RETRY_HINT}`,
       };
   }
 }
@@ -155,19 +218,61 @@ export function present(view: HudView): HudPresentation {
         message: null,
       };
 
-    case 'inserted':
-      // The green check, and nothing else — overhaul §16.4 records what this
-      // trades away and why the user chose it.
+    case 'inserted': {
+      if (view.verified === true) {
+        // The green check, and nothing else — overhaul §16.4 records what this
+        // trades away and why the user chose it. It is now reserved for an
+        // insert the helper actually *confirmed*.
+        return {
+          layer,
+          tone: 'success',
+          label: 'Inserted',
+          capsule: { kind: 'check' },
+          message: null,
+        };
+      }
+      // Typed, unconfirmed. Amber rather than red, and by the same argument
+      // §16.5b uses for `blocked`: red is for a failure the user must act on,
+      // and most of these did land. But it must not read as success either —
+      // that is exactly what cost 60.3 seconds of dictation on 2026-08-09 — so
+      // it takes the message pill, the full transcript and the rescue buttons.
+      const { title, detail } = unconfirmedInsertCopy();
       return {
         layer,
-        tone: 'success',
-        label: 'Inserted',
-        capsule: { kind: 'check' },
-        message: null,
+        tone: 'warning',
+        label: title,
+        capsule: { kind: 'alert' },
+        message: {
+          title,
+          // Full text, never truncated: §12.5 / §16.5a. Seeing the whole thing
+          // next to what actually appeared is the only way a user catches a
+          // partial drop.
+          body: view.text,
+          detail: `${detail} (${tierLabel(view.tier)})`,
+          actions: RESCUE_ACTIONS,
+        },
       };
+    }
 
     case 'not_inserted': {
       const { title, detail } = notInsertedCopy(view.reason);
+      /**
+       * The helper's diagnostic normally goes in parentheses after our copy,
+       * because it is an `AXError` or a note about what the ladder tried —
+       * useful, and not a sentence.
+       *
+       * `verification_failed` is the exception: on that path the helper writes
+       * prose for the user, naming the application it typed into and what to do
+       * about it. Appending our own advice to that would say the same thing
+       * twice in one paragraph, so the helper's wins and ours is the fallback
+       * for an outcome that carried no text at all.
+       */
+      const composed =
+        view.reason === 'verification_failed' && view.detail !== null
+          ? view.detail
+          : view.detail === null
+            ? detail
+            : `${detail} (${view.detail})`;
       return {
         layer,
         // Red, not amber: this is the failure the user must act on (§16.3).
@@ -178,13 +283,8 @@ export function present(view: HudView): HudPresentation {
           title,
           // Full text, not a summary: §12.5 / §16.5a.
           body: view.text,
-          detail: view.detail === null ? detail : `${detail} (${view.detail})`,
-          actions: [
-            { id: 'copy', label: 'Copy' },
-            { id: 'retry', label: 'Re-insert' },
-            { id: 'scratchpad', label: 'Scratchpad' },
-            { id: 'dismiss', label: 'Dismiss' },
-          ],
+          detail: composed,
+          actions: RESCUE_ACTIONS,
         },
       };
     }

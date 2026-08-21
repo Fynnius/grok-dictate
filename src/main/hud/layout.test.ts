@@ -16,7 +16,7 @@ const VIEWS: Record<HudView['kind'], HudView> = {
   hidden: { kind: 'hidden' },
   recording: { kind: 'recording', elapsedMs: 3_000, level: 0.3, interim: 'hallo', mode: 'hold' },
   processing: { kind: 'processing', interim: 'hallo' },
-  inserted: { kind: 'inserted', text: 'hallo', tier: 'ax' },
+  inserted: { kind: 'inserted', text: 'hallo', tier: 'ax', verified: true },
   not_inserted: { kind: 'not_inserted', text: 'hallo', reason: 'insert_failed', detail: null },
   blocked: { kind: 'blocked' },
   error: { kind: 'error', message: 'boom', hint: null },

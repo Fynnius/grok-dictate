@@ -91,12 +91,16 @@ export function hudBounds(
  * the message pill.
  *
  * The one distinction this file adds on top of `hudLayer` is *how much* the
- * pill has to say: `not_inserted` carries a whole transcript (§12.5), while
- * `error` and `blocked` carry a sentence.
+ * pill has to say: `not_inserted` and an unconfirmed `inserted` both carry a
+ * whole transcript (§12.5), while `error` and `blocked` carry a sentence.
  */
 export function hudSize(view: HudView): HudSize {
   if (hudLayer(view) !== 'capsule-message') return HUD_CAPSULE_WINDOW;
-  return view.kind === 'not_inserted' ? HUD_MESSAGE_WINDOW : HUD_NOTICE_WINDOW;
+  // `hudLayer` has already decided that an `inserted` reaching here is the
+  // unconfirmed kind, and that pill shows the full transcript.
+  return view.kind === 'not_inserted' || view.kind === 'inserted'
+    ? HUD_MESSAGE_WINDOW
+    : HUD_NOTICE_WINDOW;
 }
 
 /**
@@ -129,7 +133,11 @@ export function hudDwellMs(view: HudView): number | null {
       // is dead.
       return null;
     case 'inserted':
-      return 2_000;
+      // A confirmed insert is an acknowledgement and two seconds is plenty.
+      // An unconfirmed one is a recovery moment — the text may never have
+      // arrived — so it gets the same long dwell as `not_inserted` below, for
+      // the same reason: the user has to read it and decide.
+      return view.verified === true ? 2_000 : 20_000;
     case 'not_inserted':
       // Long, because this is the recovery moment: the user has to read the
       // text, decide, and press ⌃⌘V. It is still bounded — the transcript is
