@@ -34,14 +34,47 @@ public enum HotkeyAction: String, Sendable, CaseIterable {
     case retryInsert = "retry_insert"
 }
 
-/// Contract §2. `ax` is the only tier whose `ok` is trustworthy; `unicode`
-/// reports "the events were posted", not "the characters landed";
+/// Contract §2. `ax` reports success only when the caret proved it; `unicode`
+/// posts synthetic key events and then checks the target's text length, which
+/// answers "landed", "did not land" or "cannot tell" — see `verified` below;
 /// `none` means nothing was attempted or everything failed, and the
 /// clipboard has *not* been touched.
 public enum InsertTier: String, Sendable {
     case ax
     case unicode
     case none
+}
+
+/// The `verified` field on `insert_result` (contract §2), added for BUG-1.
+///
+/// The invariant the whole fix rests on: **`ok: true` with `verified` not `true`
+/// means "typed, unconfirmed"** — a state the app stops presenting as plain
+/// success. Before this existed there was no way to say it on the wire, so a
+/// Unicode burst the target dropped and a Unicode burst that landed were the
+/// same frame.
+///
+/// `notPossible` is deliberately the same value an older helper build produces
+/// (absent → `null`), because "this build cannot tell you" and "this target
+/// cannot be measured" are the same claim from the app's side.
+public enum InsertionVerification: Sendable, Equatable {
+    /// The helper confirmed the text landed: the caret moved (AX), or the
+    /// focused element's text grew by what was typed (Unicode).
+    case confirmed
+    /// Verification ran and proved nothing landed. Reported with `ok: false`
+    /// and `reason: "verification_failed"`.
+    case provenNotLanded
+    /// No verification was possible for this target — no readable length, no
+    /// resolvable focus, or verification switched off.
+    case notPossible
+
+    /// `true` / `false` / `null` on the wire, in that order.
+    public var wireValue: Bool? {
+        switch self {
+        case .confirmed: return true
+        case .provenNotLanded: return false
+        case .notPossible: return nil
+        }
+    }
 }
 
 /// Why an insert was declined, in a form the app can branch on.
@@ -56,6 +89,11 @@ public enum InsertDeclineReason: String, Sendable {
     case emptyText = "empty_text"
     /// AX declined and Unicode injection failed.
     case noTier = "no_tier"
+    /// The Unicode tier posted its events and the target's text did not change,
+    /// so the insertion is proven not to have landed. Added for BUG-1; it is
+    /// what turns the incident's green "Inserted" pill into the app's existing
+    /// not-inserted HUD, error cue and re-insert path.
+    case verificationFailed = "verification_failed"
 }
 
 public enum LogLevel: String, Sendable {
@@ -79,10 +117,15 @@ public enum HelperFrame: Sendable, Equatable {
     /// `id` is `nil` for the unsolicited push emitted when the frontmost app
     /// changes, and set when answering a `get_frontmost` (contract §2).
     case frontmost(bundleId: String?, name: String?, id: String?)
+    /// `verified` is `true` / `false` / `null`, never absent — unlike
+    /// `frontmost.id`, the app parses it with Zod's `.nullish()`, which accepts
+    /// both, and a field that is always present is one less shape to reason
+    /// about when reading a log by eye (contract §5).
     case insertResult(
         id: String,
         tier: InsertTier,
         ok: Bool,
+        verified: Bool?,
         error: String?,
         reason: InsertDeclineReason?,
         frontmostBundleId: String?,
@@ -133,11 +176,17 @@ public enum HelperFrame: Sendable, Equatable {
             // Absent, not null, when unsolicited: the contract types it
             // `.optional()`, and `null` would fail the app's Zod parse.
             if let id { fields.append(("id", Self.json(id))) }
-        case let .insertResult(id, tier, ok, error, reason, frontmostBundleId, frontmostName):
+        case let .insertResult(
+            id, tier, ok, verified, error, reason, frontmostBundleId, frontmostName
+        ):
             fields.append(("type", Self.json("insert_result")))
             fields.append(("id", Self.json(id)))
             fields.append(("tier", Self.json(tier.rawValue)))
             fields.append(("ok", ok ? "true" : "false"))
+            // Immediately after `ok`, because it qualifies it: `ok: true` with
+            // `verified: null` is "typed, unconfirmed", and the two belong next
+            // to each other in a line somebody is reading by eye.
+            fields.append(("verified", verified.map { $0 ? "true" : "false" } ?? "null"))
             fields.append(("error", error.map(Self.json) ?? "null"))
             fields.append(("reason", reason.map { Self.json($0.rawValue) } ?? "null"))
             fields.append(("frontmostBundleId", frontmostBundleId.map(Self.json) ?? "null"))

@@ -72,8 +72,16 @@ let usage = """
 
     ENVIRONMENT
       GROK_DICTATE_INJECT_CHUNK       UTF-16 units per event (default 20)
-      GROK_DICTATE_INJECT_DELAY_MS    pause between chunks (default 5)
+      GROK_DICTATE_INJECT_DELAY_MS    pause between chunks. Overrides the
+                                      length-based pacing, which otherwise types
+                                      at 5 ms up to 200 UTF-16 units and 15 ms
+                                      above it — a flat 5 ms burst of 38 events
+                                      is what a terminal dropped in full.
       GROK_DICTATE_INJECT_TAP         hid | session (default hid)
+      GROK_DICTATE_INJECT_VERIFY      0 = report injected text as inserted
+                                      without measuring whether the target's
+                                      text actually grew. On by default; off is
+                                      how a dropped injection looks like success.
       GROK_DICTATE_MODIFIER_SETTLE_MS wait for held modifiers (default 500)
       GROK_DICTATE_AX_SKIP            comma-separated bundle ids to skip the
                                       AX tier for (default none)

@@ -69,6 +69,9 @@ public final class CommandRouter {
                         id: id,
                         tier: outcome.tier,
                         ok: outcome.ok,
+                        // The one place the ladder's three-way verification
+                        // becomes the wire's `true | false | null` (contract §2).
+                        verified: outcome.verification.wireValue,
                         error: outcome.error,
                         reason: outcome.reason,
                         frontmostBundleId: outcome.frontmost?.bundleId,

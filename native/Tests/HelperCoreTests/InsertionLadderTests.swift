@@ -53,10 +53,14 @@ struct InsertionLadderTests {
 
     @Test("AX first: a successful AX write reports tier ax and never reaches Unicode")
     func axWins() {
-        let (ladder, ax, unicode) = self.ladder(ax: .succeeded, unicode: .succeeded)
+        let (ladder, ax, unicode) = self.ladder(ax: .confirmed, unicode: .succeeded)
         let outcome = ladder.run(text: "hallo", targetBundleId: nil)
         #expect(outcome.tier == .ax)
         #expect(outcome.ok)
+        // The AX tier verifies by reading the caret back, so it says so on the
+        // wire. `ok: true` alone is what BUG-1 could not distinguish from a
+        // burst that vanished.
+        #expect(outcome.verification == .confirmed)
         #expect(outcome.error == nil)
         // Reported so the app can name the application in history: the app-side
         // frontmost check was removed in Phase 5, so it no longer knows.
@@ -75,8 +79,112 @@ struct InsertionLadderTests {
         let outcome = ladder.run(text: "hallo", targetBundleId: nil)
         #expect(outcome.tier == .unicode)
         #expect(outcome.ok)
+        // "Typed, unconfirmed": the events went out and this target exposes no
+        // readable text length. `ok: true` with `verified: null` is the honest
+        // shape of that, and the app stops presenting it as plain success.
+        #expect(outcome.verification == .notPossible)
         #expect(outcome.error == nil)
         #expect(ax.calls == ["hallo"])
+        #expect(unicode.calls == ["hallo"])
+        // The tier is handed the app the target check approved — it needs the
+        // pid to read the focused element back.
+        #expect(unicode.targets.count == 1)
+        #expect(unicode.targets[0].bundleId == "com.apple.Notes")
+    }
+
+    @Test("a Unicode injection that was measured landing reports verified")
+    func unicodeConfirmed() {
+        let (ladder, _, _) = self.ladder(
+            ax: .failed(reason: "kAXSelectedTextAttribute is not settable"),
+            unicode: .confirmed
+        )
+        let outcome = ladder.run(text: "hallo", targetBundleId: nil)
+        #expect(outcome.tier == .unicode)
+        #expect(outcome.ok)
+        #expect(outcome.verification == .confirmed)
+        #expect(outcome.reason == nil)
+    }
+
+    @Test("a Unicode injection proven not to have landed is reported as a failure")
+    func unicodeProvenNotLanded() {
+        // BUG-1, end to end through the ladder. On 2026-08-09 this exact path —
+        // a terminal refusing the AX tier, 760 UTF-16 units posted as 38 events
+        // in 245 ms and dropped in full — produced `ok: true` and a green
+        // "Inserted" pill over a minute of lost dictation.
+        let (ladder, _, _) = self.ladder(
+            ax: .failed(reason: "kAXSelectedTextAttribute is not settable"),
+            unicode: .notLanded(reason: "the focused element still reports 4096 characters")
+        )
+        let outcome = ladder.run(text: "hallo", targetBundleId: nil)
+        // `unicode`, not `none`: the events really were posted, so this is not
+        // the "nothing was attempted" case, and the user may be looking at part
+        // of the text.
+        #expect(outcome.tier == .unicode)
+        #expect(outcome.ok == false)
+        #expect(outcome.verification == .provenNotLanded)
+        // What the app branches on to show the not-inserted HUD, play the error
+        // cue and offer the re-insert.
+        #expect(outcome.reason == .verificationFailed)
+        #expect(outcome.error?.contains("4096") == true)
+        // IMPLEMENTATION-PLAN.md §4: errors carry actionable text.
+        #expect(outcome.error?.contains("Ctrl+Cmd+V") == true)
+        #expect(outcome.frontmost?.bundleId == "com.apple.Notes")
+    }
+
+    @Test("a dropped injection is logged, naming the app and the evidence")
+    func notLandedIsLogged() {
+        // The incident left *no* trace anywhere: the log recorded a successful
+        // insert. This line is the one somebody will look for when they ask why
+        // the pill went red, so it is asserted rather than assumed. At `info`,
+        // paired with the `warn` the tier itself emits — the same split the AX
+        // tier already uses, where the diagnosis of the other application
+        // belongs to whoever measured it.
+        var logged: [(LogLevel, String)] = []
+        let ladder = InsertionLadder(
+            accessibility: StubAccessibilityInserter(result: .failed(reason: "not settable")),
+            unicode: StubUnicodeInserter(
+                result: .notLanded(reason: "the focused element still reports 4096 characters")
+            ),
+            frontmost: StubFrontmost(bundleId: "dev.cmux.app", name: "cmux"),
+            log: { level, message in logged.append((level, message)) }
+        )
+        _ = ladder.run(text: "hallo", targetBundleId: nil)
+
+        let lines = logged.filter { $0.1.contains("did not land") }
+        #expect(lines.count == 1)
+        #expect(lines.first?.0 == .info)
+        #expect(lines.first?.1.contains("cmux") == true)
+        #expect(lines.first?.1.contains("4096") == true)
+        #expect(lines.first?.1.contains("not inserted") == true)
+    }
+
+    @Test("an AX tier that could not verify itself reports ok without claiming verified")
+    func axUnverifiedIsNotVerified() {
+        // Reachable only with GROK_DICTATE_AX_VERIFY=0, which trusts the return
+        // code the way the tier did before Phase 5. It stays `ok: true` — that
+        // is what the flag is for — but claiming `verified` would mean switching
+        // verification off silently upgraded the report it produces.
+        let (ladder, _, unicode) = self.ladder(ax: .succeeded, unicode: .confirmed)
+        let outcome = ladder.run(text: "hallo", targetBundleId: nil)
+        #expect(outcome.tier == .ax)
+        #expect(outcome.ok)
+        #expect(outcome.verification == .notPossible)
+        #expect(unicode.calls.isEmpty)
+    }
+
+    @Test("an AX tier that proved its own write vanished still falls through")
+    func axNotLandedFallsThrough() {
+        // The AX tier reads the caret back *before* the fall-through, so its
+        // "did not land" is a decline and the ladder answers it by typing the
+        // text instead — the Arc recovery path. Treating it as terminal would
+        // delete that.
+        let (ladder, _, unicode) = self.ladder(
+            ax: .notLanded(reason: "the selected range is still {12, 0}"),
+            unicode: .confirmed
+        )
+        let outcome = ladder.run(text: "hallo", targetBundleId: nil)
+        #expect(outcome.tier == .unicode)
+        #expect(outcome.ok)
         #expect(unicode.calls == ["hallo"])
     }
 
@@ -89,6 +197,10 @@ struct InsertionLadderTests {
         let outcome = ladder.run(text: "hallo", targetBundleId: nil)
         #expect(outcome.tier == .none)
         #expect(outcome.ok == false)
+        // Nothing was typed, so there was nothing to verify — `verified: null`,
+        // not `false`. `false` is reserved for "we measured, and it is not
+        // there", which is a stronger and different claim.
+        #expect(outcome.verification == .notPossible)
         let error = outcome.error ?? ""
         #expect(error.contains("kAXErrorAPIDisabled"))
         #expect(error.contains("CGEventSource"))
@@ -115,6 +227,7 @@ struct InsertionLadderTests {
         // without it, a focus change was indistinguishable from "neither tier
         // worked" and the HUD gave the wrong advice.
         #expect(outcome.reason == .targetChanged)
+        #expect(outcome.verification == .notPossible)
     }
 
     @Test("a matching target inserts normally")
@@ -158,6 +271,7 @@ struct InsertionLadderTests {
         #expect(outcome.tier == .none)
         #expect(outcome.ok == false)
         #expect(outcome.reason == .emptyText)
+        #expect(outcome.verification == .notPossible)
         #expect(ax.calls.isEmpty)
         #expect(unicode.calls.isEmpty)
     }

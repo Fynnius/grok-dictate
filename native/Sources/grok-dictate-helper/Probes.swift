@@ -157,11 +157,19 @@ enum Probes {
                 + "\(options.text.utf16.count) UTF-16 units, "
                 + "\(options.text.utf8.count) UTF-8 bytes"
         )
-        report(
-            "Chunking:         \(settings.injectChunkUnits) UTF-16 units, "
-                + "\(Int(settings.injectDelay * 1000)) ms between chunks, "
-                + "tap=\(settings.injectTap == .cghidEventTap ? "hid" : "session")"
+        // What the ladder will *actually* use, not the baseline: since BUG-1 the
+        // delay depends on the length printed above, and a probe that reported
+        // the baseline would misdescribe the very run it is measuring.
+        let pacing = InjectionPacer.pacing(
+            forUTF16Count: options.text.utf16.count,
+            baseline: settings.injectionBaseline
         )
+        report(
+            "Chunking:         \(pacing.summary)"
+                + (pacing.isPacedForLength ? " (paced for length)" : "")
+                + ", tap=\(settings.injectTap == .cghidEventTap ? "hid" : "session")"
+        )
+        report("Verification:     \(settings.verifyUnicodeWrites ? "on" : "off (GROK_DICTATE_INJECT_VERIFY)")")
 
         switch writeExpectedFile(text: options.text, path: options.outputPath) {
         case let .success(path):
@@ -230,10 +238,18 @@ enum Probes {
         let elapsedMs = Int(Date().timeIntervalSince(started) * 1000)
 
         report("")
-        report("tier:    \(outcome.tier.rawValue)")
-        report("ok:      \(outcome.ok)")
-        report("error:   \(outcome.error ?? "none")")
-        report("elapsed: \(elapsedMs) ms")
+        report("tier:     \(outcome.tier.rawValue)")
+        report("ok:       \(outcome.ok)")
+        // The field the app now branches on: `ok: true` with `verified` not true
+        // is "typed, unconfirmed", and this probe is where that is easiest to
+        // see against a real application.
+        report(
+            "verified: "
+                + (outcome.verification.wireValue.map(String.init(describing:)) ?? "null (could not be checked)")
+        )
+        report("reason:   \(outcome.reason?.rawValue ?? "none")")
+        report("error:    \(outcome.error ?? "none")")
+        report("elapsed:  \(elapsedMs) ms")
         report("")
         report("Now copy what actually landed in the app into a file and run:")
         report("  ./verify-insert.sh <that-file>")
@@ -562,10 +578,16 @@ enum Probes {
         ).insertSelectedText(marker, into: front)
         report("")
         switch attempt {
-        case .succeeded:
+        case .confirmed:
             report("AX write: SUCCEEDED — Secure Input does NOT block AX writes.")
-            report("The string \(marker) was inserted into the focused field. Clear it.")
-        case let .failed(reason):
+            report("The caret moved, so the string \(marker) really is in the focused field. Clear it.")
+        case .succeeded:
+            // Only reachable with GROK_DICTATE_AX_VERIFY=0, where the answer to
+            // §9.5 rests on the AXError alone — which is exactly the weaker
+            // evidence Phase 5 stopped trusting.
+            report("AX write: reported success, UNVERIFIED — the caret was not read back.")
+            report("Re-run without GROK_DICTATE_AX_VERIFY=0 before recording this as an answer.")
+        case let .notLanded(reason), let .failed(reason):
             report("AX write: FAILED — \(reason)")
             if settings.verifyAXWrites {
                 // Since Phase 5 this tier also declines when it cannot confirm

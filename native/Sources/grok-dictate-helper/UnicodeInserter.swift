@@ -7,10 +7,18 @@
 /// approaches. It works essentially anywhere a keyboard works, including the
 /// Electron apps and terminals where the AX tier gives up (§4.6, §5.8).
 ///
-/// It reports "posted", never "landed". : a fast app can drop
+/// `CGEvent.post` reports "posted", never "landed": a fast app can drop
 /// characters mid-injection with no error anywhere. That is why the contract
 /// marks this tier's `ok` as untrustworthy and why the HUD shows the full
-/// transcript.
+/// transcript — and, since BUG-1 turned that theoretical warning into 60.3 s of
+/// lost dictation in `cmux`, why the tier no longer stops at "posted":
+///
+///   - it **paces itself by length** (`InjectionPacer`), because the burst that
+///     was dropped was 38 events in 245 ms and the three that landed the same
+///     day were 3–4 events each;
+///   - it **measures the target's text length** around the injection
+///     (`InjectionVerifier`, `UnicodeWriteVerification`) and reports landed, did
+///     not land, or cannot tell.
 ///
 /// **Two details here are load-bearing and easy to get wrong.**
 ///
@@ -41,14 +49,27 @@ final class UnicodeInserter: UnicodeInserting {
         self.log = log
     }
 
-    func typeText(_ text: String) -> TierAttempt {
+    func typeText(_ text: String, into app: FrontmostAppInfo) -> TierAttempt {
         guard let source = CGEventSource(stateID: .privateState) else {
             return .failed(reason: "could not create a private CGEventSource")
         }
 
         waitForModifiersToClear()
 
-        let chunks = TextChunker.chunks(of: text, maxUTF16Units: settings.injectChunkUnits)
+        let pacing = InjectionPacer.pacing(
+            forUTF16Count: text.utf16.count,
+            baseline: settings.injectionBaseline
+        )
+        let chunks = TextChunker.chunks(of: text, maxUTF16Units: pacing.chunkUnits)
+
+        // Measured after the modifier wait and immediately before the first
+        // event, so the "before" length is the state the injection is about to
+        // act on. Half a second of waiting for the user's fingers to leave ⌃⌘V
+        // is long enough for a terminal to print something on its own.
+        let preparation = settings.verifyUnicodeWrites
+            ? InjectionVerifier.prepare(for: app)
+            : .notPossible("GROK_DICTATE_INJECT_VERIFY is off")
+
         for (index, chunk) in chunks.enumerated() {
             var units = Array(chunk.utf16)
             guard
@@ -71,16 +92,71 @@ final class UnicodeInserter: UnicodeInserting {
             keyDown.post(tap: settings.injectTap)
             keyUp.post(tap: settings.injectTap)
 
-            if index < chunks.count - 1, settings.injectDelay > 0 {
-                Thread.sleep(forTimeInterval: settings.injectDelay)
+            if index < chunks.count - 1, pacing.interChunkDelay > 0 {
+                Thread.sleep(forTimeInterval: pacing.interChunkDelay)
             }
         }
 
         log(
             .info,
-            "posted \(chunks.count) Unicode chunk(s) totalling \(text.utf16.count) UTF-16 units"
+            "posted \(chunks.count) Unicode chunk(s) totalling \(text.utf16.count) UTF-16 units "
+                + "at \(pacing.summary)"
+                + (pacing.isPacedForLength ? " — slowed down because the text is long" : "")
         )
-        return .succeeded
+
+        return verdict(for: preparation, typedUTF16Units: text.utf16.count, into: app)
+    }
+
+    /// Turn what the target's text length did into what the tier reports.
+    ///
+    /// Three outcomes, and the middle one is the honest new state the whole
+    /// contract change exists for: `ok: true` with `verified: null` — "typed,
+    /// unconfirmed". It is what every target that exposes no readable length
+    /// gets, and it is strictly more truthful than the green pill BUG-1 shipped.
+    private func verdict(
+        for preparation: InjectionVerifier.Preparation,
+        typedUTF16Units typed: Int,
+        into app: FrontmostAppInfo
+    ) -> TierAttempt {
+        let measurement: InjectionVerifier.Measurement
+        switch preparation {
+        case let .ready(prepared):
+            measurement = prepared
+        case let .notPossible(reason):
+            // Said out loud on every insert, not once at start-up: whether a
+            // target can be measured is a fact about *that* target, and "why is
+            // this app never verified?" is otherwise unanswerable from a log.
+            log(.info, "the injection could not be verified — \(reason)")
+            return .succeeded
+        }
+
+        let target = app.name ?? app.bundleId ?? "the frontmost application"
+        switch InjectionVerifier.confirm(measurement, typedUTF16Units: typed) {
+        case let .landed(growth):
+            log(
+                .info,
+                "confirmed the injection landed in \(target) — \(measurement.source.description) "
+                    + "grew by \(growth)"
+            )
+            return .confirmed
+
+        case let .unverifiable(evidence):
+            log(.info, "the injection into \(target) could not be confirmed — \(evidence)")
+            return .succeeded
+
+        case let .didNotLand(evidence):
+            // A warning, not an info line, for the same reason the AX tier's
+            // discarded-write log is one: this is a diagnosis of the other
+            // application, and it is the line somebody will be looking for when
+            // they ask why the pill went red. The incident it comes from left
+            // no trace at all in any log.
+            log(
+                .warn,
+                "\(target) dropped the injected text — \(evidence). It was typed as synthetic key "
+                    + "events, which report no error when an app discards them"
+            )
+            return .notLanded(reason: evidence)
+        }
     }
 
     /// Poll until no chord modifier is physically held, or the timeout expires.
@@ -131,5 +207,7 @@ final class DryRunInserter: AccessibilityInserting, UnicodeInserting {
     func insertSelectedText(_ text: String, into app: FrontmostAppInfo) -> TierAttempt {
         .failed(reason: Self.reason)
     }
-    func typeText(_ text: String) -> TierAttempt { .failed(reason: Self.reason) }
+    func typeText(_ text: String, into app: FrontmostAppInfo) -> TierAttempt {
+        .failed(reason: Self.reason)
+    }
 }

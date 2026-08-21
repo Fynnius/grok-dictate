@@ -1,14 +1,19 @@
 /// The insertion ladder — , contract §3.
 ///
-///   1. **AX** — `AXUIElementSetAttributeValue` on `kAXSelectedTextAttribute`.
-///      The only tier that returns an error code, so the only tier whose `ok`
-///      is trustworthy.
-///   2. **Unicode injection** — `CGEventKeyboardSetUnicodeString`. `ok: true`
-///      means the events were posted, not that the characters landed; it can
-///      half-succeed silently, which is why the HUD shows the
-///      full transcript.
+///   1. **AX** — `AXUIElementSetAttributeValue` on `kAXSelectedTextAttribute`,
+///      confirmed by reading the caret back (`AXWriteVerification`).
+///   2. **Unicode injection** — `CGEventKeyboardSetUnicodeString`. The events
+///      carry no return channel, so posting them proves nothing; since BUG-1 the
+///      tier measures the target's text length around the injection instead and
+///      says which of "landed", "did not land" and "cannot tell" it observed.
 ///   3. **Neither** → `tier: "none"`, `ok: false`. **The clipboard is not
 ///      touched.**
+///
+/// Every rung reports a `verification` alongside `ok`, and the two are not the
+/// same claim: `ok: true` with `verification == .notPossible` means "typed,
+/// unconfirmed". That distinction is the whole of BUG-1 — a 60.3 s dictation
+/// into `cmux` was posted as 38 events in 245 ms, dropped in full, and reported
+/// as plain success because the ladder had no way to say anything weaker.
 ///
 /// There is no `import AppKit` in this file and no reference to `NSPasteboard`
 /// anywhere beneath it. That is not a coincidence and not a convention: the
@@ -47,6 +52,14 @@ public struct FrontmostAppInfo: Sendable, Equatable {
 public struct InsertionOutcome: Sendable, Equatable {
     public let tier: InsertTier
     public let ok: Bool
+    /// Whether anything outside the tier's own API confirmed the text is in the
+    /// target. Sent as `verified` (contract §2); see `InsertionVerification`.
+    ///
+    /// Defaulted to `.notPossible` in the initialiser rather than left required:
+    /// the declines below — empty text, a moved target — never got as far as a
+    /// tier, and "not possible" is the honest thing to say about a verification
+    /// that never ran.
+    public let verification: InsertionVerification
     /// Prose for a human — the real `AXError`, or what the ladder tried.
     public let error: String?
     /// The same failure the app can branch on. `nil` on success. Added in
@@ -64,12 +77,14 @@ public struct InsertionOutcome: Sendable, Equatable {
     public init(
         tier: InsertTier,
         ok: Bool,
+        verification: InsertionVerification = .notPossible,
         error: String?,
         reason: InsertDeclineReason? = nil,
         frontmost: FrontmostAppInfo? = nil
     ) {
         self.tier = tier
         self.ok = ok
+        self.verification = verification
         self.error = error
         self.reason = reason
         self.frontmost = frontmost
@@ -111,10 +126,27 @@ public enum AXSelectedTextGate {
     }
 }
 
+/// What one rung of the ladder has to say for itself.
+///
+/// Four cases rather than two, and the distinction between the first two is the
+/// point: **`.succeeded` means "I did my work", `.confirmed` means "and I have
+/// evidence it arrived".** Before BUG-1 there was only `.succeeded`, and the
+/// Unicode tier returned it unconditionally the moment `CGEvent.post` had been
+/// called — which is a statement about this process, not about the target.
 public enum TierAttempt: Sendable, Equatable {
+    /// The tier did its work; nothing here can tell whether the text landed.
+    /// Reported to the app as `ok: true, verified: null` — "typed, unconfirmed".
     case succeeded
+    /// The tier did its work and verified the result against the target: the
+    /// caret moved (AX), or the focused element's text grew (Unicode).
+    case confirmed
+    /// The tier did its work, verification ran, and it proved the text is not
+    /// there. Only the Unicode tier can produce this — the AX tier reads back
+    /// *before* the fall-through, so its "did not land" is a `.failed` that the
+    /// ladder answers by trying the next rung, and it stays that way.
+    case notLanded(reason: String)
     /// Carries real diagnostic text — for the AX tier, the actual `AXError`,
-    /// which is what settles 
+    /// which is what settles
     case failed(reason: String)
 }
 
@@ -127,7 +159,16 @@ public protocol AccessibilityInserting: AnyObject {
 }
 
 public protocol UnicodeInserting: AnyObject {
-    func typeText(_ text: String) -> TierAttempt
+    /// `app` is the frontmost application the ladder already resolved, passed in
+    /// for the same reasons the AX tier gets it — the tier acts on exactly the
+    /// app the target check approved, and verification needs the pid to reach
+    /// the focused element (`AXUIElementCreateApplication(pid)`, the route
+    /// Phase 2 measured as the only one that works on macOS 26).
+    ///
+    /// The parameter arrived with BUG-1. Injection itself does not need it and
+    /// still does not use it: synthetic key events go wherever focus is, which
+    /// is why this tier works in applications the AX tier cannot reach at all.
+    func typeText(_ text: String, into app: FrontmostAppInfo) -> TierAttempt
 }
 
 public protocol FrontmostAppProviding: AnyObject {
@@ -234,19 +275,75 @@ public final class InsertionLadder: InsertionPerforming {
             log(.info, "AX tier skipped for \(bundleId) by configuration")
         } else {
             switch accessibility.insertSelectedText(text, into: current) {
+            case .confirmed:
+                return InsertionOutcome(
+                    tier: .ax,
+                    ok: true,
+                    verification: .confirmed,
+                    error: nil,
+                    frontmost: current
+                )
             case .succeeded:
+                // Reachable only with `GROK_DICTATE_AX_VERIFY=0`, which trusts
+                // the return code the way the tier did before Phase 5. The
+                // outcome is still `ok: true` — that is what the flag is for —
+                // but it must not claim `verified`, or switching verification
+                // off would quietly restore the Arc bug *and* the green pill.
                 return InsertionOutcome(tier: .ax, ok: true, error: nil, frontmost: current)
-            case let .failed(reason):
+            case let .notLanded(reason), let .failed(reason):
+                // The AX tier's own "did not land" is a decline: it read the
+                // caret back *before* anything else ran, so falling through to
+                // Unicode is safe and is what recovers the text. Folded in here
+                // rather than given a branch of its own, because treating it as
+                // terminal would delete the recovery path the Arc fix relies on.
                 reasons.append("AX: \(reason)")
                 log(.info, "AX tier declined, falling through to Unicode injection — \(reason)")
             }
         }
 
-        switch unicode.typeText(text) {
+        switch unicode.typeText(text, into: current) {
+        case .confirmed:
+            return InsertionOutcome(
+                tier: .unicode,
+                ok: true,
+                verification: .confirmed,
+                error: nil,
+                frontmost: current
+            )
         case .succeeded:
-            // `ok: true` here means "posted", not "landed" (contract §2). The
-            // app shows the full transcript so a partial injection is visible.
+            // `ok: true` here means "posted", not "landed" (contract §2): this
+            // target exposes no readable text length, or focus could not be
+            // resolved. The app presents it as "typed, unconfirmed" and shows
+            // the full transcript, so a partial injection stays recoverable.
             return InsertionOutcome(tier: .unicode, ok: true, error: nil, frontmost: current)
+        case let .notLanded(reason):
+            // BUG-1, reported honestly. `tier: .unicode` rather than `.none`
+            // because the events really were posted — something may be on
+            // screen, so this is not the "nothing was attempted" case — and
+            // `ok: false` because the one thing we know is that the text is not
+            // where the user wanted it. That pair is what fires the app's
+            // existing not-inserted HUD, its error cue and its re-insert path.
+            let target = current.name ?? current.bundleId ?? "the frontmost application"
+            // At `info`, and paired with the tier's own `warn` — the same split
+            // the AX tier already uses. The diagnosis of the other application
+            // belongs to whoever measured it; this line only records what the
+            // ladder decided to do about it.
+            log(
+                .info,
+                "Unicode injection did not land in \(target) — \(reason). Reporting it as not "
+                    + "inserted; the transcript is still in the app"
+            )
+            return InsertionOutcome(
+                tier: .unicode,
+                ok: false,
+                verification: .provenNotLanded,
+                error:
+                    "the text was typed into \(target) but did not arrive — \(reason). "
+                    + "It is still in the app — copy it from the pill, or point somewhere else and "
+                    + "press Ctrl+Cmd+V.",
+                reason: .verificationFailed,
+                frontmost: current
+            )
         case let .failed(reason):
             reasons.append("Unicode: \(reason)")
         }

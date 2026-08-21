@@ -47,10 +47,19 @@ struct ClipboardContainmentTests {
     @Test("no insertion path writes the clipboard")
     func noInsertionPathWritesTheClipboard() {
         let outcomes: [(String, TierAttempt, TierAttempt, String?)] = [
-            ("ax succeeds", .succeeded, .succeeded, "com.apple.Notes"),
-            ("unicode succeeds", .failed(reason: "no"), .succeeded, "com.apple.Notes"),
+            ("ax confirmed", .confirmed, .succeeded, "com.apple.Notes"),
+            ("ax unverified", .succeeded, .succeeded, "com.apple.Notes"),
+            ("unicode confirmed", .failed(reason: "no"), .confirmed, "com.apple.Notes"),
+            ("unicode unverified", .failed(reason: "no"), .succeeded, "com.apple.Notes"),
+            // The BUG-1 branch, and the one most likely to attract a helpful
+            // "well, at least put it on the clipboard" later: it is the only
+            // path where the helper knows for a fact the text did not arrive.
+            (
+                "unicode proven not landed", .failed(reason: "no"),
+                .notLanded(reason: "the field did not change"), "com.apple.Notes"
+            ),
             ("both fail", .failed(reason: "no"), .failed(reason: "no"), "com.apple.Notes"),
-            ("target moved", .succeeded, .succeeded, "com.microsoft.VSCode"),
+            ("target moved", .confirmed, .succeeded, "com.microsoft.VSCode"),
             ("no target check", .failed(reason: "no"), .failed(reason: "no"), nil),
         ]
 

@@ -1,6 +1,6 @@
 # Contract — Helper protocol
 
-**Status: frozen at the end of Phase 1, reopened by Phase 5** (IMPLEMENTATION-PLAN.md §2). Phases 2–4 built against it exactly and requested no change to it; Phase 5 made one, described under `insert_result`.
+**Status: frozen at the end of Phase 1, reopened by Phase 5, reopened again for BUG-1** (IMPLEMENTATION-PLAN.md §2). Phases 2–4 built against it exactly and requested no change to it. Two changes have been made since, both to `insert_result` and both described there: Phase 5 added `reason`, and BUG-1 added `verified` and the `verification_failed` decline. Both are additive and `nullish`, so an older build on either side of the wire keeps parsing.
 
 Machine-readable form: [`helper-protocol.ts`](./helper-protocol.ts). Where the two disagree, the `.ts` file wins — it is what the code parses with.
 
@@ -114,6 +114,7 @@ a running app is enough, with no restart.
   "id": "<uuid>",
   "tier": "ax",
   "ok": true,
+  "verified": true,
   "error": null,
   "reason": null,
 }
@@ -121,24 +122,41 @@ a running app is enough, with no restart.
 
 Answers exactly one `insert`, echoing its `id`.
 
-`reason` is a **Phase 5 addition** and the one change made to this contract after Phase 1. `error` is prose written for a human, so the app had no way to distinguish "focus moved to another application" from "neither tier worked" — and showed the wrong, unactionable advice for exactly the case exists to handle. `NotInsertedReason.target_changed` had sat in `contracts/events.ts` since Phase 1 with nothing anywhere able to produce it.
+#### `verified` — did the text actually arrive?
 
-| `reason`         | Means                                              |
-| ---------------- | -------------------------------------------------- |
-| `target_changed` | The frontmost app is no longer `targetBundleId`.   |
-| `empty_text`     | There was nothing to insert.                       |
-| `no_tier`        | AX declined and Unicode injection failed.          |
-| `null` / absent  | Success, or a failure the helper did not classify. |
+**A BUG-1 addition, and the second change made to this contract after Phase 1.**
+
+| `verified`      | Means                                                                                                                  |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `true`          | The helper **confirmed** the text landed — `ax`: the caret moved; `unicode`: the target's text grew by what was typed. |
+| `false`         | Verification ran and **proved nothing landed**. Always accompanied by `ok:false` and `reason:"verification_failed"`.   |
+| `null` / absent | Verification was not possible for this target, or the frame came from an older helper build.                           |
+
+The invariant everything else rests on: **`ok:true` with `verified` not `true` means "typed, unconfirmed"**, and the app must stop presenting that as plain success. It is optional on the wire for the same backward-compatibility reason as `reason`; this helper always sends the key, using `null` for "not possible", because "this build cannot tell you" and "this target cannot be measured" are the same claim from the app's side.
+
+> **Why it exists.** 2026-08-09: a 60.3 s hands-free dictation into `cmux` (Electron + xterm.js). The ladder correctly refused the AX tier — a terminal reports `kAXSelectedTextAttribute` as not settable — and the Unicode tier posted 760 UTF-16 units as **38 synthetic key events inside ~245 ms**. cmux dropped the burst. `CGEvent.post` has no return channel, so the tier reported "posted", the ladder mapped that to `ok:true`, the HUD showed a green "Inserted" pill, no error cue played, and history recorded `inserted:true`. The user lost a minute of dictation and recovered it by hand through History → Copy. Three earlier insertions into the same application that day — 42, 49 and 79 units — had landed, which is why nothing looked wrong until it was.
+
+`reason` is a **Phase 5 addition** and the first of the two changes made to this contract after Phase 1. `error` is prose written for a human, so the app had no way to distinguish "focus moved to another application" from "neither tier worked" — and showed the wrong, unactionable advice for exactly the case exists to handle. `NotInsertedReason.target_changed` had sat in `contracts/events.ts` since Phase 1 with nothing anywhere able to produce it.
+
+| `reason`              | Means                                                                                                                         |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `target_changed`      | The frontmost app is no longer `targetBundleId`.                                                                              |
+| `empty_text`          | There was nothing to insert.                                                                                                  |
+| `no_tier`             | AX declined and Unicode injection failed.                                                                                     |
+| `verification_failed` | Unicode events were posted but the target's text did not change. Sent with `ok:false`, `verified:false` and `tier:"unicode"`. |
+| `null` / absent       | Success, or a failure the helper did not classify.                                                                            |
+
+`verification_failed` keeps `tier:"unicode"` rather than falling back to `"none"`: the events really were posted, so this is not the "nothing was attempted" case — something may yet be on screen, and `none`'s promise that the clipboard was not touched is not the claim being made here. `ok:false` is, and it is what fires the app's not-inserted HUD, its error cue and its re-insert path.
 
 It is optional on the wire (`nullish`), so an older helper binary still parses; the app treats an absent value as "not stated" and falls back to its own knowledge of the request.
 
 `frontmostBundleId` / `frontmostName` are the application the ladder actually acted on, and are also a Phase 5 addition. They exist because the app stopped sending `targetBundleId` — the text now goes wherever the user is pointing when the turn ends (`state-machine.md` §6), so the app no longer knows which application received it, and a history row built from the press-time value would name the wrong one. Both are `nullish` for the same backward-compatibility reason, and are `null` when the ladder declined before resolving the frontmost app.
 
-| `tier`    | Means                                                                                                                                                                                                                  |
-| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ax`      | Handled by `AXUIElementSetAttributeValue` on `kAXSelectedTextAttribute`, **and confirmed by reading the caret back** — see §3. Still the only tier whose `ok` is trustworthy, but no longer because of the error code. |
-| `unicode` | Handled by `CGEventKeyboardSetUnicodeString`. `ok:true` means _the events were posted_, not that the characters landed. It can half-succeed silently — which is why the HUD shows the full transcript.                 |
-| `none`    | Neither tier would take it. `ok` is `false`. **The clipboard has not been touched.**                                                                                                                                   |
+| `tier`    | Means                                                                                                                                                                                                                                                                                        |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ax`      | Handled by `AXUIElementSetAttributeValue` on `kAXSelectedTextAttribute`, **and confirmed by reading the caret back** — see §3. Reports `verified:true`; `verified:null` only when `GROK_DICTATE_AX_VERIFY=0` turned the read-back off.                                                       |
+| `unicode` | Handled by `CGEventKeyboardSetUnicodeString`. Posting proves nothing, so the tier measures the target's text length around the injection and reports `verified` `true`, `false` or `null` — see §3. `ok:true, verified:null` is "typed, unconfirmed", and the HUD shows the full transcript. |
+| `none`    | Neither tier would take it. `ok` is `false`. **The clipboard has not been touched.**                                                                                                                                                                                                         |
 
 `error` carries real diagnostic text — for the `ax` tier, the actual `AXError` value, which is what settles
 
@@ -179,7 +197,18 @@ Run the insertion ladder. `id` must be unique per request; the helper answers wi
 
    > **A third, from Phase 5: the `AXError` is not evidence.** Arc's web content (`company.thebrowser.Browser`) reports the attribute as settable, returns `kAXErrorSuccess`, and discards the write — 13.8 s of dictation, an 11 ms insert, a green "Inserted" pill and nothing on screen. So the tier now reads `kAXSelectedTextRange` immediately before and immediately after the write and requires the caret to have moved forward. If it did not move, or if either read fails, the tier **declines** and the ladder falls through to Unicode injection: a false decline costs ~140 ms, a missed lie costs the user their words. The before-read happens before the write, so an element that cannot be verified is never written to and the fall-through cannot duplicate text. `native/Sources/HelperCore/AXWriteVerification.swift` carries the reasoning; `--probe-ax` prints every input to the decision for any app you point it at.
 
-2. **Unicode injection** — `CGEventKeyboardSetUnicodeString`, chunked at ~20 UTF-16 units with a tuned inter-chunk delay.
+2. **Unicode injection** — `CGEventKeyboardSetUnicodeString`, chunked at ~20 UTF-16 units, **paced by length**, and **verified by measuring the target's text length**.
+
+   > **Pacing, from BUG-1.** The delay between events is 5 ms up to 200 UTF-16 units and 15 ms above it. A flat 5 ms was what turned 760 units into 38 events inside 245 ms, which `cmux` dropped in full; the three insertions that landed in the same application the same day were 3–4 events each. The chunk size is deliberately _not_ reduced — halving it would double the event count and lengthen the burst, and 20 units is what Phase 2 measured landing byte-identically in six applications. Both numbers are chosen, not measured; `GROK_DICTATE_INJECT_DELAY_MS` overrides them and remains the way to sweep the value against a real application without a rebuild.
+   >
+   > **Verification, from BUG-1.** Immediately before posting, the helper reads the focused element's text length — `kAXNumberOfCharacters`, or the length of `kAXValue` — and its selected range. After posting it polls that same attribute on that same element for up to 200 ms. It reports `verified:true` if the length grew by at least what was typed, `verified:false` if the length did not change at all, and `verified:null` otherwise. Terminals and most text views expose this even when `kAXSelectedTextAttribute` is not settable: refusing to be written to and refusing to be read are different refusals, and the AX tier's decline says nothing about the second.
+   >
+   > **What it cannot do, stated honestly.** A target that exposes no readable length, or whose focused element cannot be resolved, is never verified — the frame says `verified:null` and the app shows "typed, unconfirmed" rather than a failure. A _partial_ delta is also `null`: some characters arrived, which is neither a clean success nor grounds for telling the user nothing did. Text typed over a selection at least as long as itself does not grow the field, so it cannot be verified either. And `false` is deliberately hard to reach — the length must have been read successfully before and after, must be unchanged, and the element must still be the focused one — because a false "not inserted" would fire an error cue over text that is on screen and invite a ⌃⌘V that types it twice. `GROK_DICTATE_INJECT_VERIFY=0` disables the check; that restores BUG-1's silent success and exists only so a target it gets wrong can be isolated in one session.
+   >
+   > The one shape that would make `false` wrong is a target whose text length is constant by construction — a terminal reporting a fixed screen grid padded with blanks, where typed characters replace blanks rather than adding to the count. None has been observed, and a single insertion cannot tell one apart from an application that really is dropping the text.
+   >
+   > Verification adds two AX round trips on the path where the text landed, and is bounded by construction at ~300 ms — 100 ms for the element resolution and reads before typing, 200 ms of polling after, with every read's messaging timeout clamped to what is left of its half. The `verified:false` path alone spends one more resolution (≤ 100 ms) confirming focus did not move mid-injection, because that is the only verdict that tells the user their dictation is missing.
+
 3. **Neither** → `tier:"none"`, `ok:false`. **Do not touch the clipboard.**
 
 ### `copy`

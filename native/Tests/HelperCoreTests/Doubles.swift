@@ -37,13 +37,19 @@ final class StubAccessibilityInserter: AccessibilityInserting {
 final class StubUnicodeInserter: UnicodeInserting {
     var result: TierAttempt
     private(set) var calls: [String] = []
+    /// The app the ladder handed over. Asserted for the same reason the AX
+    /// stub's is: since BUG-1 this tier reads the target's text length back, and
+    /// verifying a *different* application than the one that was typed into
+    /// would be worse than not verifying at all.
+    private(set) var targets: [FrontmostAppInfo] = []
 
     init(result: TierAttempt) {
         self.result = result
     }
 
-    func typeText(_ text: String) -> TierAttempt {
+    func typeText(_ text: String, into app: FrontmostAppInfo) -> TierAttempt {
         calls.append(text)
+        targets.append(app)
         return result
     }
 }
@@ -91,11 +97,14 @@ final class FrameRecorder {
     }
 
     func insertResults()
-        -> [(id: String, tier: InsertTier, ok: Bool, error: String?, reason: InsertDeclineReason?)]
+        -> [(
+            id: String, tier: InsertTier, ok: Bool, verified: Bool?, error: String?,
+            reason: InsertDeclineReason?
+        )]
     {
         frames.compactMap {
-            if case let .insertResult(id, tier, ok, error, reason, _, _) = $0 {
-                return (id, tier, ok, error, reason)
+            if case let .insertResult(id, tier, ok, verified, error, reason, _, _) = $0 {
+                return (id, tier, ok, verified, error, reason)
             }
             return nil
         }

@@ -118,6 +118,21 @@ final class HelperApp {
             )
         }
 
+        if !settings.verifyUnicodeWrites {
+            // Same reasoning as the line above, for the other half of BUG-1: run
+            // this way and a target that drops a long injection is reported as a
+            // plain success again, which is the state the incident was in.
+            emit(
+                .log(
+                    level: .warn,
+                    message:
+                        "GROK_DICTATE_INJECT_VERIFY is off — injected text will be reported as "
+                        + "inserted without checking that it arrived, so an app that drops it "
+                        + "loses the dictation silently"
+                )
+            )
+        }
+
         reportPermissions()
         installTap()
         publishPermissionsIfChanged()

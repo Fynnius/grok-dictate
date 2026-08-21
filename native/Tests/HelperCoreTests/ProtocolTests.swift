@@ -30,7 +30,7 @@ struct FrameEncodingTests {
             .secureInput(enabled: true),
             .frontmost(bundleId: "com.apple.Notes", name: "Notes", id: nil),
             .insertResult(
-                id: "abc", tier: .ax, ok: true, error: nil, reason: nil,
+                id: "abc", tier: .ax, ok: true, verified: true, error: nil, reason: nil,
                 frontmostBundleId: nil, frontmostName: nil
             ),
             .log(level: .warn, message: "hello"),
@@ -92,6 +92,7 @@ struct FrameEncodingTests {
                 id: "c",
                 tier: .none,
                 ok: false,
+                verified: nil,
                 error: "focus moved to Safari",
                 reason: .targetChanged,
                 frontmostBundleId: "com.apple.Safari",
@@ -109,7 +110,7 @@ struct FrameEncodingTests {
     func insertResultNullError() throws {
         let object = try decode(
             .insertResult(
-                id: "b", tier: .unicode, ok: true, error: nil, reason: nil,
+                id: "b", tier: .unicode, ok: true, verified: nil, error: nil, reason: nil,
                 frontmostBundleId: nil, frontmostName: nil
             )
         )
@@ -118,6 +119,67 @@ struct FrameEncodingTests {
         #expect(object["ok"] as? Bool == true)
         #expect(object["error"] is NSNull)
         #expect(object["reason"] is NSNull)
+    }
+
+    @Test("insert_result says whether the text was confirmed to have landed")
+    func insertResultVerified() throws {
+        // The BUG-1 field. `ok: true` with `verified` anything but `true` means
+        // "typed, unconfirmed" — the state the app stops showing as plain
+        // success, and the state the incident had no way to express: 60.3 s of
+        // dictation posted into a terminal, dropped in full, reported as a green
+        // "Inserted" pill.
+        let confirmed = try decode(
+            .insertResult(
+                id: "a", tier: .ax, ok: true, verified: true, error: nil, reason: nil,
+                frontmostBundleId: nil, frontmostName: nil
+            )
+        )
+        #expect(confirmed["verified"] as? Bool == true)
+
+        let unconfirmed = try decode(
+            .insertResult(
+                id: "b", tier: .unicode, ok: true, verified: nil, error: nil, reason: nil,
+                frontmostBundleId: nil, frontmostName: nil
+            )
+        )
+        // Null rather than absent: the app parses it with Zod's `.nullish()`,
+        // which takes both, and a field that is always present is one less shape
+        // to reason about when reading NDJSON by eye (contract §5).
+        #expect(unconfirmed["verified"] is NSNull)
+
+        let refuted = try decode(
+            .insertResult(
+                id: "c", tier: .unicode, ok: false, verified: false,
+                error: "the text was typed into cmux but did not arrive",
+                reason: .verificationFailed,
+                frontmostBundleId: "dev.cmux.app", frontmostName: "cmux"
+            )
+        )
+        #expect(refuted["verified"] as? Bool == false)
+        #expect(refuted["ok"] as? Bool == false)
+        #expect(refuted["reason"] as? String == "verification_failed")
+        // The tier stays `unicode`: the events were posted, so this is not the
+        // "nothing was attempted, the clipboard is untouched" case that `none`
+        // means (contract §2).
+        #expect(refuted["tier"] as? String == "unicode")
+    }
+
+    @Test("the decline reasons are spelled exactly as the contract writes them")
+    func declineReasonSpellings() {
+        #expect(InsertDeclineReason.targetChanged.rawValue == "target_changed")
+        #expect(InsertDeclineReason.emptyText.rawValue == "empty_text")
+        #expect(InsertDeclineReason.noTier.rawValue == "no_tier")
+        #expect(InsertDeclineReason.verificationFailed.rawValue == "verification_failed")
+    }
+
+    @Test("the three verification states map onto true, false and null")
+    func verificationWireValues() {
+        #expect(InsertionVerification.confirmed.wireValue == true)
+        #expect(InsertionVerification.provenNotLanded.wireValue == false)
+        // Deliberately the same value an older helper build produces by not
+        // sending the field at all: "this build cannot tell you" and "this
+        // target cannot be measured" are the same claim from the app's side.
+        #expect(InsertionVerification.notPossible.wireValue == nil)
     }
 
     @Test("a transcript containing newlines and quotes stays on one line")

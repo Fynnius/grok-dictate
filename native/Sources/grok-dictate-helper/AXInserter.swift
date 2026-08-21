@@ -84,7 +84,7 @@ final class AXInserter: AccessibilityInserting {
         if let processId = app.processId {
             let application = AXUIElementCreateApplication(processId)
             AXUIElementSetMessagingTimeout(application, Self.messagingTimeout)
-            switch focusedElement(of: application) {
+            switch copyFocusedElement(of: application) {
             case let .success(element):
                 return write(text, to: element, in: app, route: "application element")
             case let .failure(reason):
@@ -96,7 +96,7 @@ final class AXInserter: AccessibilityInserting {
 
         let systemWide = AXUIElementCreateSystemWide()
         AXUIElementSetMessagingTimeout(systemWide, Self.messagingTimeout)
-        switch focusedElement(of: systemWide) {
+        switch copyFocusedElement(of: systemWide) {
         case let .success(element):
             return write(text, to: element, in: app, route: "system-wide element")
         case let .failure(reason):
@@ -104,30 +104,6 @@ final class AXInserter: AccessibilityInserting {
         }
 
         return .failed(reason: "no focused element (\(failures.joined(separator: "; ")))")
-    }
-
-    private enum FocusedElement {
-        case success(AXUIElement)
-        case failure(String)
-    }
-
-    private func focusedElement(of root: AXUIElement) -> FocusedElement {
-        var focusedValue: CFTypeRef?
-        let copyError = AXUIElementCopyAttributeValue(
-            root,
-            kAXFocusedUIElementAttribute as CFString,
-            &focusedValue
-        )
-        guard copyError == .success, let focusedValue else {
-            return .failure("kAXFocusedUIElementAttribute returned \(describe(copyError))")
-        }
-        // Type-check before converting. A force cast here would turn a
-        // surprising return value into a crash, and a crashed helper is a dead
-        // hotkey.
-        guard CFGetTypeID(focusedValue) == AXUIElementGetTypeID() else {
-            return .failure("the focused element is not an AXUIElement")
-        }
-        return .success(unsafeBitCast(focusedValue, to: AXUIElement.self))
     }
 
     private func write(
@@ -201,7 +177,9 @@ final class AXInserter: AccessibilityInserting {
         }
 
         // `GROK_DICTATE_AX_VERIFY=0`: the pre-Phase-5 behaviour, trusting the
-        // return code. Kept only so the check can be bisected.
+        // return code. Kept only so the check can be bisected. `.succeeded`, not
+        // `.confirmed` — nothing was read back, so the frame must say
+        // `verified: null` and let the app show "typed, unconfirmed".
         guard let caretBefore else { return .succeeded }
 
         var caretAfter: AXSelectedRange?
@@ -216,7 +194,11 @@ final class AXInserter: AccessibilityInserting {
             after: caretAfter,
             insertedUTF16Count: text.utf16.count
         )
-        if AXWriteVerification.trustsWrite(verdict) { return .succeeded }
+        // The caret moved, so the text is in there and the frame may say so:
+        // this is the tier the contract has always called trustworthy, and since
+        // BUG-1 it says *why* it is trustworthy rather than asking to be taken
+        // on faith.
+        if AXWriteVerification.trustsWrite(verdict) { return .confirmed }
 
         let target = app.name ?? app.bundleId ?? "the frontmost application"
         let evidence = afterReadFailure.map { "\(verdict.evidence) (\($0))" } ?? verdict.evidence
@@ -247,6 +229,37 @@ final class AXInserter: AccessibilityInserting {
         )
         return .failed(reason: "via the \(route), the write could not be confirmed — \(evidence)")
     }
+}
+
+enum AXFocusedElementRead {
+    case success(AXUIElement)
+    case failure(String)
+}
+
+/// `kAXFocusedUIElementAttribute` on whichever root is handed in.
+///
+/// File-scope and shared for the same reason `copySelectedRange` below is: since
+/// BUG-1 the Unicode tier resolves the focused element too, in order to read its
+/// text length around an injection, and it has to reach *the same* element the
+/// AX tier would have written to. Two copies of this unpacking would be two
+/// things to get wrong, and a verification pointed at a different element than
+/// the insertion would be worse than no verification at all.
+func copyFocusedElement(of root: AXUIElement) -> AXFocusedElementRead {
+    var focusedValue: CFTypeRef?
+    let copyError = AXUIElementCopyAttributeValue(
+        root,
+        kAXFocusedUIElementAttribute as CFString,
+        &focusedValue
+    )
+    guard copyError == .success, let focusedValue else {
+        return .failure("kAXFocusedUIElementAttribute returned \(describe(copyError))")
+    }
+    // Type-check before converting. A force cast here would turn a surprising
+    // return value into a crash, and a crashed helper is a dead hotkey.
+    guard CFGetTypeID(focusedValue) == AXUIElementGetTypeID() else {
+        return .failure("the focused element is not an AXUIElement")
+    }
+    return .success(unsafeBitCast(focusedValue, to: AXUIElement.self))
 }
 
 enum AXRangeRead {

@@ -16,9 +16,17 @@ import HelperCore
 struct Settings {
     /// UTF-16 units per `CGEventKeyboardSetUnicodeString` call.
     let injectChunkUnits: Int
-    /// Pause between chunks. Zero is legal and fastest; raise it if a target
-    /// app drops characters.
+    /// Pause between chunks, for text short enough not to need pacing. Zero is
+    /// legal and fastest; raise it if a target app drops characters.
+    ///
+    /// Since BUG-1 this is a *baseline*, not the delay: above
+    /// `InjectionPacer.longTextThresholdUTF16Units` the tier slows itself down,
+    /// because a flat 5 ms burst of 38 events is what cmux dropped.
     let injectDelay: TimeInterval
+    /// `GROK_DICTATE_INJECT_DELAY_MS` was set and parsed. Only then does the
+    /// value above override the length rule — a typo must not silently restore
+    /// the timing that lost a minute of dictation. See `InjectionPacer`.
+    let injectDelayIsExplicit: Bool
     /// Where injected events enter the system.
     ///
     /// `.cghidEventTap` puts them in at the HID level, which is what the
@@ -51,28 +59,48 @@ struct Settings {
     /// be bisected against a real application in one session — "is this app
     /// broken, or is my verification wrong?" is otherwise a rebuild away.
     let verifyAXWrites: Bool
+    /// Measure the focused element's text length around a Unicode injection and
+    /// report whether the text actually arrived (`UnicodeWriteVerification`).
+    /// **On by default**, for the same reason as `verifyAXWrites`: switching it
+    /// off restores BUG-1's silent data loss rather than changing a timing. It
+    /// exists so a target that verification gets *wrong* can be isolated in one
+    /// session instead of one rebuild — if this ever reports "not inserted" over
+    /// text that is plainly on screen, this is the switch that proves it.
+    let verifyUnicodeWrites: Bool
     /// Skip installing the event tap. Used by the TypeScript conformance test
     /// for the same reason as `promptForAccessibility`: attempting to create a
     /// tap without Input Monitoring can raise a TCC prompt, and a test run that
     /// can put a modal on screen is a test run that can hang.
     let installTap: Bool
 
+    /// What the injection loop is handed before length is taken into account.
+    /// See `InjectionPacer.pacing(forUTF16Count:baseline:)`.
+    var injectionBaseline: InjectionPacer.Baseline {
+        InjectionPacer.Baseline(
+            chunkUnits: injectChunkUnits,
+            interChunkDelay: injectDelay,
+            delayIsExplicit: injectDelayIsExplicit
+        )
+    }
+
     static func fromEnvironment(_ environment: [String: String] = ProcessInfo.processInfo.environment)
         -> Settings
     {
-        Settings(
+        let injectDelay = msSetting(
+            environment["GROK_DICTATE_INJECT_DELAY_MS"],
+            default: 5,
+            minimum: 0,
+            maximum: 250
+        )
+        return Settings(
             injectChunkUnits: intValue(
                 environment["GROK_DICTATE_INJECT_CHUNK"],
                 default: TextChunker.defaultMaxUTF16Units,
                 minimum: 1,
                 maximum: 4096
             ),
-            injectDelay: msValue(
-                environment["GROK_DICTATE_INJECT_DELAY_MS"],
-                default: 5,
-                minimum: 0,
-                maximum: 250
-            ),
+            injectDelay: injectDelay.value,
+            injectDelayIsExplicit: injectDelay.isExplicit,
             injectTap: environment["GROK_DICTATE_INJECT_TAP"]?.lowercased() == "session"
                 ? .cgAnnotatedSessionEventTap
                 : .cghidEventTap,
@@ -103,6 +131,7 @@ struct Settings {
                     .filter { !$0.isEmpty }
             ),
             verifyAXWrites: !isFalsy(environment["GROK_DICTATE_AX_VERIFY"]),
+            verifyUnicodeWrites: !isFalsy(environment["GROK_DICTATE_INJECT_VERIFY"]),
             installTap: !isTruthy(environment["GROK_DICTATE_HELPER_NO_TAP"])
         )
     }
@@ -140,9 +169,27 @@ struct Settings {
         minimum: Double,
         maximum: Double
     ) -> TimeInterval {
+        msSetting(raw, default: fallbackMs, minimum: minimum, maximum: maximum).value
+    }
+
+    /// The same parse, plus whether the environment actually supplied the value.
+    ///
+    /// Only `GROK_DICTATE_INJECT_DELAY_MS` needs the second half, and it needs
+    /// it because it is now an *override* rather than a default: `isExplicit` is
+    /// false for an unset variable and equally false for `"fifteen"` or `"900"`,
+    /// so a mistyped escape hatch leaves the adaptive pacing in place instead of
+    /// silently reinstating the flat 5 ms burst BUG-1 is about. Same principle
+    /// as `isFalsy` above — an unrecognised value never turns a safe behaviour
+    /// off.
+    private static func msSetting(
+        _ raw: String?,
+        default fallbackMs: Double,
+        minimum: Double,
+        maximum: Double
+    ) -> (value: TimeInterval, isExplicit: Bool) {
         guard let raw, let value = Double(raw), value >= minimum, value <= maximum else {
-            return fallbackMs / 1000
+            return (fallbackMs / 1000, false)
         }
-        return value / 1000
+        return (value / 1000, true)
     }
 }
