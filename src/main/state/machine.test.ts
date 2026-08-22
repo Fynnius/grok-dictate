@@ -589,6 +589,69 @@ describe('Secure Input (contract §8, )', () => {
     expect(snapshot.state).toBe('blocked');
     expect(histories(all)).toHaveLength(1);
   });
+
+  /**
+   * Secure Input arrives on focus, not on intent — and for a menu-bar app that
+   * is usually somebody signing in to something with no thought of dictating.
+   * §8's "refusing visibly is the entire point" is about refusing a *request*;
+   * until one arrives there is nothing to refuse and nothing to say.
+   */
+  describe('announces itself on intent, not on focus', () => {
+    it('says nothing on screen when a password field merely takes focus', () => {
+      const { snapshot, effects } = run([{ type: 'SECURE_INPUT', enabled: true }]);
+      expect(snapshot.state).toBe('blocked');
+      expect(huds(effects)).toHaveLength(0);
+      // The tray icon still turns: ambient, not interrupting.
+      expect(kinds(effects)).toContain('tray');
+    });
+
+    it('refuses a press loudly once the user does ask', () => {
+      const env = testEnv();
+      const quiet = run([{ type: 'SECURE_INPUT', enabled: true }], env);
+      const refused = reduce(quiet.snapshot, { type: 'PTT_DOWN', ts: 1 }, env);
+      expect(huds(refused.effects)[0]?.view).toEqual({ kind: 'blocked' });
+      expect(refused.effects).toContainEqual({ type: 'cue', cue: 'error' });
+      expect(kinds(refused.effects)).not.toContain('start_capture');
+    });
+
+    it('still announces itself when it interrupts a dictation in flight', () => {
+      const { effects } = run([
+        { type: 'PTT_DOWN', ts: 1 },
+        { type: 'SECURE_INPUT', enabled: true },
+      ]);
+      expect(huds(effects)[0]?.view).toEqual({ kind: 'blocked' });
+    });
+
+    it('leaves a pill that is already on screen alone, coming and going', () => {
+      const env = testEnv();
+      const dictated = run(HAPPY, env);
+      const throughAPasswordField = run(
+        [
+          { type: 'SECURE_INPUT', enabled: true },
+          { type: 'SECURE_INPUT', enabled: false },
+        ],
+        env,
+        dictated.snapshot,
+      );
+      // Nothing shown on the way in, nothing hidden on the way out — the
+      // transcript survives a trip through a password field.
+      expect(huds(throughAPasswordField.all)).toHaveLength(0);
+      expect(throughAPasswordField.snapshot.state).toBe('idle');
+    });
+
+    it('dismisses its own pill when Secure Input clears', () => {
+      const env = testEnv();
+      const refused = run(
+        [
+          { type: 'SECURE_INPUT', enabled: true },
+          { type: 'PTT_DOWN', ts: 1 },
+        ],
+        env,
+      );
+      const cleared = reduce(refused.snapshot, { type: 'SECURE_INPUT', enabled: false }, env);
+      expect(huds(cleared.effects)[0]?.view).toEqual({ kind: 'hidden' });
+    });
+  });
 });
 
 describe('superseded sessions (pipeline.rs:50-63)', () => {

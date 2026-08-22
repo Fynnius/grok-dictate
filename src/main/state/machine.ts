@@ -106,6 +106,17 @@ export interface SessionContext {
   readonly lastTranscript: string | null;
   readonly pendingStart: boolean;
   readonly secureInput: boolean;
+  /**
+   * Whether the blocked pill on screen is ours.
+   *
+   * Secure Input used to be announced the moment it arrived, from any state, so
+   * focusing a password field with no intention of dictating put a pill up —
+   * and leaving the field then blanked whatever pill had been there before it.
+   * The notice is now raised only when the user asked for something (§8), and
+   * this records whether it was, so that unblocking dismisses our own message
+   * and nobody else's.
+   */
+  readonly blockedNoticeShown: boolean;
   readonly startedAt: number | null;
   readonly elapsedMs: number;
   readonly durationSec: number | null;
@@ -160,6 +171,7 @@ export const INITIAL_CONTEXT: SessionContext = {
   lastTranscript: null,
   pendingStart: false,
   secureInput: false,
+  blockedNoticeShown: false,
   startedAt: null,
   elapsedMs: 0,
   durationSec: null,
@@ -341,7 +353,23 @@ function startSession(ctx: SessionContext, mode: SessionMode, env: MachineEnv): 
   ]);
 }
 
-/** Enter `blocked`, finalising any in-flight capture so the text is not lost (§8). */
+/**
+ * Enter `blocked`, finalising any in-flight capture so the text is not lost (§8).
+ *
+ * **The pill is raised only if the user was in the middle of something.** Secure
+ * Input turns on whenever focus lands in a password field, which for a menu-bar
+ * app is usually nothing to do with dictating: the user is signing in to
+ * something. Announcing it there put a message on screen every time they typed a
+ * password, and covered whatever was on screen before it.
+ *
+ * §8's "refusing visibly is the entire point" is about refusing a *request*, and
+ * that is unchanged — a press, a toggle or a ⌃⌘V while blocked still refuses
+ * loudly, with the pill and the error cue, in `reduceBlocked`. What is silent
+ * now is the unprompted transition from `idle`, where there is nothing to
+ * refuse yet. The tray icon still turns (ambient, not interrupting) and the warn
+ * line is still logged, because a dead hotkey is exactly what someone reading
+ * the log afterwards needs explained.
+ */
 function enterBlocked(snapshot: Snapshot): Step {
   const { state, ctx } = snapshot;
   const effects: Effect[] = [];
@@ -349,18 +377,25 @@ function enterBlocked(snapshot: Snapshot): Step {
     effects.push({ type: 'stop_capture', sessionId: ctx.sessionId });
     effects.push({ type: 'finish_stt', sessionId: ctx.sessionId });
   }
-  effects.push({ type: 'hud', view: { kind: 'blocked' } });
+  // A turn in flight is being taken away mid-sentence — that the user has to be
+  // told, and it is the one case where they did ask for something.
+  const notify = state !== 'idle';
+  if (notify) effects.push({ type: 'hud', view: { kind: 'blocked' } });
   effects.push({ type: 'tray', state: 'blocked', secureInput: true });
   effects.push({
     type: 'log',
     level: 'warn',
     message: 'Secure Input is active — the event tap is disabled system-wide',
-    fields: { previousState: state },
+    fields: { previousState: state, announced: notify },
   });
   // An insert already dispatched to the helper cannot be recalled; stay in
   // `inserting` and let the result land, which routes to `blocked` below.
   const nextState: SessionState = state === 'inserting' ? 'inserting' : 'blocked';
-  return step(nextState, { ...ctx, secureInput: true, pendingStart: false }, effects);
+  return step(
+    nextState,
+    { ...ctx, secureInput: true, pendingStart: false, blockedNoticeShown: notify },
+    effects,
+  );
 }
 
 /**
@@ -489,7 +524,9 @@ function finishInsert(
   if (ctx.secureInput) {
     effects.push({ type: 'hud', view: insertView(outcome, text, reasonWhenFailed) });
     effects.push({ type: 'tray', state: 'blocked', secureInput: true });
-    return step('blocked', { ...cleared, pendingStart: false }, effects);
+    // The insert's own pill has replaced the blocked one, so leaving Secure
+    // Input must not hide it — it carries the transcript.
+    return step('blocked', { ...cleared, pendingStart: false, blockedNoticeShown: false }, effects);
   }
 
   if (cleared.pendingStart) {
@@ -716,10 +753,24 @@ export function reduce(snapshot: Snapshot, event: SessionEvent, env: MachineEnv)
     }
     if (event.enabled) return enterBlocked(snapshot);
     if (state === 'blocked') {
-      return step('idle', { ...ctx, secureInput: false, pendingStart: false, sessionId: null }, [
-        { type: 'hud', view: { kind: 'hidden' } },
-        { type: 'tray', state: 'idle', secureInput: false },
-      ]);
+      const effects: Effect[] = [];
+      // Dismiss our own message and nobody else's. If Secure Input never
+      // interrupted anything then nothing of ours is on screen, and hiding
+      // regardless would blank a transcript the user was still reading — which
+      // is what happened every time they clicked through a password field.
+      if (ctx.blockedNoticeShown) effects.push({ type: 'hud', view: { kind: 'hidden' } });
+      effects.push({ type: 'tray', state: 'idle', secureInput: false });
+      return step(
+        'idle',
+        {
+          ...ctx,
+          secureInput: false,
+          pendingStart: false,
+          sessionId: null,
+          blockedNoticeShown: false,
+        },
+        effects,
+      );
     }
     return step(state, { ...ctx, secureInput: false }, [
       { type: 'tray', state, secureInput: false },
@@ -1105,8 +1156,10 @@ function reduceInserting(snapshot: Snapshot, event: PostSecureEvent, env: Machin
 
 function reduceBlocked(snapshot: Snapshot, event: PostSecureEvent, env: MachineEnv): Step {
   const { ctx } = snapshot;
+  // Refusing a request is loud, and stays loud: this is the path §8 is about.
+  // The pill it raises is ours, so unblocking dismisses it.
   const refuse = (what: string): Step =>
-    step('blocked', ctx, [
+    step('blocked', { ...ctx, blockedNoticeShown: true }, [
       { type: 'hud', view: { kind: 'blocked' } },
       { type: 'cue', cue: 'error' },
       { type: 'log', level: 'warn', message: `${what} refused: Secure Input is active` },
@@ -1148,7 +1201,16 @@ function reduceBlocked(snapshot: Snapshot, event: PostSecureEvent, env: MachineE
       if (text.length === 0) return step('blocked', { ...withDuration, sessionId: null }, []);
       return step(
         'blocked',
-        { ...withDuration, sessionId: null, lastTranscript: text, committed: [], interim: '' },
+        {
+          ...withDuration,
+          sessionId: null,
+          lastTranscript: text,
+          committed: [],
+          interim: '',
+          // The transcript pill below replaces the blocked one; unblocking must
+          // not take the text off screen with it.
+          blockedNoticeShown: false,
+        },
         [
           {
             type: 'history_append',
