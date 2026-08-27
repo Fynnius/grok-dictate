@@ -34,19 +34,17 @@ cd "$(dirname "$0")/.."
 
 STAGED="release/mac-arm64/Grok Dictate.app"
 
-# The finished app lives outside the repository, and that is not tidiness.
+# Sign outside the repository. This tree sits under `~/Documents`, which is
+# synced by iCloud, and the fileprovider stamps `com.apple.FinderInfo` on
+# anything inside it. `codesign` refuses a bundle carrying one — "resource
+# fork, Finder information, or similar detritus not allowed" — and `xattr -cr`
+# does not win, because the attribute comes back. `/tmp` is not iCloud.
 #
-# This repository sits under `~/Documents`, which is synced by iCloud, and the
-# fileprovider stamps `com.apple.FinderInfo` on anything inside it. `codesign`
-# refuses a bundle carrying one — "resource fork, Finder information, or
-# similar detritus not allowed" — and `xattr -cr` does not win, because the
-# attribute comes back. Signing in `~/Applications` sidesteps it entirely, and
-# stops iCloud uploading a 289 MB bundle on every build as a bonus.
-#
-# `~/Applications` is also the right home for the thing: Spotlight finds it,
-# and the TCC grants for Microphone, Accessibility and Input Monitoring are
-# keyed to a path that no longer moves when the build directory is cleaned.
-APP="$HOME/Applications/Grok Dictate.app"
+# Install into `/Applications`, which is the system Applications folder, not
+# `~/Applications`. TCC grants for Microphone, Accessibility and Input
+# Monitoring are keyed to that path.
+SIGN_APP="${TMPDIR:-/tmp}/Grok Dictate.app"
+APP="/Applications/Grok Dictate.app"
 
 echo "──────────────────────────────────────────────────────────"
 echo " 1/4  Swift helper"
@@ -92,25 +90,42 @@ if [[ ! -x "$STAGED/Contents/Resources/grok-dictate-helper" ]]; then
   exit 1
 fi
 
-# `ditto` rather than `cp -R`: it is the tool that preserves a bundle's
-# symlinks and permissions correctly, which the Electron frameworks need.
-mkdir -p "$(dirname "$APP")"
-rm -rf "$APP"
-ditto "$STAGED" "$APP"
+# Sign in `$SIGN_APP` (not iCloud), then install into `/Applications`.
+rm -rf "$SIGN_APP"
+ditto "$STAGED" "$SIGN_APP"
 
 echo
 echo "──────────────────────────────────────────────────────────"
-echo " 4/4  Ad-hoc signature"
+echo " 4/4  Ad-hoc signature, then /Applications"
 echo "──────────────────────────────────────────────────────────"
 # Belt and braces. The `ditto` above leaves only `com.apple.provenance`, which
 # `codesign` accepts, but the downloaded Electron zip carries its own.
-xattr -cr "$APP"
+xattr -cr "$SIGN_APP"
 
 # `--deep` is deprecated by Apple for distribution signing, and correct here:
 # there is no Developer ID and no notarization, and every nested Electron
 # framework needs the same ad-hoc identity as the outer bundle.
-codesign --force --deep --sign - "$APP"
-codesign --verify --verbose=1 "$APP" 2>&1 | sed 's/^/  /'
+codesign --force --deep --sign - "$SIGN_APP"
+codesign --verify --verbose=1 "$SIGN_APP" 2>&1 | sed 's/^/  /'
+
+install_to_applications() {
+  rm -rf "$APP"
+  ditto "$SIGN_APP" "$APP"
+}
+
+if ! install_to_applications 2>/dev/null; then
+  echo "  /Applications needs administrator access"
+  osascript -e "do shell script \"rm -rf \" & quoted form of \"$APP\" & \" && ditto \" & quoted form of \"$SIGN_APP\" & \" \" & quoted form of \"$APP\" with administrator privileges"
+fi
+
+# An older build lived in ~/Applications. Leave one copy, or Spotlight can
+# launch the personal one and the system one at random.
+if [[ -d "$HOME/Applications/Grok Dictate.app" ]]; then
+  echo "  removing leftover ~/Applications/Grok Dictate.app"
+  rm -rf "$HOME/Applications/Grok Dictate.app"
+fi
+
+rm -rf "$SIGN_APP"
 
 echo
 echo "Built: $APP"

@@ -49,8 +49,8 @@ mac:
     NSAppleEventsUsageDescription: >-
       Grok Dictate inserts the transcript into the app you were typing in.
   # Skip signing here. This repo lives under iCloud Drive, and codesign
-  # refuses Finder detritus. `scripts/package.sh` ditto's the bundle to
-  # ~/Applications and ad-hoc signs it there.
+  # refuses Finder detritus. `scripts/package.sh` signs in /tmp and
+  # installs the bundle to /Applications.
   identity: null
   hardenedRuntime: false
   forceCodeSigning: false

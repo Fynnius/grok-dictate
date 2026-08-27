@@ -56,7 +56,7 @@ npm run package
 open -a "Grok Dictate"
 ```
 
-`npm run package` builds the Swift helper, bundles the app, ad-hoc signs it, and copies it to `~/Applications/Grok Dictate.app`.
+`npm run package` builds the Swift helper, bundles the app, ad-hoc signs it, and copies it to `/Applications/Grok Dictate.app`.
 
 ### Development
 

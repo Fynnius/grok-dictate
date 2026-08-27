@@ -21,7 +21,7 @@ npm run typecheck
 ./native/test.sh
 ```
 
-`npm run package` builds the standalone `Grok Dictate.app` into `~/Applications` and a zip in `release/`.
+`npm run package` builds the standalone `Grok Dictate.app` into `/Applications` and a zip in `release/`.
 
 ## How the repo is laid out
 
