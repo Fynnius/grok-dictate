@@ -30,6 +30,6 @@ The Swift helper runs with Accessibility and Input Monitoring. It never sees a b
 
 Use [GitHub private vulnerability reporting](https://github.com/Fynnius/grok-dictate/security/advisories/new) on this repository.
 
-Include the version (`0.1.0` or the commit), what you did, and what leaked or escalated. Do not attach live tokens.
+Include the version (`0.2.0` or the commit), what you did, and what leaked or escalated. Do not attach live tokens.
 
 We will acknowledge a valid report within a few days and credit you in the advisory if you want that.

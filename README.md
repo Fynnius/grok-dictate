@@ -34,7 +34,7 @@ Unofficial menu-bar dictation for macOS, using the public [xAI streaming speech-
 ### Download (Apple Silicon)
 
 1. Get an [xAI API key](https://console.x.ai/team/default/api-keys). Streaming STT is **$0.20 / hour** ([pricing](https://docs.x.ai/docs/models#pricing)).
-2. Download `grok-dictate-0.1.0-mac-arm64.zip` from the [latest release](https://github.com/Fynnius/grok-dictate/releases/latest).
+2. Download `grok-dictate-0.2.0-mac-arm64.zip` from the [latest release](https://github.com/Fynnius/grok-dictate/releases/latest).
 3. Unzip and drag `Grok Dictate.app` to `/Applications`, then double-click it.
 
 On macOS Sequoia and later you will see **“Grok Dictate Not Opened”** with only **Move to Trash** and **Done**. Click **Done**, then:

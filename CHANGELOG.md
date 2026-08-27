@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-08-27
+
 The round trip is now measurable, and the app shows what it already knew. A dictation session writes a greppable timing line per lifecycle event. The pill stays wordless while you speak. Accidental silent taps no longer wait on the server. System output mutes while the microphone is open. Unicode injection prefers the target process over the global event stream. The audio graph stays warm across holds without lighting the orange indicator. Stats, derived only from history, sit next to History in the menu. Insert outcomes no longer raise a paragraph overlay — History and ⌃⌘V are the recovery.
 
 Transcript accuracy. A hold is cut into segments whenever the speaker pauses, and each segment is re-transcribed with no knowledge of the one before it — so the joins, not the recognition, were where the text was going wrong. Measured over 67 real dictations: 4.9 segments per hold, one every ~8 s, worst case 41.

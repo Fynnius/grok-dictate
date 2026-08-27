@@ -1,6 +1,6 @@
 {
   "name": "grok-dictate",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Hold Fn to dictate. A macOS menu-bar dictation app powered by xAI streaming speech-to-text.",
   "private": true,
   "license": "MIT",
