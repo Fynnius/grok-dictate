@@ -61,11 +61,10 @@ struct Settings {
     let verifyAXWrites: Bool
     /// Measure the focused element's text length around a Unicode injection and
     /// report whether the text actually arrived (`UnicodeWriteVerification`).
-    /// **On by default**, for the same reason as `verifyAXWrites`: switching it
-    /// off restores BUG-1's silent data loss rather than changing a timing. It
-    /// exists so a target that verification gets *wrong* can be isolated in one
-    /// session instead of one rebuild — if this ever reports "not inserted" over
-    /// text that is plainly on screen, this is the switch that proves it.
+    /// **Off by default.** A false "not inserted" over text that is on screen
+    /// (cmux reporting AX length `0 → 0` while taking every character) is worse
+    /// than a silent drop the user will retry themselves. `GROK_DICTATE_INJECT_VERIFY=1`
+    /// turns the check back on for a session.
     let verifyUnicodeWrites: Bool
     /// Skip installing the event tap. Used by the TypeScript conformance test
     /// for the same reason as `promptForAccessibility`: attempting to create a
@@ -131,7 +130,7 @@ struct Settings {
                     .filter { !$0.isEmpty }
             ),
             verifyAXWrites: !isFalsy(environment["GROK_DICTATE_AX_VERIFY"]),
-            verifyUnicodeWrites: !isFalsy(environment["GROK_DICTATE_INJECT_VERIFY"]),
+            verifyUnicodeWrites: isTruthy(environment["GROK_DICTATE_INJECT_VERIFY"]),
             installTap: !isTruthy(environment["GROK_DICTATE_HELPER_NO_TAP"])
         )
     }

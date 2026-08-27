@@ -61,6 +61,19 @@ final class UnicodeInserter: UnicodeInserting {
             baseline: settings.injectionBaseline
         )
         let chunks = TextChunker.chunks(of: text, maxUTF16Units: pacing.chunkUnits)
+        let route = UnicodePostRouting.route(processId: app.processId)
+        let targetPid: pid_t?
+        switch route {
+        case let .pid(pid):
+            targetPid = pid
+            log(
+                .info,
+                "posting Unicode events to pid \(pid) (\(app.name ?? app.bundleId ?? "unknown"))"
+            )
+        case .globalTap:
+            targetPid = nil
+            log(.info, "posting Unicode events on the global tap — no live target pid")
+        }
 
         // Measured after the modifier wait and immediately before the first
         // event, so the "before" length is the state the injection is about to
@@ -89,8 +102,15 @@ final class UnicodeInserter: UnicodeInserting {
             keyDown.keyboardSetUnicodeString(stringLength: units.count, unicodeString: &units)
             keyUp.keyboardSetUnicodeString(stringLength: units.count, unicodeString: &units)
 
-            keyDown.post(tap: settings.injectTap)
-            keyUp.post(tap: settings.injectTap)
+            // Private source + cleared flags stay on both routes (retry is
+            // Ctrl+Cmd+V; an injected `a` carrying Cmd is ⌘A).
+            if let pid = targetPid {
+                keyDown.postToPid(pid)
+                keyUp.postToPid(pid)
+            } else {
+                keyDown.post(tap: settings.injectTap)
+                keyUp.post(tap: settings.injectTap)
+            }
 
             if index < chunks.count - 1, pacing.interChunkDelay > 0 {
                 Thread.sleep(forTimeInterval: pacing.interChunkDelay)

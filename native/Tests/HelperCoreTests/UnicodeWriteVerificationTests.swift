@@ -85,14 +85,19 @@ struct UnicodeWriteVerificationTests {
         #expect(verdict.evidence.contains("760"))
     }
 
-    @Test("an empty field that stayed empty took none of it")
-    func stillEmpty() {
+    @Test("zero-to-zero length is unverifiable, not a failure (cmux, 2026-08-22)")
+    func stillEmptyIsUnverifiable() {
+        // cmux / xterm.js reports AX length 0 whether or not the buffer took
+        // the keystrokes. Accusing that of dropping the text is the false
+        // fail that put "Not inserted" over words that were on screen.
         let verdict = UnicodeWriteVerification.verdict(
             before: 0,
             after: 0,
             expectedGrowthUTF16Units: 11
         )
-        #expect(verdict.provesNothingLanded)
+        #expect(isUnverifiable(verdict))
+        #expect(verdict.provesNothingLanded == false)
+        #expect(UnicodeWriteVerification.confirmsInsertion(verdict) == false)
     }
 
     // MARK: - Cannot tell

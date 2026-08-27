@@ -51,16 +51,17 @@
 /// neither, this reports "cannot verify" and the app says "typed, unconfirmed"
 /// — which is still a strict improvement on a green pill over lost text.
 ///
-/// **The one shape that would make this lie, stated so it is not a surprise.** A
-/// target whose text length is constant by construction — a terminal that
-/// reports a fixed screen grid padded with blanks, where typed characters
-/// replace blanks rather than adding to the count — grows by nothing while
-/// taking every character. This would call that "proven not landed" on every
-/// insert into that application. No such target has been observed, a single
-/// insertion cannot distinguish one from an application that really is dropping
-/// the text, and the escape hatch if one turns up is
-/// `GROK_DICTATE_INJECT_VERIFY=0`. It is written down here because a check that
-/// can be wrong should say where.
+/// **The one shape that would make this lie, and the one that has now been
+/// observed.** A target whose text length is constant by construction — a
+/// terminal that reports a fixed screen grid, or (2026-08-22) an Electron
+/// terminal whose AX length is always `0` because xterm.js does not expose the
+/// buffer — grows by nothing while taking every character. `0 → 0` is therefore
+/// `unverifiable`, not `didNotLand`: that is how cmux looks when the text *did*
+/// land, and calling it a failure fires an error overlay over words that are
+/// on screen. A non-zero length that did not move is still the BUG-1 case.
+/// The escape hatch if a non-zero constant-length target turns up is
+/// `GROK_DICTATE_INJECT_VERIFY=0` (and the shipping default is off). It is
+/// written down here because a check that can be wrong should say where.
 
 import Foundation
 
@@ -136,6 +137,18 @@ public enum UnicodeWriteVerification {
         }
 
         if growth == 0 {
+            // `0 → 0` is how a terminal that does not expose its buffer looks
+            // (cmux / xterm.js, 2026-08-22): the text landed and AX still
+            // reports no characters. An empty field that really dropped the
+            // burst looks identical, which is why this refuses to accuse.
+            if before == 0 {
+                return .unverifiable(
+                    evidence:
+                        "the focused element reported 0 characters before and after \(expected) "
+                        + "UTF-16 units were typed — a terminal that does not expose its buffer "
+                        + "looks the same as an empty field that dropped the text, so this proves nothing"
+                )
+            }
             return .didNotLand(
                 evidence:
                     "the focused element still reports \(before) characters after \(expected) "
