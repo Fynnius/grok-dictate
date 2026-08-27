@@ -65,7 +65,7 @@ export interface InsertOutcome {
    * channel, so `ok` alone cannot tell a successful insert from a silent drop —
    * a 60.3 s dictation posted into a terminal that ignored every event was
    * reported as a success. **`ok: true` with `verified` not `true` means
-   * "typed, unconfirmed"**, and the app says so.
+   * "typed, unconfirmed"** in history. The HUD is the same green check.
    *
    * Optional in the same style as `reason` and `frontmost` above, and for the
    * same two reasons: an older helper binary sends no `verified`, and every
@@ -122,6 +122,23 @@ export interface NativeHelperPort extends NativeHelperEvents {
    * *Copy* button or history. Phase 5 audits every call site.
    */
   copy(text: string): void;
+
+  /**
+   * Mute system output. Fire-and-forget. Must not delay capture: the
+   * orchestrator sends this *after* `start_capture` and *after* the start cue.
+   *
+   * Added 2026-08-22. An older helper that does not know the command degrades
+   * via the protocol's unknown-type rule (a `log` warn) rather than dying.
+   */
+  muteOutput(): void;
+
+  /**
+   * Restore system output after `muteOutput`. Idempotent, including when the
+   * helper never muted or the user already unmuted. Sent on every session
+   * exit and defensively when the app starts, in case the previous process
+   * died muted.
+   */
+  unmuteOutput(): void;
 
   getFrontmost(): Promise<FrontmostApp>;
   setHotkeys(bindings: HotkeyBindings): void;

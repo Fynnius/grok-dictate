@@ -8,6 +8,12 @@ import Foundation
 
 @testable import HelperCore
 
+final class SpyOutputMute: OutputMuting, @unchecked Sendable {
+    private(set) var calls: [String] = []
+    func mute() { calls.append("mute") }
+    func unmute() { calls.append("unmute") }
+}
+
 final class SpyPasteboard: PasteboardWriting {
     private(set) var writes: [String] = []
 

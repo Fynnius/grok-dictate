@@ -221,6 +221,12 @@ struct CommandDecodingTests {
         #expect(
             CommandDecoder.decode(line: #"{"v":1,"type":"shutdown"}"#) == .command(.shutdown)
         )
+        #expect(
+            CommandDecoder.decode(line: #"{"v":1,"type":"mute_output"}"#) == .command(.muteOutput)
+        )
+        #expect(
+            CommandDecoder.decode(line: #"{"v":1,"type":"unmute_output"}"#) == .command(.unmuteOutput)
+        )
     }
 
     @Test("a null targetBundleId disables the frontmost check")

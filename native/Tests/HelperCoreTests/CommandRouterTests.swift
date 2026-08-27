@@ -112,6 +112,31 @@ struct CommandRouterTests {
         #expect(router.handle(line: #"{"v":1,"type":"shutdown"}"#) == [.shutdown])
     }
 
+    @Test("mute_output and unmute_output reach the mute port and write nothing to the pasteboard")
+    func muteCommands() {
+        let mute = SpyOutputMute()
+        let pasteboard = SpyPasteboard()
+        let recorder = FrameRecorder()
+        let frontmost = StubFrontmost(bundleId: "com.apple.Notes", name: "Notes")
+        let router = CommandRouter(
+            insertion: InsertionLadder(
+                accessibility: StubAccessibilityInserter(result: .succeeded),
+                unicode: StubUnicodeInserter(result: .succeeded),
+                frontmost: frontmost
+            ),
+            pasteboard: pasteboard,
+            frontmost: frontmost,
+            outputMute: mute,
+            emit: recorder.emit
+        )
+        #expect(router.handle(line: #"{"v":1,"type":"mute_output"}"#).isEmpty)
+        #expect(router.handle(line: #"{"v":1,"type":"unmute_output"}"#).isEmpty)
+        #expect(mute.calls == ["mute", "unmute"])
+        #expect(pasteboard.writes.isEmpty)
+        #expect(router.handle(line: #"{"v":1,"type":"shutdown"}"#) == [.shutdown])
+        #expect(mute.calls == ["mute", "unmute", "unmute"])
+    }
+
     @Test("no other command produces an effect")
     func noStrayEffects() {
         let (router, _, _) = makeRouter()

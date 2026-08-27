@@ -7,6 +7,10 @@
  * Phase 5, which made one change: `insert_result` now carries a machine-
  * readable `reason`. See `InsertDeclineReason` for why.
  *
+ * Reopened again by the 2026-08-22 latency/honesty pass: `mute_output` and
+ * `unmute_output` mute system audio while recording. Fire-and-forget, like
+ * `copy`. No reply frame. Unknown-type rule still holds for an older helper.
+ *
  * Newline-delimited JSON over the helper's stdin/stdout. Every frame carries
  * `v: 1`. Parsing is total — `parseHelperFrame` never throws. A helper that
  * can crash the app on a malformed byte would take down the hotkey.
@@ -145,10 +149,11 @@ export const InsertResultFrameSchema = z.object({
    * Added by the 2026-08-09 incident (BUG-1). `CGEventKeyboardSetUnicodeString`
    * has no return channel, so `ok: true` has always meant "posted", not
    * "landed" (§12.5) — and the app presented the two identically. **The
-   * invariant the app now relies on: `ok: true` with `verified` not `true`
-   * means "typed, unconfirmed".** Nullish rather than required precisely so an
-   * older helper binary still parses; the app treats absent as "unconfirmed",
-   * which is the honest reading of a build that cannot answer.
+   * invariant: `ok: true` with `verified` not `true` means "typed,
+   * unconfirmed" in history. The HUD draws the same green check.** Nullish
+   * rather than required precisely so an older helper binary still parses; the
+   * app treats absent as "unconfirmed", which is the honest reading of a
+   * build that cannot answer.
    */
   verified: z.boolean().nullish(),
   /**
@@ -257,12 +262,37 @@ export const ShutdownCommandSchema = z.object({
   type: z.literal('shutdown'),
 });
 
+/**
+ * Mute the default output device. Fire-and-forget, no reply — like `copy`.
+ *
+ * Added 2026-08-22. The helper prefers a hardware mute over volume-to-zero,
+ * snapshots what it changed, and refuses to restore over a user who unmuted
+ * or moved the volume themselves. Crash-proof restore lives on the helper
+ * (signal/exit + a lock file the next launch reads).
+ */
+export const MuteOutputCommandSchema = z.object({
+  v: version,
+  type: z.literal('mute_output'),
+});
+
+/**
+ * Restore output after `mute_output`. Idempotent: a helper that did not mute,
+ * or whose snapshot no longer matches the device, is a no-op rather than a
+ * clobber. Sent on every session exit and defensively at app startup.
+ */
+export const UnmuteOutputCommandSchema = z.object({
+  v: version,
+  type: z.literal('unmute_output'),
+});
+
 export const AppToHelperSchema = z.discriminatedUnion('type', [
   InsertCommandSchema,
   CopyCommandSchema,
   GetFrontmostCommandSchema,
   SetHotkeysCommandSchema,
   ShutdownCommandSchema,
+  MuteOutputCommandSchema,
+  UnmuteOutputCommandSchema,
 ]);
 
 export type InsertCommand = z.infer<typeof InsertCommandSchema>;
@@ -270,6 +300,8 @@ export type CopyCommand = z.infer<typeof CopyCommandSchema>;
 export type GetFrontmostCommand = z.infer<typeof GetFrontmostCommandSchema>;
 export type SetHotkeysCommand = z.infer<typeof SetHotkeysCommandSchema>;
 export type ShutdownCommand = z.infer<typeof ShutdownCommandSchema>;
+export type MuteOutputCommand = z.infer<typeof MuteOutputCommandSchema>;
+export type UnmuteOutputCommand = z.infer<typeof UnmuteOutputCommandSchema>;
 export type AppToHelper = z.infer<typeof AppToHelperSchema>;
 
 /* ------------------------------------------------------------------ *

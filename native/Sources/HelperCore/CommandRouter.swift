@@ -15,6 +15,7 @@ public final class CommandRouter {
     private let insertion: InsertionPerforming
     private let pasteboard: PasteboardWriting
     private let frontmost: FrontmostAppProviding
+    private let outputMute: OutputMuting
     private let emit: (HelperFrame) -> Void
     private let onHotkeysChanged: (HotkeyConfiguration) -> Void
 
@@ -24,6 +25,7 @@ public final class CommandRouter {
         insertion: InsertionPerforming,
         pasteboard: PasteboardWriting,
         frontmost: FrontmostAppProviding,
+        outputMute: OutputMuting = NullOutputMute(),
         hotkeys: HotkeyConfiguration = .default,
         emit: @escaping (HelperFrame) -> Void,
         onHotkeysChanged: @escaping (HotkeyConfiguration) -> Void = { _ in }
@@ -31,6 +33,7 @@ public final class CommandRouter {
         self.insertion = insertion
         self.pasteboard = pasteboard
         self.frontmost = frontmost
+        self.outputMute = outputMute
         self.hotkeys = hotkeys
         self.emit = emit
         self.onHotkeysChanged = onHotkeysChanged
@@ -109,7 +112,18 @@ public final class CommandRouter {
             return []
 
         case .shutdown:
+            // Restore before exit so a polite shutdown does not leave the
+            // machine muted. Signal/crash paths restore in the executable.
+            outputMute.unmute()
             return [.shutdown]
+
+        case .muteOutput:
+            outputMute.mute()
+            return []
+
+        case .unmuteOutput:
+            outputMute.unmute()
+            return []
         }
     }
 }

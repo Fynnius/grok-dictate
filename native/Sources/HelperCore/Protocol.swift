@@ -230,6 +230,10 @@ public enum AppCommand: Sendable, Equatable {
     case getFrontmost(id: String)
     case setHotkeys(ptt: String, toggle: String, retry: String)
     case shutdown
+    /// Mute default output. Added 2026-08-22. Fire-and-forget, like `copy`.
+    case muteOutput
+    /// Restore after `muteOutput`. Idempotent.
+    case unmuteOutput
 }
 
 /// The total result of decoding one line. Every case is a value the caller can
@@ -315,6 +319,12 @@ public enum CommandDecoder {
 
         case "shutdown":
             return .command(.shutdown)
+
+        case "mute_output":
+            return .command(.muteOutput)
+
+        case "unmute_output":
+            return .command(.unmuteOutput)
 
         default:
             return .unknownType(type)

@@ -75,6 +75,15 @@ struct ClipboardContainmentTests {
         }
     }
 
+    @Test("mute commands write nothing to the pasteboard")
+    func muteCommandsWriteNothing() {
+        let (router, pasteboard, _) = self.router(
+            ax: .succeeded, unicode: .succeeded)
+        router.handle(line: #"{"v":1,"type":"mute_output"}"#)
+        router.handle(line: #"{"v":1,"type":"unmute_output"}"#)
+        #expect(pasteboard.writes.isEmpty)
+    }
+
     @Test("empty, malformed and unknown frames write nothing")
     func degenerateFramesWriteNothing() {
         let (router, pasteboard, _) = self.router(

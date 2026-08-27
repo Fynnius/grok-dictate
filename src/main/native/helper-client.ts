@@ -146,6 +146,14 @@ export class HelperClient implements NativeHelperPort {
     this.#supervisor.send({ v: 1, type: 'copy', text });
   }
 
+  muteOutput(): void {
+    this.#supervisor.send({ v: 1, type: 'mute_output' });
+  }
+
+  unmuteOutput(): void {
+    this.#supervisor.send({ v: 1, type: 'unmute_output' });
+  }
+
   getFrontmost(): Promise<FrontmostApp> {
     const id = randomUUID();
     const sent = this.#supervisor.send({ v: 1, type: 'get_frontmost', id });

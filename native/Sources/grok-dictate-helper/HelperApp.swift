@@ -27,6 +27,7 @@ final class HelperApp {
     private var workspace: WorkspaceMonitor?
     private var router: CommandRouter?
     private var insertion: BackgroundInsertion?
+    private var outputMute: SystemOutputMute?
     private var stdoutIsBroken = false
     private var isShuttingDown = false
 
@@ -80,10 +81,19 @@ final class HelperApp {
         let insertion = BackgroundInsertion(ladder: ladder)
         self.insertion = insertion
 
+        let outputMute = SystemOutputMute { [weak self] level, message in
+            self?.emit(.log(level: level, message: message))
+        }
+        // A previous process may have died muted. Restore before we do anything
+        // else — leaving the user muted is the worst bug in this pass.
+        outputMute.unmute()
+        self.outputMute = outputMute
+
         router = CommandRouter(
             insertion: insertion,
             pasteboard: SystemPasteboard(),
             frontmost: workspace,
+            outputMute: outputMute,
             emit: { [weak self] frame in self?.emit(frame) },
             onHotkeysChanged: { [weak self] configuration in
                 self?.recognizer.setConfiguration(configuration)
@@ -118,17 +128,13 @@ final class HelperApp {
             )
         }
 
-        if !settings.verifyUnicodeWrites {
-            // Same reasoning as the line above, for the other half of BUG-1: run
-            // this way and a target that drops a long injection is reported as a
-            // plain success again, which is the state the incident was in.
+        if settings.verifyUnicodeWrites {
             emit(
                 .log(
-                    level: .warn,
+                    level: .info,
                     message:
-                        "GROK_DICTATE_INJECT_VERIFY is off — injected text will be reported as "
-                        + "inserted without checking that it arrived, so an app that drops it "
-                        + "loses the dictation silently"
+                        "GROK_DICTATE_INJECT_VERIFY is on — injected text will be measured against "
+                        + "the target's AX length after typing"
                 )
             )
         }
@@ -257,6 +263,7 @@ final class HelperApp {
     }
 
     func shutdown() {
+        outputMute?.unmute()
         tap?.uninstall()
         secureInput?.stop()
         workspace?.stop()

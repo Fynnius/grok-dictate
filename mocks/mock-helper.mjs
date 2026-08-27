@@ -135,6 +135,14 @@ function handle(line) {
       process.exit(0);
       return;
 
+    case 'mute_output':
+      log('info', 'mute_output (mock — no hardware)');
+      return;
+
+    case 'unmute_output':
+      log('info', 'unmute_output (mock — no hardware)');
+      return;
+
     /* ---- mock-only control channel (see the header) ---- */
     case '__mock': {
       switch (message.action) {
