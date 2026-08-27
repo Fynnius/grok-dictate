@@ -72,6 +72,7 @@ describe('buildTrayMenu', () => {
   it('offers history, scratchpad, settings and quit', () => {
     const items = ids(buildTrayMenu(model()));
     expect(items).toContain('open.history');
+    expect(items).toContain('open.stats');
     expect(items).toContain('open.scratchpad');
     expect(items).toContain('open.settings');
     expect(items).toContain('quit');
@@ -135,10 +136,10 @@ describe('buildTrayMenu', () => {
     expect(ids(dev)).toContain('preview');
     const previews = dev.find((i) => i.id === 'preview')?.submenu ?? [];
     // Every HUD state must be previewable — that is how "all HUD states render"
-    // gets confirmed by a human (IMPLEMENTATION-PLAN.md §3.4). Eight rather
-    // than seven since the 2026-08-09 incident: `inserted` renders two
-    // different surfaces depending on `verified`, and both need looking at.
-    expect(previews).toHaveLength(8);
+    // gets confirmed by a human (IMPLEMENTATION-PLAN.md §3.4). `inserted` is
+    // listed twice (`verified` true / null) even though both now draw the
+    // same check, so the data path is still inspectable.
+    expect(previews).toHaveLength(12);
   });
 
   it('delays every preview except Hide, so focus can be moved to another app first', () => {

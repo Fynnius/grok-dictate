@@ -107,6 +107,7 @@ describe('happy path', () => {
       'hud',
       'tray',
       'cue',
+      'mute_output',
     ]);
   });
 
@@ -1189,7 +1190,7 @@ describe('an insert the helper could not verify (2026-08-09 incident, BUG-1)', (
     // The trade is stated in `finishInsert`: verification is impossible for a
     // whole class of ordinary targets, so a cue here would fire on good
     // dictations and train the user to ignore the one sound that means
-    // something. The amber pill carrying the full transcript is the signal.
+    // something. History records `verified: null`; the HUD stays a check.
     const { effects } = run([
       ...TO_INSERTING,
       { type: 'INSERT_RESULT', sessionId: 's1', outcome: unverified(null) },
@@ -1583,5 +1584,117 @@ describe('history records the application the text actually reached', () => {
       frontmostBundleId: 'com.apple.TextEdit',
       frontmostName: 'TextEdit',
     });
+  });
+});
+
+describe('mute / unmute effects (2026-08-22)', () => {
+  it('mutes after the start cue, never before capture', () => {
+    const { effects } = run([{ type: 'PTT_DOWN', ts: 1 }]);
+    expect(kinds(effects).indexOf('start_capture')).toBeLessThan(
+      kinds(effects).indexOf('mute_output'),
+    );
+    expect(kinds(effects).indexOf('cue')).toBeLessThan(kinds(effects).indexOf('mute_output'));
+  });
+
+  it('unmutes on release before the stop cue', () => {
+    const { effects } = run([
+      { type: 'PTT_DOWN', ts: 1 },
+      { type: 'PTT_UP', ts: 2 },
+    ]);
+    expect(kinds(effects)).toContain('unmute_output');
+    expect(kinds(effects).indexOf('unmute_output')).toBeLessThan(kinds(effects).indexOf('cue'));
+  });
+
+  it('unmutes on cancel, error, and recording cap', () => {
+    expect(kinds(run([{ type: 'PTT_DOWN', ts: 1 }, { type: 'CANCEL' }]).all)).toContain(
+      'unmute_output',
+    );
+    expect(
+      kinds(
+        run([
+          { type: 'PTT_DOWN', ts: 1 },
+          {
+            type: 'SESSION_ERROR',
+            sessionId: 's1',
+            error: appError('stt_connect', 'the server failed', null),
+          },
+        ]).all,
+      ),
+    ).toContain('unmute_output');
+    expect(
+      kinds(
+        run([
+          { type: 'PTT_DOWN', ts: 1 },
+          { type: 'RECORDING_CAP_REACHED', sessionId: 's1' },
+        ]).all,
+      ),
+    ).toContain('unmute_output');
+  });
+
+  it('emits no mute effects when the setting is off', () => {
+    const env: MachineEnv = { ...testEnv(), muteWhileRecording: () => false };
+    const { all } = run(
+      [
+        { type: 'PTT_DOWN', ts: 1 },
+        { type: 'PTT_UP', ts: 2 },
+      ],
+      env,
+    );
+    expect(kinds(all)).not.toContain('mute_output');
+    expect(kinds(all)).not.toContain('unmute_output');
+  });
+});
+
+describe('SILENCE_GATED', () => {
+  it('returns to idle with a hidden HUD, not an error', () => {
+    const { snapshot, effects } = run([
+      { type: 'PTT_DOWN', ts: 1 },
+      { type: 'PTT_UP', ts: 2 },
+      { type: 'SILENCE_GATED', sessionId: 's1' },
+    ]);
+    expect(snapshot.state).toBe('idle');
+    expect(huds(effects).at(-1)?.view).toEqual({ kind: 'hidden' });
+    expect(kinds(effects)).toContain('abort_stt');
+    expect(kinds(effects)).not.toContain('insert');
+    expect(effects.some((e) => e.type === 'cue' && e.cue === 'error')).toBe(false);
+  });
+});
+
+describe('live HUD text', () => {
+  it('never puts interim on the pill, and still keeps ctx.interim for salvage', () => {
+    const { snapshot, effects } = run([
+      { type: 'PTT_DOWN', ts: 1 },
+      { type: 'TRANSCRIPT_INTERIM', sessionId: 's1', text: 'hello there' },
+    ]);
+    expect(snapshot.ctx.interim).toBe('hello there');
+    expect(huds(effects).at(-1)?.view).toMatchObject({ kind: 'recording', interim: '' });
+  });
+
+  it('stays wordless even if a leftover config still has the preview flag on', () => {
+    const env: MachineEnv = { ...testEnv(), liveHudText: () => true };
+    const { snapshot, effects } = run(
+      [
+        { type: 'PTT_DOWN', ts: 1 },
+        { type: 'TRANSCRIPT_INTERIM', sessionId: 's1', text: 'hello there' },
+      ],
+      env,
+    );
+    expect(snapshot.ctx.interim).toBe('hello there');
+    expect(huds(effects).at(-1)?.view).toMatchObject({ kind: 'recording', interim: '' });
+  });
+});
+
+describe('the reducer stays a pure (state, event) → {state, effects}', () => {
+  it('is not handed a timing clock — MachineEnv.now is the existing HUD clock, not a W0 source', () => {
+    // W0 stamps in the orchestrator. The reducer's `now` exists for TICK /
+    // HUD coalescing and was there before this pass. A new time source would
+    // be a second clock through the pure function, which this test forbids
+    // by keeping the env at the documented three optional setting readers.
+    const env = testEnv();
+    expect(Object.keys(env).sort()).toEqual(['newSessionId', 'now']);
+    const stepped = reduce(INITIAL_SNAPSHOT, { type: 'PTT_DOWN', ts: 1 }, env);
+    expect(stepped).toHaveProperty('snapshot');
+    expect(stepped).toHaveProperty('effects');
+    expect(Array.isArray(stepped.effects)).toBe(true);
   });
 });

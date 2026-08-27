@@ -25,6 +25,24 @@ describe('config defaults', () => {
   it('repairs segment joins by default', () => {
     expect(DEFAULT_CONFIG.repairSeams).toBe(true);
   });
+
+  it('keeps the pill wordless by default, and gates silent taps and mute on', () => {
+    expect(DEFAULT_CONFIG.liveHudText).toBe(false);
+    expect(DEFAULT_CONFIG.silenceGate).toBe(true);
+    expect(DEFAULT_CONFIG.muteWhileRecording).toBe(true);
+  });
+
+  it('persists the new flags when they leave the default, so old behaviour is restorable', () => {
+    const { config, issues } = parseConfig({
+      liveHudText: true,
+      silenceGate: false,
+      muteWhileRecording: false,
+    });
+    expect(issues).toEqual([]);
+    expect(config.liveHudText).toBe(true);
+    expect(config.silenceGate).toBe(false);
+    expect(config.muteWhileRecording).toBe(false);
+  });
 });
 
 describe('parseConfig', () => {

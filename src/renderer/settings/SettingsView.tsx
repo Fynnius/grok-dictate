@@ -212,6 +212,17 @@ export function SettingsView(): React.JSX.Element {
           </div>
           <div className="card-row">
             <span className="row-label">
+              Ignore accidental taps
+              <InfoTip text="A brushed Fn key used to open a socket, ship a sliver of room tone, and show a failure. On, a short tap that is measurably silent is dropped without waiting on the server. Real one-word dictations — yes, no, OK — are kept. Off sends every release to the recogniser." />
+            </span>
+            <Switch
+              checked={config.silenceGate}
+              onChange={(next) => save({ silenceGate: next })}
+              ariaLabel="Ignore accidental silent taps"
+            />
+          </div>
+          <div className="card-row">
+            <span className="row-label">
               Repair segment joins
               <InfoTip text="A long dictation is cut into segments, each transcribed without seeing the one before it, which leaves a duplicated word, a capital letter mid-sentence, or a stray “Thank you.” where the two meet. This tidies those joins before the text is inserted. It is the only thing in the app that edits what you said — turn it off to get the transcript exactly as the server sent it." />
             </span>
@@ -324,6 +335,17 @@ export function SettingsView(): React.JSX.Element {
               checked={config.audioCues}
               onChange={(next) => save({ audioCues: next })}
               ariaLabel="Audio cues when recording starts and stops"
+            />
+          </div>
+          <div className="card-row">
+            <span className="row-label">
+              Mute other audio while recording
+              <InfoTip text="Mutes system output while the microphone is open and restores it when you stop — including on Esc, errors, and quit. Your podcast keeps playing; you just do not hear it over yourself. Does not pause other apps. Off leaves the volume alone." />
+            </span>
+            <Switch
+              checked={config.muteWhileRecording}
+              onChange={(next) => save({ muteWhileRecording: next })}
+              ariaLabel="Mute other audio while recording"
             />
           </div>
           <div className="card-row">

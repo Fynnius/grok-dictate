@@ -7,6 +7,19 @@
  * Parsing is forgiving in one specific way: an unreadable or partially invalid
  * file falls back to defaults per field rather than failing the app to a stop.
  * Dictation must still work when the config is corrupt.
+ *
+ * ## 2026-08-22 latency/honesty pass
+ *
+ * Three flags added, each because the new behaviour discards, rewrites, or
+ * reaches outside the app, and a user who disagrees must be able to switch
+ * it off without waiting for a release (`repairSeams` is the precedent):
+ *
+ *   - `liveHudText` — leftover flag. The pill is wordless; this is parsed so
+ *     an older config.json still loads, and is otherwise ignored.
+ *   - `silenceGate` — drop a short, measurably silent tap without waiting on
+ *     the server. Off restores "every release goes to STT". Default on.
+ *   - `muteWhileRecording` — mute system output while the mic is open. Off
+ *     leaves the user's music alone. Default on.
  */
 
 import { z } from 'zod';
@@ -126,6 +139,41 @@ export const AppConfigSchema = z.object({
   /** Short start/stop cues, under ~80 ms. Dictation is
    *  eyes-free; this is the entire feedback channel. */
   audioCues: z.boolean().default(true),
+
+  /**
+   * Leftover. The HUD never draws live words; a saved `true` from an earlier
+   * build is ignored. Kept so an older `config.json` still parses.
+   */
+  liveHudText: z.boolean().default(false),
+
+  /**
+   * At end of turn, drop an utterance that is both short and measurably silent
+   * without waiting on the server.
+   *
+   * A brushed hotkey otherwise opens a socket, ships room tone, and shows a
+   * failure. Duration is a *precondition* for looking, not the gate — "yes",
+   * "no", "OK" are legitimate and short. If any partial with text already
+   * arrived, this never fires. Distinct from `NO_SPEECH_TIMEOUT_MS`, which
+   * handles a long recording with no speech.
+   *
+   * A setting because this discards audio the user produced, even if the
+   * production was an accidental tap. Law 5. Default on.
+   */
+  silenceGate: z.boolean().default(true),
+
+  /**
+   * Mute system output while recording, restore when it ends.
+   *
+   * Muting is local, reversible, and leaves the user's media where it was —
+   * the podcast keeps playing muted and they lose the seconds they talked
+   * over, which is what they wanted. Pausing other apps' media was considered
+   * and rejected: it reaches into another application's state.
+   *
+   * A setting because it is a system-wide side effect. Default on. Restoration
+   * is crash-proof (helper teardown + startup repair) and must not clobber a
+   * user who unmutes or changes volume during the recording.
+   */
+  muteWhileRecording: z.boolean().default(true),
 
   launchAtLogin: z.boolean().default(false),
 

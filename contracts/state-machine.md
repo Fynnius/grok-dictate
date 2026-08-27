@@ -4,6 +4,12 @@
 
 **Reopened again by the 2026-08-09 incident**, which found four defects in this document as much as in the code: insertion fired on the first final rather than on `transcript.done` (§12), the audio tail was dropped before the turn ended (§13), interim text was discarded when a turn died (§10), and a posted insert was presented as a landed one (§14). Each is written up below in the section it belongs to; the transition tables above them are current.
 
+**Reopened 2026-08-22 (latency/honesty pass).** Three additive effects, none of which change the state diagram:
+
+1. `mute_output` / `unmute_output` — system output mutes after the start cue and restores before the stop cue, on every path that leaves `recording` (release, Esc, error, cap, blocked, server-ended turn, quit). Capture still starts first; mute must not delay first PCM.
+2. `SILENCE_GATED` — an orchestrator-injected event after drain, when the utterance was short _and_ silent _and_ no partial text arrived. `processing` → `idle` with `abort_stt` and `hud(hidden)`, not an error. Distinct from `NO_SPEECH_TIMEOUT_MS`.
+3. `liveHudText` is snapshotted per turn like `repairSeams`. Off blanks `HudView.interim` on the way out; the context still keeps the real preview for salvage and the silence gate.
+
 **Phase 5 changed four things**, each because the integration found the original wrong rather than incomplete:
 
 1. `TURN_ENDED` in `recording` now emits `stop_capture`. It did not, so a turn the server ended while the key was still held left the microphone open — the macOS orange indicator lit through insertion and beyond, and the elapsed and cap timers still running.
@@ -69,27 +75,27 @@ Carried alongside the state; not part of it.
 
 ### From `idle`
 
-| Event                                 | →                           | Effects                                                                                            |
-| ------------------------------------- | --------------------------- | -------------------------------------------------------------------------------------------------- |
-| `PTT_DOWN`                            | `recording` (`mode=hold`)   | new `sessionId`; `request_frontmost`, `start_capture`, `start_stt`, `hud(recording)`, `cue(start)` |
-| `TOGGLE`                              | `recording` (`mode=toggle`) | as above                                                                                           |
-| `RETRY_INSERT` with `lastTranscript`  | `inserting`                 | `insert(lastTranscript, targetBundleId=null)` — see §6                                             |
-| `RETRY_INSERT` without                | `idle`                      | `hud(error "nothing to re-insert")`                                                                |
-| `INSERT_TEXT` with text               | `inserting`                 | `insert(text, targetBundleId=null)` — a history row or a Scratchpad edit; also §6                  |
-| `INSERT_TEXT` with empty text         | —                           |                                                                                                    |
-| `SECURE_INPUT(true)`                  | `blocked`                   | `hud(blocked)`, `tray(blocked)`                                                                    |
-| `PTT_UP`, `CANCEL`, transcript events | —                           |                                                                                                    |
+| Event                                 | →                           | Effects                                                                                                                                  |
+| ------------------------------------- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `PTT_DOWN`                            | `recording` (`mode=hold`)   | new `sessionId`; `request_frontmost`, `start_capture`, `start_stt`, `hud(recording)`, `cue(start)`, `mute_output` (if the setting is on) |
+| `TOGGLE`                              | `recording` (`mode=toggle`) | as above                                                                                                                                 |
+| `RETRY_INSERT` with `lastTranscript`  | `inserting`                 | `insert(lastTranscript, targetBundleId=null)` — see §6                                                                                   |
+| `RETRY_INSERT` without                | `idle`                      | `hud(error "nothing to re-insert")`                                                                                                      |
+| `INSERT_TEXT` with text               | `inserting`                 | `insert(text, targetBundleId=null)` — a history row or a Scratchpad edit; also §6                                                        |
+| `INSERT_TEXT` with empty text         | —                           |                                                                                                                                          |
+| `SECURE_INPUT(true)`                  | `blocked`                   | `hud(blocked)`, `tray(blocked)`                                                                                                          |
+| `PTT_UP`, `CANCEL`, transcript events | —                           |                                                                                                                                          |
 
 ### From `recording`
 
 | Event                       | →                            | Effects                                                                                                                         |
 | --------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `PTT_UP` when `mode=hold`   | `processing`                 | `stop_capture`, `finish_stt`, `hud(processing)`, `cue(stop)`                                                                    |
+| `PTT_UP` when `mode=hold`   | `processing`                 | `stop_capture`, `unmute_output`, `finish_stt`, `hud(processing)`, `cue(stop)`                                                   |
 | `PTT_UP` when `mode=toggle` | —                            | the Fn release that follows an `Fn+Space`                                                                                       |
 | `TOGGLE` when `mode=hold`   | `recording` (`mode=toggle`)  | **converts a hold into hands-free** — see §4                                                                                    |
-| `TOGGLE` when `mode=toggle` | `processing`                 | `stop_capture`, `finish_stt`, `hud(processing)`, `cue(stop)`                                                                    |
+| `TOGGLE` when `mode=toggle` | `processing`                 | `stop_capture`, `unmute_output`, `finish_stt`, `hud(processing)`, `cue(stop)`                                                   |
 | `PTT_DOWN`                  | —                            | already recording; must not reset `mode`                                                                                        |
-| `CANCEL`                    | `idle`                       | `cancel_capture`, `abort_stt`, `hud(hidden)` — nothing inserted, nothing stored                                                 |
+| `CANCEL`                    | `idle`                       | `cancel_capture`, `abort_stt`, `unmute_output`, `hud(hidden)` — nothing inserted, nothing stored                                |
 | `TRANSCRIPT_INTERIM`        | `recording`                  | `hud(recording)` with the new preview                                                                                           |
 | `TRANSCRIPT_FINAL`          | `recording`                  | append to `committed`; **not inserted yet** — see §7                                                                            |
 | `FRONTMOST`                 | `recording`                  | records `targetBundleId`                                                                                                        |
@@ -106,7 +112,8 @@ Carried alongside the state; not part of it.
 | `TRANSCRIPT_INTERIM`                    | `processing` | `hud(processing)`                                                        |
 | `TURN_ENDED` with `committed` non-empty | `inserting`  | `insert(committed, targetBundleId)`                                      |
 | `TURN_ENDED` with `committed` empty     | `idle`       | `hud(error "no speech detected")`                                        |
-| `CANCEL`                                | `idle`       | `abort_stt`, `hud(hidden)`                                               |
+| `CANCEL`                                | `idle`       | `abort_stt`, `unmute_output`, `hud(hidden)`                              |
+| `SILENCE_GATED`                         | `idle`       | `abort_stt`, `hud(hidden)` — a short silent tap; not an error            |
 | `PTT_DOWN`                              | `processing` | `pendingStart = true` — see §5                                           |
 | `PTT_UP`                                | `processing` | `pendingStart = false`                                                   |
 | `SECURE_INPUT(true)`                    | `blocked`    | the in-flight turn still lands in `blocked` and is shown, never inserted |
@@ -299,12 +306,12 @@ The drain is bounded by a short timer in `CaptureCoordinator` (`DRAIN_TIMEOUT_MS
 
 `insert_result.verified` closes it. Three outcomes now leave `inserting`:
 
-| Outcome                | HUD                                                     | History                          | Cue     |
-| ---------------------- | ------------------------------------------------------- | -------------------------------- | ------- |
-| `ok`, `verified: true` | `inserted` — the bare green check                       | `inserted: true, verified: true` | none    |
-| `ok`, otherwise        | `inserted` — amber, **full transcript**, rescue buttons | `inserted: true, verified: null` | none    |
-| `!ok`                  | `not_inserted(reason)`                                  | `inserted: false`                | `error` |
+| Outcome                | HUD                                   | History                          | Cue     |
+| ---------------------- | ------------------------------------- | -------------------------------- | ------- |
+| `ok`, `verified: true` | `inserted` — the bare green check     | `inserted: true, verified: true` | none    |
+| `ok`, otherwise        | `inserted` — the same green check     | `inserted: true, verified: null` | none    |
+| `!ok`                  | `not_inserted` — wordless red capsule | `inserted: false`                | `error` |
 
-**`ok: true` with `verified` not `true` means "typed, unconfirmed"**, and an absent `verified` — an older helper binary — reads as unconfirmed rather than confirmed. It also covers a _partial_ injection, which the helper reports as `null` rather than `false` because it will not claim nothing landed unless it measured no change at all; showing the whole transcript is what lets a user notice a truncated paste.
+**`ok: true` with `verified` not `true` means "typed, unconfirmed" on the wire and in history.** The HUD does not overlay a paragraph for it — a false "not inserted" / "typed, unconfirmed" pill over text that landed was worse than a silent drop the user will retry with ⌃⌘V. Unicode length-checking is off unless `GROK_DICTATE_INJECT_VERIFY=1`.
 
 Two deliberate trades. The unconfirmed pill plays **no error cue**: verification is impossible for a whole class of ordinary targets, so a cue there would fire on good dictations and train the user to ignore the one sound that means something. And `verification_failed` — posted, and proven not to have landed — arrives with `tier: 'unicode'`, because the tier that _ran_ is what a history row should name; nothing may read `tier === 'none'` as "it failed".

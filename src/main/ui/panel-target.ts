@@ -20,9 +20,9 @@
  * the result.
  */
 
-export type PanelName = 'settings' | 'history' | 'scratchpad';
+export type PanelName = 'settings' | 'history' | 'scratchpad' | 'stats';
 
-export const PANEL_NAMES: readonly PanelName[] = ['settings', 'history', 'scratchpad'];
+export const PANEL_NAMES: readonly PanelName[] = ['settings', 'history', 'scratchpad', 'stats'];
 
 /** The single renderer entry all three panels share. */
 export const PANEL_ENTRY = 'settings';
@@ -97,6 +97,14 @@ export function panelWindowSpec(panel: PanelName): PanelWindowSpec {
         minWidth: 360,
         minHeight: 220,
         title: 'Grok Dictate — Scratchpad',
+      };
+    case 'stats':
+      return {
+        width: 520,
+        height: 560,
+        minWidth: 420,
+        minHeight: 360,
+        title: 'Grok Dictate — Stats',
       };
   }
 }

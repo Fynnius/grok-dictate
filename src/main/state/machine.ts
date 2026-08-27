@@ -47,7 +47,14 @@ export type SessionEvent =
   | { type: 'INSERT_TIMEOUT'; sessionId: string }
   | { type: 'RECORDING_CAP_REACHED'; sessionId: string }
   | { type: 'LEVEL'; sessionId: string; level: number }
-  | { type: 'TICK'; now: number };
+  | { type: 'TICK'; now: number }
+  /**
+   * The orchestrator dropped a short silent tap after drain, without waiting
+   * on the server. `processing` → `idle`, HUD hidden, not an error.
+   * Added 2026-08-22. The decision is *not* made here — the reducer has no
+   * PCM — only interpreted.
+   */
+  | { type: 'SILENCE_GATED'; sessionId: string };
 
 /**
  * Everything except `SECURE_INPUT`, which `reduce` handles up front for every
@@ -81,7 +88,18 @@ export type Effect =
   | { type: 'tray'; state: SessionState; secureInput: boolean }
   | { type: 'cue'; cue: AudioCue }
   | { type: 'history_append'; entry: HistoryDraft }
-  | { type: 'log'; level: LogLevel; message: string; fields?: Record<string, unknown> };
+  | { type: 'log'; level: LogLevel; message: string; fields?: Record<string, unknown> }
+  /**
+   * Mute system output. Capture has already been asked to start; the
+   * orchestrator delays the helper command until the start cue has played.
+   * Added 2026-08-22.
+   */
+  | { type: 'mute_output' }
+  /**
+   * Restore system output. Issued on every path that leaves recording, and
+   * is idempotent in the helper. Added 2026-08-22.
+   */
+  | { type: 'unmute_output' };
 
 /* ------------------------------------------------------------------ *
  * State
@@ -137,6 +155,14 @@ export interface SessionContext {
    * because the reducer is where the decision belongs and the reducer is pure.
    */
   readonly hudFrameAt: number;
+  /**
+   * Snapshotted per turn from config, like `repairSeams`. Off blanks
+   * `HudView.interim` so the pill stays wordless; `ctx.interim` itself is
+   * kept for salvage and the silence gate.
+   */
+  readonly liveHudText: boolean;
+  readonly silenceGate: boolean;
+  readonly muteWhileRecording: boolean;
 }
 
 export interface Snapshot {
@@ -152,6 +178,9 @@ export interface MachineEnv {
    * supply a two-field env and get the shipping behaviour.
    */
   repairSeams?: () => boolean;
+  liveHudText?: () => boolean;
+  silenceGate?: () => boolean;
+  muteWhileRecording?: () => boolean;
 }
 
 export interface Step {
@@ -178,6 +207,9 @@ export const INITIAL_CONTEXT: SessionContext = {
   inserting: null,
   repairSeams: true,
   hudFrameAt: 0,
+  liveHudText: false,
+  silenceGate: true,
+  muteWhileRecording: true,
 };
 
 export const INITIAL_SNAPSHOT: Snapshot = { state: 'idle', ctx: INITIAL_CONTEXT };
@@ -240,9 +272,23 @@ function recordingView(ctx: SessionContext): HudView {
     kind: 'recording',
     elapsedMs: ctx.elapsedMs,
     level: ctx.level,
-    interim: ctx.interim,
+    // The pill is wordless. `ctx.interim` is kept for salvage and the
+    // silence gate; it must not reach the overlay.
+    interim: '',
     mode: ctx.mode,
   };
+}
+
+function processingView(): HudView {
+  return { kind: 'processing', interim: '' };
+}
+
+function muteEffect(ctx: SessionContext): Effect[] {
+  return ctx.muteWhileRecording ? [{ type: 'mute_output' }] : [];
+}
+
+function unmuteEffect(ctx: SessionContext): Effect[] {
+  return ctx.muteWhileRecording ? [{ type: 'unmute_output' }] : [];
 }
 
 /**
@@ -335,6 +381,9 @@ function startSession(ctx: SessionContext, mode: SessionMode, env: MachineEnv): 
     durationSec: null,
     inserting: null,
     repairSeams: env.repairSeams?.() ?? true,
+    liveHudText: env.liveHudText?.() ?? false,
+    silenceGate: env.silenceGate?.() ?? true,
+    muteWhileRecording: env.muteWhileRecording?.() ?? true,
     // The frame below counts: the first `LEVEL` of a turn arrives ~100 ms later
     // and has nothing to add to it.
     hudFrameAt: startedAt,
@@ -350,6 +399,10 @@ function startSession(ctx: SessionContext, mode: SessionMode, env: MachineEnv): 
     { type: 'hud', view: recordingView(next) },
     { type: 'tray', state: 'recording', secureInput: next.secureInput },
     { type: 'cue', cue: 'start' },
+    // After the start cue, never before capture. The orchestrator delays the
+    // helper command until the cue has been asked to play so a device-level
+    // mute cannot swallow the only eyes-free confirmation that the mic opened.
+    ...muteEffect(next),
   ]);
 }
 
@@ -375,6 +428,7 @@ function enterBlocked(snapshot: Snapshot): Step {
   const effects: Effect[] = [];
   if (state === 'recording' && ctx.sessionId !== null) {
     effects.push({ type: 'stop_capture', sessionId: ctx.sessionId });
+    effects.push(...unmuteEffect(ctx));
     effects.push({ type: 'finish_stt', sessionId: ctx.sessionId });
   }
   // A turn in flight is being taken away mid-sentence — that the user has to be
@@ -437,12 +491,13 @@ function notInsertedReason(outcome: InsertOutcome, fallback: NotInsertedReason):
  * green check and a `inserted: true` history row for 60.3 seconds of speech the
  * user never saw again.
  *
- *   ok && verified === true   — confirmed. The bare green check, as before.
- *   ok && verified !== true   — **typed, unconfirmed.** Same as a confirmed
- *                               insert as far as the machine knows, but the
- *                               user is shown the whole transcript so a silent
- *                               drop is catchable at a glance (§12.5).
- *   !ok                       — a real failure, with the helper's own reason.
+ *   ok && verified === true   — confirmed. The bare green check.
+ *   ok && verified !== true   — typed, unconfirmed. Same green check on the
+ *                               HUD; history still records `verified: null`.
+ *                               A paragraph overlay over the document was not
+ *                               wanted — recovery is History and ⌃⌘V.
+ *   !ok                       — a real failure. Wordless red capsule; same
+ *                               recovery. Helper reason is in history.
  */
 function insertView(
   outcome: InsertOutcome,
@@ -635,6 +690,7 @@ function toIdleWithError(ctx: SessionContext, error: AppError): Step {
     effects.push({ type: 'cancel_capture', sessionId: ctx.sessionId });
     effects.push({ type: 'abort_stt', sessionId: ctx.sessionId });
   }
+  effects.push(...unmuteEffect(ctx));
 
   const { text: salvaged, unconfirmedTail } = salvage(ctx);
   if (salvaged.length > 0) {
@@ -835,6 +891,7 @@ function reduceIdle(snapshot: Snapshot, event: PostSecureEvent, env: MachineEnv)
     case 'INSERT_RESULT':
     case 'INSERT_TIMEOUT':
     case 'RECORDING_CAP_REACHED':
+    case 'SILENCE_GATED':
       return ignored(snapshot, 'not meaningful while idle', event);
   }
 }
@@ -846,8 +903,9 @@ function reduceRecording(snapshot: Snapshot, event: PostSecureEvent, env: Machin
   const stopAndProcess = (): Step =>
     step('processing', { ...ctx, level: 0 }, [
       { type: 'stop_capture', sessionId },
+      ...unmuteEffect(ctx),
       { type: 'finish_stt', sessionId },
-      { type: 'hud', view: { kind: 'processing', interim: ctx.interim } },
+      { type: 'hud', view: processingView() },
       { type: 'tray', state: 'processing', secureInput: ctx.secureInput },
       { type: 'cue', cue: 'stop' },
     ]);
@@ -895,6 +953,7 @@ function reduceRecording(snapshot: Snapshot, event: PostSecureEvent, env: Machin
         [
           { type: 'cancel_capture', sessionId },
           { type: 'abort_stt', sessionId },
+          ...unmuteEffect(ctx),
           { type: 'hud', view: { kind: 'hidden' } },
           { type: 'tray', state: 'idle', secureInput: ctx.secureInput },
         ],
@@ -928,15 +987,16 @@ function reduceRecording(snapshot: Snapshot, event: PostSecureEvent, env: Machin
       const ended = endTurn(ctx, event.durationSec);
       return {
         snapshot: ended.snapshot,
-        effects: [{ type: 'stop_capture', sessionId }, ...ended.effects],
+        effects: [{ type: 'stop_capture', sessionId }, ...unmuteEffect(ctx), ...ended.effects],
       };
     }
 
     case 'RECORDING_CAP_REACHED':
       return step('processing', ctx, [
         { type: 'stop_capture', sessionId },
+        ...unmuteEffect(ctx),
         { type: 'finish_stt', sessionId },
-        { type: 'hud', view: { kind: 'processing', interim: ctx.interim } },
+        { type: 'hud', view: processingView() },
         // Without this the icon sits on `recording` through the whole
         // processing window after a capped hold, and Escape stays armed for a
         // state that is no longer recording.
@@ -969,6 +1029,7 @@ function reduceRecording(snapshot: Snapshot, event: PostSecureEvent, env: Machin
     case 'INSERT_TEXT':
     case 'INSERT_RESULT':
     case 'INSERT_TIMEOUT':
+    case 'SILENCE_GATED':
       return ignored(snapshot, 'not meaningful while recording', event);
   }
 }
@@ -1012,10 +1073,30 @@ function reduceProcessing(snapshot: Snapshot, event: PostSecureEvent): Step {
 
     case 'TRANSCRIPT_INTERIM': {
       const next = { ...ctx, interim: event.text };
-      return step('processing', next, [
-        { type: 'hud', view: { kind: 'processing', interim: event.text } },
-      ]);
+      return step('processing', next, [{ type: 'hud', view: processingView() }]);
     }
+
+    case 'SILENCE_GATED':
+      // Calm, not an error: a brushed key, not a failed dictation. The
+      // orchestrator has already aborted the STT turn; abort_stt here is
+      // idempotent if it has, and the only path if a test drives the event
+      // through the reducer directly.
+      return step(
+        'idle',
+        { ...ctx, sessionId: null, committed: [], interim: '', pendingStart: false, level: 0 },
+        [
+          { type: 'abort_stt', sessionId },
+          ...unmuteEffect(ctx),
+          { type: 'hud', view: { kind: 'hidden' } },
+          { type: 'tray', state: 'idle', secureInput: ctx.secureInput },
+          {
+            type: 'log',
+            level: 'info',
+            message: 'silence gate dropped a short silent tap',
+            fields: { sessionId },
+          },
+        ],
+      );
 
     case 'CANCEL':
       return step(
@@ -1023,6 +1104,7 @@ function reduceProcessing(snapshot: Snapshot, event: PostSecureEvent): Step {
         { ...ctx, sessionId: null, committed: [], interim: '', pendingStart: false },
         [
           { type: 'abort_stt', sessionId },
+          ...unmuteEffect(ctx),
           { type: 'hud', view: { kind: 'hidden' } },
           { type: 'tray', state: 'idle', secureInput: ctx.secureInput },
         ],
@@ -1150,6 +1232,7 @@ function reduceInserting(snapshot: Snapshot, event: PostSecureEvent, env: Machin
     case 'RECORDING_CAP_REACHED':
     case 'LEVEL':
     case 'TICK':
+    case 'SILENCE_GATED':
       return ignored(snapshot, 'not meaningful while inserting', event);
   }
 }
@@ -1292,6 +1375,7 @@ function reduceBlocked(snapshot: Snapshot, event: PostSecureEvent, env: MachineE
     case 'RECORDING_CAP_REACHED':
     case 'LEVEL':
     case 'TICK':
+    case 'SILENCE_GATED':
       return ignored(snapshot, 'not meaningful while blocked', event);
   }
 }

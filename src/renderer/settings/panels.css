@@ -385,6 +385,60 @@ button.icon:focus-visible {
   font-size: 11.5px;
 }
 
+/* ------------------------------------------------------------------ stats -- */
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin: 0 0 18px;
+}
+
+.stat {
+  background: var(--surface);
+  border: 0.5px solid var(--border-faint);
+  border-radius: 10px;
+  padding: 12px 14px 10px;
+  min-height: 88px;
+}
+
+.stat-value {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-label {
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--secondary);
+}
+
+.stat-hint {
+  margin: 6px 0 0;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--secondary);
+}
+
+.stats-assumption {
+  color: var(--secondary);
+  font-weight: 400;
+}
+
+.stats-saved {
+  font-size: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.stats-empty {
+  padding: 24px 16px;
+}
+
 /* ---------------------------------------------------------------- history -- */
 
 .rows {

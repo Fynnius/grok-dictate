@@ -47,6 +47,12 @@ class StubHelper implements NativeHelperPort {
   copy(text: string): void {
     this.copied.push(text);
   }
+  muteOutput(): void {
+    /* test stub — no hardware */
+  }
+  unmuteOutput(): void {
+    /* test stub — no hardware */
+  }
   getFrontmost(): Promise<FrontmostApp> {
     return Promise.resolve({ bundleId: 'com.apple.TextEdit', name: 'TextEdit' });
   }
@@ -113,6 +119,8 @@ function buildOrchestrator(timeouts: Partial<SttTimeouts> = {}): void {
     config: new MemoryConfig({ keyterms: ['kubectl'] }),
     logger,
     tickIntervalMs: 0,
+    muteAfterCueMs: 0,
+    unmuteBeforeCueMs: 0,
   });
   orchestrator.start();
 }

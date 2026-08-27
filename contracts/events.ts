@@ -28,11 +28,20 @@
  *   the gap closes by deletion rather than by inventing a consumer.
  *
  * See `state-machine.md` for what drives the session states below.
+ *
+ * ## 2026-08-22 latency/honesty pass
+ *
+ * - Optional `sentAtMs` on `capture-started` / `capture-chunk` so a renderer
+ *   that has no logger can still report when it sent. Canonical W0 marks are
+ *   stamped in main on **receive** (see `src/shared/timing.ts`).
+ * - Panel `'stats'` and `get-stats` invoke: aggregates only, no transcripts.
+ * - `open-window` accepts `'stats'`.
  */
 
 import type { InsertTier } from './helper-protocol.js';
 import type { AppError } from '../src/shared/result.js';
 import type { AppConfig, LanguageMode } from './config.js';
+import type { StatsViewModel } from '../src/shared/stats.js';
 
 /* ------------------------------------------------------------------ *
  * Session state (see state-machine.md)
@@ -89,16 +98,14 @@ export type NotInsertedReason =
  * Everything the HUD needs to render, as one value. Phase 4 owns the pixels;
  * this is the data.
  *
- * `inserted` and `not_inserted` both carry the **full transcript**. That is not
- * decoration:  — Unicode injection can half-succeed silently,
- * and seeing the full text next to what actually landed is the only way a user
- * catches it at a glance.
+ * `inserted` and `not_inserted` both still carry the **full transcript** on
+ * the view, for History and ⌃⌘V. The HUD itself is wordless for both: a green
+ * check or a red flash. A paragraph overlay in the middle of the screen was
+ * not wanted.
  *
- * `inserted.verified` is what decides whether the transcript is *shown*.
- * `true` renders the bare green check (overhaul §16.4, the user's own call);
- * anything else renders the amber "typed, unconfirmed" pill with the whole
- * text and the recovery buttons, because a silent drop and a confirmed insert
- * must not look the same — which they did until the 2026-08-09 incident.
+ * `inserted.verified` is recorded, not shown. `true` means the helper
+ * confirmed a landing; anything else means it could not tell. They draw the
+ * same check.
  */
 export type HudView =
   | { kind: 'hidden' }
@@ -221,9 +228,9 @@ export type RendererToMain =
    *  Phase 5, replacing a `cancel` that meant two different things. */
   | { type: 'dismiss-hud' }
   | { type: 'set-language-mode'; mode: LanguageMode }
-  | { type: 'open-window'; window: 'settings' | 'history' | 'scratchpad' | 'signin' }
+  | { type: 'open-window'; window: 'settings' | 'history' | 'scratchpad' | 'signin' | 'stats' }
   /** PCM16 mono @16 kHz, 100 ms / 3200-byte chunks. */
-  | { type: 'capture-chunk'; sessionId: string; pcm: ArrayBuffer }
+  | { type: 'capture-chunk'; sessionId: string; pcm: ArrayBuffer; sentAtMs?: number }
   /**
    * **The last `capture-chunk` of this session has been sent.** The renderer's
    * answer to `capture-stop`, and the reason `stop` is two-phase.
@@ -261,6 +268,11 @@ export type RendererToMain =
        * produced. Optional because a device may report none of them.
        */
       trackSettings?: CaptureTrackSettings;
+      /**
+       * Renderer `Date.now()` at send. Optional diagnostic; W0 stamps the
+       * canonical `device_open` mark when main *receives* this frame.
+       */
+      sentAtMs?: number;
     };
 
 /** The subset of `MediaTrackSettings` worth carrying across the IPC boundary. */
@@ -290,6 +302,11 @@ export type InvokeRequest =
   | { type: 'get-config' }
   | { type: 'set-config'; config: AppConfig }
   | { type: 'get-history'; query: string | null; limit: number }
+  /**
+   * Aggregates over history for the stats panel. No transcript text in the
+   * reply — the view-model is counts and sums only.
+   */
+  | { type: 'get-stats' }
   | { type: 'purge-history' }
   | { type: 'get-snapshot' }
   | { type: 'get-auth-status' }
@@ -309,6 +326,7 @@ export interface AppSnapshot {
 export type InvokeResponse =
   | { type: 'config'; config: AppConfig }
   | { type: 'history'; entries: readonly HistoryEntry[] }
+  | { type: 'stats'; stats: StatsViewModel }
   | { type: 'snapshot'; snapshot: AppSnapshot }
   | { type: 'auth-status'; status: AuthStatus }
   | { type: 'ok' }

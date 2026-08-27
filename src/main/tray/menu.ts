@@ -15,7 +15,7 @@ import type { AppConfig, LanguageMode } from '@contracts/config.js';
 import type { HudView, SessionState } from '@contracts/events.js';
 import type { TrayIconName } from './icons.js';
 
-export type PanelName = 'settings' | 'history' | 'scratchpad';
+export type PanelName = 'settings' | 'history' | 'scratchpad' | 'stats';
 
 export type TrayAction =
   | { kind: 'set-language'; mode: LanguageMode }
@@ -123,13 +123,52 @@ const PREVIEW_VIEWS: readonly { id: string; label: string; view: HudView }[] = [
       kind: 'recording',
       elapsedMs: 7_000,
       level: 0.42,
+      interim: '',
+      mode: 'hold',
+    },
+  },
+  {
+    id: 'preview.recording_live',
+    label: 'Recording (live text)',
+    view: {
+      kind: 'recording',
+      elapsedMs: 7_000,
+      level: 0.42,
       interim: 'hello there',
       mode: 'hold',
     },
   },
   {
+    id: 'preview.recording_live_long',
+    label: 'Recording (long live text)',
+    view: {
+      kind: 'recording',
+      elapsedMs: 22_000,
+      level: 0.55,
+      interim:
+        'deployed that on the staging server and then ran the migration because the pod would otherwise restart',
+      mode: 'hold',
+    },
+  },
+  {
+    id: 'preview.recording_toggle_live',
+    label: 'Hands-free (live text)',
+    view: {
+      kind: 'recording',
+      elapsedMs: 12_000,
+      level: 0.35,
+      interim: 'this is a hands-free dictation',
+      mode: 'toggle',
+    },
+  },
+  {
     id: 'preview.processing',
     label: 'Transcribing',
+    view: { kind: 'processing', interim: '' },
+  },
+  {
+    id: 'preview.processing_live',
+    label: 'Transcribing (live text)',
     view: { kind: 'processing', interim: 'hello there, this is a test' },
   },
   {
@@ -143,10 +182,9 @@ const PREVIEW_VIEWS: readonly { id: string; label: string; view: HudView }[] = [
     },
   },
   {
-    // Two entries for one `HudView` kind, because `verified` selects between
-    // two entirely different surfaces — a wordless check and a transcript pill
-    // with four buttons (2026-08-09 incident). Previewing only the happy one
-    // is how the silent-drop rendering would go unlooked-at again.
+    // Two entries for one `HudView` kind, because `verified` is still a
+    // distinct view even though both draw the wordless check. Previewing only
+    // the confirmed one would hide a data path History still records.
     id: 'preview.inserted_unconfirmed',
     label: 'Inserted (unconfirmed)',
     view: {
@@ -252,6 +290,11 @@ export function buildTrayMenu(model: TrayModel): readonly TrayMenuItem[] {
       id: 'open.history',
       label: model.historyCount === 0 ? 'History' : `History (${String(model.historyCount)})`,
       action: { kind: 'open', panel: 'history' },
+    },
+    {
+      id: 'open.stats',
+      label: 'Stats',
+      action: { kind: 'open', panel: 'stats' },
     },
     {
       id: 'open.scratchpad',

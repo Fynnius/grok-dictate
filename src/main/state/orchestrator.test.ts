@@ -14,7 +14,7 @@
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { MemoryConfig, MemoryHistory, MemoryHud, MemorySound, MemoryTray } from '@mocks/mock-ui.js';
-import type { HotkeyBindings } from '@contracts/config.js';
+import type { AppConfig, HotkeyBindings } from '@contracts/config.js';
 import type {
   AudioHandlers,
   AudioSourcePort,
@@ -26,7 +26,8 @@ import type {
   SttTurn,
   SttTurnOptions,
 } from '@contracts/ports.js';
-import { clearLogSinks, createLogger } from '@shared/logger.js';
+import { CHUNK_BYTES } from '@shared/constants.js';
+import { addLogSink, clearLogSinks, createLogger } from '@shared/logger.js';
 import { Orchestrator } from './orchestrator.js';
 
 /**
@@ -55,8 +56,10 @@ class ScriptedAudio implements AudioSourcePort {
   cancel(sessionId: string): void {
     this.cancelled.push(sessionId);
   }
+  /** Test seam for the silence gate. `null` means "cannot measure" and does not gate. */
+  buffer: Uint8Array | null = null;
   getUtteranceBuffer(): Uint8Array | null {
-    return null;
+    return this.buffer;
   }
 
   /** The renderer's tail chunk, arriving after `capture-stop`. */
@@ -113,12 +116,19 @@ class StubHelper implements NativeHelperPort {
   outcome: InsertOutcome = { tier: 'ax', ok: true, error: null, verified: true };
   readonly inserted: string[] = [];
 
+  readonly mutes: string[] = [];
   insert(text: string): Promise<InsertOutcome> {
     this.inserted.push(text);
     return Promise.resolve(this.outcome);
   }
   copy(): void {
     throw new Error('the clipboard is written only on an explicit user action');
+  }
+  muteOutput(): void {
+    this.mutes.push('mute');
+  }
+  unmuteOutput(): void {
+    this.mutes.push('unmute');
   }
   getFrontmost(): Promise<FrontmostApp> {
     return Promise.resolve({ bundleId: 'com.apple.TextEdit', name: 'TextEdit' });
@@ -162,7 +172,7 @@ afterEach(() => {
   clearLogSinks();
 });
 
-function harness(options: { eagerDrain?: boolean } = {}): Harness {
+function harness(options: { eagerDrain?: boolean; config?: Partial<AppConfig> } = {}): Harness {
   const audio = new ScriptedAudio(options.eagerDrain ?? false);
   const stt = new ScriptedStt();
   const helper = new StubHelper();
@@ -176,9 +186,11 @@ function harness(options: { eagerDrain?: boolean } = {}): Harness {
     tray: new MemoryTray(),
     sound: new MemorySound(),
     history,
-    config: new MemoryConfig(),
+    config: new MemoryConfig(options.config),
     logger: createLogger('orchestrator-test'),
     tickIntervalMs: 0,
+    muteAfterCueMs: 0,
+    unmuteBeforeCueMs: 0,
   });
   live.push(orchestrator);
   return { orchestrator, audio, stt, helper, hud, history };
@@ -279,19 +291,17 @@ describe('the HUD is not sent a frame it is already showing (BUG-7)', () => {
     expect(hud.views.length - shown).toBeLessThanOrEqual(1);
   });
 
-  it('still sends a frame the moment anything about it changes', () => {
+  it('does not send a HUD frame for an interim the pill will not draw', () => {
     const { orchestrator, hud } = harness();
     orchestrator.dispatch({ type: 'PTT_DOWN', ts: 1 });
     const before = hud.views.length;
-    orchestrator.dispatch({ type: 'TRANSCRIPT_INTERIM', sessionId: '', text: 'hallo' });
-    orchestrator.dispatch({
-      type: 'TRANSCRIPT_INTERIM',
-      sessionId: orchestrator.snapshot.ctx.sessionId ?? '',
-      text: 'hallo du',
-    });
+    const sessionId = orchestrator.snapshot.ctx.sessionId ?? '';
+    orchestrator.dispatch({ type: 'TRANSCRIPT_INTERIM', sessionId, text: 'hallo' });
+    orchestrator.dispatch({ type: 'TRANSCRIPT_INTERIM', sessionId, text: 'hallo du' });
 
-    expect(hud.views.length).toBeGreaterThan(before);
-    expect(hud.last).toMatchObject({ kind: 'recording', interim: 'hallo du' });
+    expect(hud.views.length).toBe(before);
+    expect(hud.last).toMatchObject({ kind: 'recording', interim: '' });
+    expect(orchestrator.snapshot.ctx.interim).toBe('hallo du');
   });
 
   it('does not swallow the transition out of recording', () => {
@@ -371,5 +381,90 @@ describe('a finished turn is let go (2026-08-09 incident, BUG-5)', () => {
 
     h.orchestrator.dispose();
     expect(h.stt.turns.every((turn) => turn.aborts === 0)).toBe(true);
+  });
+});
+
+describe('mute around recording (2026-08-22)', () => {
+  it('mutes after capture start and unmutes on every exit', () => {
+    const { orchestrator, helper } = harness();
+    orchestrator.dispatch({ type: 'PTT_DOWN', ts: 1 });
+    expect(helper.mutes).toEqual(['mute']);
+    orchestrator.dispatch({ type: 'PTT_UP', ts: 2 });
+    expect(helper.mutes).toEqual(['mute', 'unmute']);
+  });
+
+  it('unmutes on cancel even if mute never ran', () => {
+    const { orchestrator, helper } = harness();
+    orchestrator.dispatch({ type: 'PTT_DOWN', ts: 1 });
+    orchestrator.dispatch({ type: 'CANCEL' });
+    expect(helper.mutes.at(-1)).toBe('unmute');
+  });
+});
+
+describe('silence gate at drain (2026-08-22)', () => {
+  it('skips STT finish on a short silent utterance and hides the HUD without an error', () => {
+    const { orchestrator, audio, stt, hud } = harness();
+    audio.buffer = new Uint8Array(CHUNK_BYTES);
+    orchestrator.dispatch({ type: 'PTT_DOWN', ts: 1 });
+    orchestrator.dispatch({ type: 'PTT_UP', ts: 2 });
+    audio.drain();
+    expect(stt.only.finishes).toBe(0);
+    expect(stt.only.aborts).toBe(1);
+    expect(orchestrator.snapshot.state).toBe('idle');
+    expect(hud.last).toEqual({ kind: 'hidden' });
+  });
+
+  it('does not gate once any partial with text has arrived', () => {
+    const { orchestrator, audio, stt } = harness();
+    audio.buffer = new Uint8Array(0);
+    orchestrator.dispatch({ type: 'PTT_DOWN', ts: 1 });
+    const sessionId = orchestrator.snapshot.ctx.sessionId ?? '';
+    orchestrator.dispatch({ type: 'TRANSCRIPT_INTERIM', sessionId, text: 'yes' });
+    orchestrator.dispatch({ type: 'PTT_UP', ts: 2 });
+    audio.drain();
+    expect(stt.only.finishes).toBe(1);
+    expect(stt.only.aborts).toBe(0);
+  });
+});
+
+describe('W0 timing channel', () => {
+  it('emits key=value lines for a synthetic session without transcript text', () => {
+    const lines: string[] = [];
+    addLogSink((_line, record) => {
+      if (record.msg.startsWith('timing ')) lines.push(record.msg);
+    });
+    const { orchestrator, audio } = harness();
+    audio.buffer = new Uint8Array(64).fill(1);
+    orchestrator.dispatch({ type: 'PTT_DOWN', ts: 1 });
+    const sessionId = orchestrator.snapshot.ctx.sessionId ?? '';
+    audio.handlers?.onStarted(16_000);
+    audio.chunk(new Uint8Array(64).fill(1));
+    orchestrator.dispatch({
+      type: 'TRANSCRIPT_INTERIM',
+      sessionId,
+      text: 'secret words that must not leak',
+    });
+    orchestrator.dispatch({ type: 'PTT_UP', ts: 2 });
+    audio.drain();
+
+    const joined = lines.join('\n');
+    expect(joined).toContain('event=hotkey_down');
+    expect(joined).toContain('event=capture_requested');
+    expect(joined).toContain('event=device_open');
+    expect(joined).toContain('event=first_pcm_main');
+    expect(joined).toContain('event=hotkey_up');
+    expect(joined).not.toContain('secret words');
+    expect(joined).not.toContain('must not leak');
+  });
+});
+
+describe('live interim stays off the HUD', () => {
+  it('keeps the recording capsule wordless even if a leftover config asks for preview', () => {
+    const { orchestrator, hud } = harness({ config: { liveHudText: true } });
+    orchestrator.dispatch({ type: 'PTT_DOWN', ts: 1 });
+    const sessionId = orchestrator.snapshot.ctx.sessionId ?? '';
+    orchestrator.dispatch({ type: 'TRANSCRIPT_INTERIM', sessionId, text: 'hello there' });
+    expect(hud.last).toMatchObject({ kind: 'recording', interim: '' });
+    expect(orchestrator.snapshot.ctx.interim).toBe('hello there');
   });
 });

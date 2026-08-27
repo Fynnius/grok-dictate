@@ -33,6 +33,7 @@ import {
 import { AppConfigSchema } from '@contracts/config.js';
 import { addLogSink, consoleSink, createLogger, setLogLevel } from '@shared/logger.js';
 import { appError } from '@shared/result.js';
+import { STATS_ROW_CAP, aggregateStats } from '@shared/stats.js';
 import { envString } from '@shared/env.js';
 import { createAudioSource } from './audio/index.js';
 import { createAuthProvider } from './auth/index.js';
@@ -303,6 +304,14 @@ function main(): void {
         }
         case 'get-history':
           return { type: 'history', entries: await history.list(request.query, request.limit) };
+        case 'get-stats': {
+          const cfg = config.get();
+          const entries = await history.list(null, STATS_ROW_CAP);
+          return {
+            type: 'stats',
+            stats: aggregateStats(entries, Date.now(), cfg.historyRetentionDays),
+          };
+        }
         case 'purge-history':
           await history.purge();
           return { type: 'ok' };

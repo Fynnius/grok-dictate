@@ -11,7 +11,8 @@
     "src/renderer/**/*.tsx",
     "src/shared/result.ts",
     "src/shared/constants.ts",
-    "src/shared/hud-view.ts"
+    "src/shared/hud-view.ts",
+    "src/shared/stats.ts"
   ],
   "exclude": ["**/* [0-9].*"],
   "compilerOptions": {

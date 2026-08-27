@@ -11,6 +11,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type {
+  AudioCue,
   AudioSourcePort,
   ConfigPort,
   HistoryPort,
@@ -28,6 +29,15 @@ import { systemLanguageSubtag } from '@shared/env.js';
 import { sameHudView } from '@shared/hud-view.js';
 import type { Logger } from '@shared/logger.js';
 import { appError } from '@shared/result.js';
+import { CUE_SPECS } from '../sound/cues.js';
+import { assessSilenceGate, pcmDurationMs } from '@shared/silence-gate.js';
+import {
+  TimingSession,
+  formatTimingLine,
+  timingEnabled,
+  type TimingEvent,
+  type TimingFields,
+} from '@shared/timing.js';
 import {
   INITIAL_SNAPSHOT,
   reduce,
@@ -52,6 +62,20 @@ export interface OrchestratorDeps {
   readonly onChange?: (snapshot: Snapshot, hud: HudView) => void;
   /** HUD elapsed-time refresh. 0 disables it (tests). */
   readonly tickIntervalMs?: number;
+  /**
+   * How long to wait after the start cue before muting output.
+   * Production: start-cue duration + 15 ms pad. Tests pass 0 so they stay
+   * synchronous. **Chosen, not measured:** the cue is 55 ms by spec; 15 ms
+   * covers executeJavaScript scheduling without delaying first PCM (capture
+   * already started).
+   */
+  readonly muteAfterCueMs?: number;
+  /**
+   * How long to wait after unmute before playing the stop cue, so a device
+   * mute does not swallow it. **Chosen, not measured:** CoreAudio property
+   * sets are typically <10 ms; 25 ms is well under the 55 ms cue. Tests pass 0.
+   */
+  readonly unmuteBeforeCueMs?: number;
 }
 
 function productionEnv(config: ConfigPort): MachineEnv {
@@ -61,6 +85,9 @@ function productionEnv(config: ConfigPort): MachineEnv {
     // Read per turn, not captured once: the settings window can toggle this
     // between two dictations and the next one should honour it.
     repairSeams: () => config.get().repairSeams,
+    liveHudText: () => config.get().liveHudText,
+    silenceGate: () => config.get().silenceGate,
+    muteWhileRecording: () => config.get().muteWhileRecording,
   };
 }
 
@@ -97,6 +124,11 @@ export class Orchestrator {
   /** Set while dispatch is running, so effects can queue follow-up events. */
   #dispatching = false;
   readonly #queue: SessionEvent[] = [];
+  #timing: TimingSession | null = null;
+  readonly #timingOn = timingEnabled();
+  #muteTimer: NodeJS.Timeout | null = null;
+  #cueTimer: NodeJS.Timeout | null = null;
+  #awaitingUnmuteCue = false;
 
   constructor(deps: OrchestratorDeps) {
     this.#deps = deps;
@@ -126,6 +158,8 @@ export class Orchestrator {
       native.onReady(() => {
         // Re-assert bindings on every ready, including after a restart.
         native.setHotkeys(config.get().hotkeys);
+        // Defensive: a previous helper may have died muted. Idempotent if not.
+        native.unmuteOutput();
       }),
       native.onHotkey((action, ts) => {
         switch (action) {
@@ -147,15 +181,23 @@ export class Orchestrator {
         this.dispatch({ type: 'SECURE_INPUT', enabled });
       }),
     );
-    if (native.isReady) native.setHotkeys(config.get().hotkeys);
+    if (native.isReady) {
+      native.setHotkeys(config.get().hotkeys);
+      native.unmuteOutput();
+    }
   }
 
   dispose(): void {
     for (const unsubscribe of this.#unsubscribes.splice(0)) unsubscribe();
     this.#clearTimers();
+    this.#cancelMuteTimers();
+    // Leaving the user muted is the worst bug in this pass. Dispose is the
+    // quit path; the helper also restores on its own teardown.
+    this.#deps.native.unmuteOutput();
     for (const turn of this.#turns.values()) turn.abort();
     this.#turns.clear();
     this.#draining.clear();
+    this.#timing = null;
   }
 
   /**
@@ -174,12 +216,17 @@ export class Orchestrator {
         const next = this.#queue.shift();
         if (next === undefined) break;
         const before = this.#snapshot.state;
+        this.#noteEvent(next, before);
         const stepped = reduce(this.#snapshot, next, this.#env);
         this.#snapshot = stepped.snapshot;
         if (before !== stepped.snapshot.state) {
           this.#log.debug('state', { from: before, to: stepped.snapshot.state, event: next.type });
         }
         for (const effect of stepped.effects) this.#run(effect);
+        if (before !== 'idle' && stepped.snapshot.state === 'idle') {
+          this.#mark('idle');
+          this.#emitSummary();
+        }
         this.#deps.onChange?.(this.#snapshot, this.#hudView);
       }
     } finally {
@@ -188,13 +235,24 @@ export class Orchestrator {
   }
 
   #run(effect: Effect): void {
-    const { audio, stt, native, hud, tray, sound, history, config } = this.#deps;
+    const { audio, stt, native, hud, tray, history, config } = this.#deps;
 
     switch (effect.type) {
       case 'start_capture': {
         const sessionId = effect.sessionId;
         audio.start(sessionId, {
-          onChunk: (pcm) => this.#turns.get(sessionId)?.sendPcm(pcm),
+          onChunk: (pcm) => {
+            const timing = this.#timing;
+            if (timing !== null && timing.sessionId === sessionId) {
+              timing.pcmChunks += 1;
+              if (timing.mark('first_pcm_main', this.#env.now()).first) {
+                this.#emitMark('first_pcm_main', timing.elapsed(this.#env.now()), {
+                  pcm_bytes: pcm.byteLength,
+                });
+              }
+            }
+            this.#turns.get(sessionId)?.sendPcm(pcm);
+          },
           onLevel: (level) => this.dispatch({ type: 'LEVEL', sessionId, level }),
           onError: (error) => this.dispatch({ type: 'SESSION_ERROR', sessionId, error }),
           onDrained: () => this.#onDrained(sessionId),
@@ -202,8 +260,11 @@ export class Orchestrator {
             // Assumption 10.4: verify the context really runs at 16 kHz rather
             // than resampling twice (device → 48 k → 16 k).
             this.#log.info('capture started', { actualSampleRate });
+            this.#mark('device_open');
           },
         });
+        this.#beginTiming(sessionId);
+        this.#mark('capture_requested');
         this.#startTimers(sessionId);
         return;
       }
@@ -245,9 +306,32 @@ export class Orchestrator {
             useFinalize: cfg.useFinalize,
           },
           {
-            onReady: () => this.#log.debug('stt ready', { sessionId }),
-            onInterim: (text) => this.dispatch({ type: 'TRANSCRIPT_INTERIM', sessionId, text }),
-            onFinal: (text) => this.dispatch({ type: 'TRANSCRIPT_FINAL', sessionId, text }),
+            onReady: () => {
+              this.#log.debug('stt ready', { sessionId });
+              this.#mark('socket_open');
+            },
+            onInterim: (text) => {
+              if (text.trim().length > 0) {
+                const timing = this.#timing;
+                if (timing !== null && timing.sessionId === sessionId) {
+                  timing.partials += 1;
+                  if (timing.mark('first_partial', this.#env.now()).first) {
+                    this.#emitMark('first_partial', timing.elapsed(this.#env.now()), {
+                      text_len: text.length,
+                    });
+                  }
+                }
+              }
+              this.dispatch({ type: 'TRANSCRIPT_INTERIM', sessionId, text });
+            },
+            onFinal: (text) => {
+              const timing = this.#timing;
+              if (timing !== null && timing.sessionId === sessionId) {
+                timing.finals += 1;
+                timing.textLen += text.length;
+              }
+              this.dispatch({ type: 'TRANSCRIPT_FINAL', sessionId, text });
+            },
             onLanguageDetected: (code) => {
               this.#detectedLanguage = code;
             },
@@ -258,6 +342,9 @@ export class Orchestrator {
                 durationSec,
                 sent: this.#wireLanguage,
                 detected: this.#detectedLanguage,
+              });
+              this.#mark('final_transcript', {
+                duration_ms: durationSec === null ? 0 : durationSec * 1000,
               });
               this.#releaseTurn(sessionId);
               this.dispatch({ type: 'TURN_ENDED', sessionId, durationSec });
@@ -285,7 +372,8 @@ export class Orchestrator {
           });
           return;
         }
-        this.#turns.get(effect.sessionId)?.finish();
+        // Drain already completed (MockAudioSource drains inside stop()).
+        this.#finishOrGate(effect.sessionId);
         return;
       }
 
@@ -306,9 +394,20 @@ export class Orchestrator {
 
       case 'insert': {
         const sessionId = effect.sessionId;
+        this.#mark('insert_begin', { text_len: effect.text.length });
         void native.insert(effect.text, effect.targetBundleId).then((outcome) => {
           this.dispatch({ type: 'INSERT_RESULT', sessionId, outcome });
         });
+        return;
+      }
+
+      case 'mute_output': {
+        this.#scheduleMute();
+        return;
+      }
+
+      case 'unmute_output': {
+        this.#unmuteNow();
         return;
       }
 
@@ -334,7 +433,7 @@ export class Orchestrator {
         return;
 
       case 'cue':
-        if (config.get().audioCues) sound.play(effect.cue);
+        this.#playCue(effect.cue);
         return;
 
       case 'history_append': {
@@ -390,6 +489,53 @@ export class Orchestrator {
     if (pending === undefined) return;
     this.#draining.delete(sessionId);
     if (!pending.finishRequested) return;
+    this.#finishOrGate(sessionId);
+  }
+
+  /**
+   * End of capture: either finish the STT turn or drop a short silent tap.
+   *
+   * Called once the drain has completed *and* the machine has asked to
+   * finish — order of those two is not guaranteed (the mock audio port
+   * drains inside `stop()`, the real renderer acks after).
+   */
+  #finishOrGate(sessionId: string): void {
+    const pcm = this.#deps.audio.getUtteranceBuffer(sessionId);
+    const ctx = this.#snapshot.ctx;
+    const durationMs =
+      ctx.startedAt === null
+        ? pcm === null
+          ? 0
+          : pcmDurationMs(pcm)
+        : this.#env.now() - ctx.startedAt;
+    const decision = assessSilenceGate({
+      pcm,
+      durationMs,
+      hasTranscriptText:
+        ctx.interim.trim().length > 0 || ctx.committed.some((segment) => segment.trim().length > 0),
+      enabled: ctx.silenceGate,
+    });
+    this.#mark('audio_done', {
+      gated: decision.gated,
+      reason: decision.reason,
+      peak: decision.peak,
+      rms: decision.rms,
+      duration_ms: decision.durationMs,
+      pcm_bytes: pcm?.byteLength ?? 0,
+    });
+
+    if (decision.gated) {
+      this.#mark('silence_gated', {
+        gated: true,
+        reason: decision.reason,
+        duration_ms: decision.durationMs,
+      });
+      this.#turns.get(sessionId)?.abort();
+      this.#turns.delete(sessionId);
+      this.dispatch({ type: 'SILENCE_GATED', sessionId });
+      return;
+    }
+
     this.#turns.get(sessionId)?.finish();
   }
 
@@ -419,6 +565,110 @@ export class Orchestrator {
     if (this.#capTimer !== null) {
       clearTimeout(this.#capTimer);
       this.#capTimer = null;
+    }
+  }
+
+  #noteEvent(event: SessionEvent, before: Snapshot['state']): void {
+    if ((event.type === 'PTT_DOWN' || event.type === 'TOGGLE') && before === 'idle') {
+      // Session id is assigned inside reduce; we start the clock *after* the
+      // step below. Hotkey is marked from #run(start_capture) via #beginTiming.
+      return;
+    }
+    if (event.type === 'PTT_UP' || (event.type === 'TOGGLE' && before === 'recording')) {
+      this.#mark('hotkey_up');
+    }
+    if (event.type === 'INSERT_RESULT' || event.type === 'INSERT_TIMEOUT') {
+      this.#mark('insert_end', {
+        ok: event.type === 'INSERT_RESULT' ? event.outcome.ok : false,
+      });
+    }
+  }
+
+  #beginTiming(sessionId: string): void {
+    const now = this.#env.now();
+    this.#timing = new TimingSession(sessionId, now);
+    this.#emitMark('hotkey_down', 0);
+  }
+
+  #mark(event: TimingEvent, extra: TimingFields = {}): void {
+    const timing = this.#timing;
+    if (timing === null) return;
+    const { elapsedMs, first } = timing.mark(event, this.#env.now());
+    if (!first && event !== 'summary') return;
+    this.#emitMark(event, elapsedMs, extra);
+  }
+
+  #emitMark(event: TimingEvent, elapsedMs: number, extra: TimingFields = {}): void {
+    if (!this.#timingOn || this.#timing === null) return;
+    const line = formatTimingLine(this.#timing.sessionId, event, elapsedMs, extra);
+    this.#log.info(`timing ${line}`);
+  }
+
+  #emitSummary(): void {
+    const timing = this.#timing;
+    if (timing === null) return;
+    const now = this.#env.now();
+    const elapsedMs = timing.elapsed(now);
+    this.#emitMark('summary', elapsedMs, timing.summaryFields(now));
+    this.#timing = null;
+  }
+
+  #scheduleMute(): void {
+    const delay = this.#deps.muteAfterCueMs ?? CUE_SPECS.start.durationMs + 15;
+    if (this.#muteTimer !== null) {
+      clearTimeout(this.#muteTimer);
+      this.#muteTimer = null;
+    }
+    const mute = (): void => {
+      this.#muteTimer = null;
+      if (this.#snapshot.state !== 'recording') return;
+      this.#deps.native.muteOutput();
+    };
+    if (delay <= 0) {
+      mute();
+      return;
+    }
+    this.#muteTimer = setTimeout(mute, delay);
+    this.#muteTimer.unref?.();
+  }
+
+  #unmuteNow(): void {
+    if (this.#muteTimer !== null) {
+      clearTimeout(this.#muteTimer);
+      this.#muteTimer = null;
+    }
+    this.#deps.native.unmuteOutput();
+    this.#awaitingUnmuteCue = true;
+  }
+
+  #playCue(cue: AudioCue): void {
+    const play = (): void => {
+      if (this.#deps.config.get().audioCues) this.#deps.sound.play(cue);
+    };
+    if (cue === 'stop' && this.#awaitingUnmuteCue) {
+      this.#awaitingUnmuteCue = false;
+      const gap = this.#deps.unmuteBeforeCueMs ?? 25;
+      if (gap > 0) {
+        if (this.#cueTimer !== null) clearTimeout(this.#cueTimer);
+        this.#cueTimer = setTimeout(() => {
+          this.#cueTimer = null;
+          play();
+        }, gap);
+        this.#cueTimer.unref?.();
+        return;
+      }
+    }
+    play();
+  }
+
+  #cancelMuteTimers(): void {
+    if (this.#muteTimer !== null) {
+      clearTimeout(this.#muteTimer);
+      this.#muteTimer = null;
+    }
+    if (this.#cueTimer !== null) {
+      clearTimeout(this.#cueTimer);
+      this.#cueTimer = null;
     }
   }
 

@@ -11,6 +11,7 @@ import { createRoot } from 'react-dom/client';
 import { HistoryView } from './HistoryView.js';
 import { ScratchpadView } from './ScratchpadView.js';
 import { SettingsView } from './SettingsView.js';
+import { StatsView } from './StatsView.js';
 import './panels.css';
 
 /**
@@ -25,6 +26,8 @@ function viewFromHash(hash: string): React.JSX.Element {
       return <HistoryView />;
     case 'scratchpad':
       return <ScratchpadView />;
+    case 'stats':
+      return <StatsView />;
     default:
       return <SettingsView />;
   }

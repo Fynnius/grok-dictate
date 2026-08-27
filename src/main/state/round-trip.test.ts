@@ -16,8 +16,9 @@ import { resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { MockAudioSource } from '@mocks/mock-audio.js';
 import { DEFAULT_SCRIPT, MockSttClient, type MockSttScript } from '@mocks/mock-stt.js';
+import type { AppConfig } from '@contracts/config.js';
 import { MemoryConfig, MemoryHistory, MemoryHud, MemorySound, MemoryTray } from '@mocks/mock-ui.js';
-import { CHUNK_BYTES } from '@shared/constants.js';
+import { CHUNK_BYTES, SAMPLE_RATE_HZ } from '@shared/constants.js';
 import { clearLogSinks, createLogger } from '@shared/logger.js';
 import { HelperSupervisor } from '../bridge/helper-supervisor.js';
 import { HelperClient } from '../native/helper-client.js';
@@ -50,7 +51,12 @@ afterEach(async () => {
 });
 
 async function harness(
-  options: { script?: MockSttScript; chunkIntervalMs?: number } = {},
+  options: {
+    script?: MockSttScript;
+    chunkIntervalMs?: number;
+    pcm?: Buffer;
+    config?: Partial<AppConfig>;
+  } = {},
 ): Promise<Harness> {
   const logger = createLogger('test');
   const supervisor = new HelperSupervisor({
@@ -64,7 +70,11 @@ async function harness(
   const tray = new MemoryTray();
   const sound = new MemorySound();
   const history = new MemoryHistory();
-  const audio = new MockAudioSource({ chunkIntervalMs: options.chunkIntervalMs ?? 10, loop: true });
+  const audio = new MockAudioSource({
+    chunkIntervalMs: options.chunkIntervalMs ?? 10,
+    loop: true,
+    ...(options.pcm === undefined ? {} : { pcm: options.pcm }),
+  });
   const stt = new MockSttClient(options.script ?? DEFAULT_SCRIPT);
 
   const orchestrator = new Orchestrator({
@@ -75,9 +85,11 @@ async function harness(
     tray,
     sound,
     history,
-    config: new MemoryConfig(),
+    config: new MemoryConfig(options.config),
     logger,
     tickIntervalMs: 0, // no HUD ticking; it only adds noise here
+    muteAfterCueMs: 0,
+    unmuteBeforeCueMs: 0,
   });
   orchestrator.start();
   supervisor.start();
@@ -131,8 +143,7 @@ describe('the mocked dictation round-trip', () => {
       kind: 'inserted',
       text: DEFAULT_SCRIPT.finalText,
       tier: 'ax',
-      // The mock helper confirms, as the real one does on the AX tier. Without
-      // this the pill would be the amber "typed, unconfirmed" one instead.
+      // The mock helper confirms, as the real one does on the AX tier.
       verified: true,
     });
     expect(h.history.entries).toHaveLength(1);
@@ -440,5 +451,34 @@ describe('contract coverage (§5.1 — an unexercised contract is unvalidated)',
     expect(seen.has('log')).toBe(false);
 
     // app→helper `shutdown` is exercised by supervisor.stop() in afterEach.
+  });
+});
+
+describe('live interim, silence gate, mute (2026-08-22)', () => {
+  it('keeps interim off the HUD while still salvaging it in context', async () => {
+    const h = await harness({
+      script: { ...DEFAULT_SCRIPT, connectMs: 20, partials: [{ atMs: 40, text: 'hello there' }] },
+      config: { liveHudText: true },
+    });
+    h.mock({ action: 'hotkey', hotkeyAction: 'ptt_down' });
+    await waitFor(() => h.orchestrator.snapshot.state === 'recording');
+    await waitFor(() => h.orchestrator.snapshot.ctx.interim === 'hello there', 2000);
+    expect(
+      h.hud.views.some(
+        (v) => (v.kind === 'recording' || v.kind === 'processing') && v.interim !== '',
+      ),
+    ).toBe(false);
+    h.mock({ action: 'hotkey', hotkeyAction: 'ptt_up' });
+    await waitFor(() => h.orchestrator.snapshot.state === 'idle');
+  });
+
+  it('drops a short silent tap without waiting on STT and without an error HUD', async () => {
+    const silent = Buffer.alloc(SAMPLE_RATE_HZ * 2 * 0.2); // 200 ms of zeros
+    const h = await harness({ pcm: silent, chunkIntervalMs: 10 });
+    await dictate(h, 80);
+    await waitFor(() => h.orchestrator.snapshot.state === 'idle');
+    expect(h.hud.last).toEqual({ kind: 'hidden' });
+    expect(h.history.entries).toHaveLength(0);
+    expect(h.orchestrator.snapshot.ctx.lastTranscript).toBeNull();
   });
 });
