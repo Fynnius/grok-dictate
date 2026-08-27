@@ -29,7 +29,20 @@
 
 export const PCM_WORKLET_NAME = 'grok-pcm-capture';
 
-const SOURCE = `
+/**
+ * Posted at the processor on stop (and again at the next start) so a reused
+ * `AudioWorkletNode` cannot prepend session N's leftover `_fill` onto
+ * session N+1. Empty `process()` after `source.disconnect()` does **not**
+ * reset — that is the bug this message exists to close.
+ */
+export const WORKLET_RESET = { type: 'reset' } as const;
+
+/**
+ * The processor body. Exported so tests can instantiate the *shipped* source
+ * against a fake `AudioWorkletProcessor` — a copy of this algorithm in the
+ * test would pass while the worklet still mixed sessions.
+ */
+export const PCM_WORKLET_SOURCE = `
 class GrokPcmCapture extends AudioWorkletProcessor {
   constructor(options) {
     super();
@@ -37,13 +50,23 @@ class GrokPcmCapture extends AudioWorkletProcessor {
     this._size = size;
     this._buffer = new Float32Array(size);
     this._fill = 0;
+    var self = this;
+    this.port.onmessage = function (event) {
+      var data = event && event.data;
+      if (data && data.type === 'reset') {
+        self._fill = 0;
+        self._buffer = new Float32Array(self._size);
+      }
+    };
   }
 
   process(inputs) {
     const input = inputs[0];
     // An empty input is normal: the device is still warming up, or the source
     // was disconnected. Returning true keeps the processor alive for the next
-    // quantum rather than tearing the graph down.
+    // quantum rather than tearing the graph down. It deliberately does **not**
+    // reset _fill: that leftover is what a reused node would prepend to the
+    // next session unless a reset message arrives.
     if (!input || input.length === 0) return true;
     const channel = input[0];
     if (!channel || channel.length === 0) return true;
@@ -68,10 +91,18 @@ class GrokPcmCapture extends AudioWorkletProcessor {
 registerProcessor(${JSON.stringify(PCM_WORKLET_NAME)}, GrokPcmCapture);
 `;
 
+/** Main-thread half of the reset: the capture renderer posts this at stop
+ *  and again at the next start. Extracted so a test can drive the same call. */
+export function resetWorkletPort(port: {
+  postMessage: (message: { readonly type: 'reset' }) => void;
+}): void {
+  port.postMessage(WORKLET_RESET);
+}
+
 let cachedUrl: string | null = null;
 
 /** A `blob:` URL for the processor above. Built once per renderer. */
 export function pcmWorkletUrl(): string {
-  cachedUrl ??= URL.createObjectURL(new Blob([SOURCE], { type: 'text/javascript' }));
+  cachedUrl ??= URL.createObjectURL(new Blob([PCM_WORKLET_SOURCE], { type: 'text/javascript' }));
   return cachedUrl;
 }

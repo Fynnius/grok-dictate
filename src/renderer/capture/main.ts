@@ -17,8 +17,10 @@
  * 1. **The microphone is never pre-warmed**. `getUserMedia`
  *    is called when a hold starts and the tracks are stopped when it ends, so
  *    the macOS orange indicator is lit exactly while recording. A permanently
- *    lit indicator reads as spyware, and pre-warming buys nothing that
- *    connect-time buffering does not already cover (§4.3).
+ *    lit indicator reads as spyware. The `AudioContext` and worklet *are*
+ *    warmed at the first press and reused: they light nothing. Connect-time
+ *    buffering still covers the socket handshake; warming the graph covers
+ *    the hops before the first sample exists.
  *
  * 2. **Opening the device must not delay anything.** `AudioSourcePort.start` is
  *    synchronous by contract; everything here is asynchronous and reports
@@ -34,7 +36,7 @@ import type { AppError } from '@shared/result.js';
 import { appError } from '@shared/result.js';
 import type { CaptureTrackSettings, MainToRenderer } from '@contracts/events.js';
 import { PcmEncoder, rmsOf } from './pcm.js';
-import { PCM_WORKLET_NAME, pcmWorkletUrl } from './pcm-worklet.js';
+import { PCM_WORKLET_NAME, resetWorkletPort, pcmWorkletUrl } from './pcm-worklet.js';
 
 const api = window.grokDictate;
 
@@ -62,17 +64,23 @@ const AUDIO_CONSTRAINTS: MediaTrackConstraints = {
 /** Guard against a device that flaps; three attempts, then report (§11.1.8). */
 const MAX_DEVICE_RESTARTS = 3;
 
-interface ActiveCapture {
-  readonly sessionId: string;
+interface WarmGraph {
   readonly context: AudioContext;
   readonly node: AudioWorkletNode;
   readonly sink: GainNode;
+  readonly sampleRate: number;
+}
+
+interface ActiveCapture {
+  readonly sessionId: string;
+  readonly graph: WarmGraph;
   readonly encoder: PcmEncoder;
   stream: MediaStream;
   source: MediaStreamAudioSourceNode;
   restarts: number;
 }
 
+let graph: WarmGraph | null = null;
 let active: ActiveCapture | null = null;
 /**
  * The session main last asked for. Every `await` below re-checks it: a hold
@@ -80,6 +88,65 @@ let active: ActiveCapture | null = null;
  * not open with nobody listening.
  */
 let requested: string | null = null;
+
+/**
+ * Prepare the `AudioContext` and worklet once. They need no microphone
+ * permission and light nothing.
+ *
+ * Idea from FluidVoice's prepare/start split; reimplemented against this
+ * capture renderer. No source copied.
+ *
+ * **The context is suspended while idle.** A running idle context holds an
+ * output device open and can pin Bluetooth headsets in HFP instead of A2DP
+ * (music sounding like a phone call all day). That was not measurable here,
+ * so the conservative choice is suspend. Chromium may also construct the
+ * context already `suspended` without a user gesture — `resume()` is called
+ * explicitly at press.
+ *
+ * `sampleRate` is committed at construction (16 kHz). The explicit-resampler
+ * fallback in the coordinator depends on that; a later context at 48 kHz
+ * would double-resample.
+ */
+async function ensureGraph(sampleRate: number, chunkBytes: number): Promise<WarmGraph> {
+  if (graph !== null && graph.sampleRate === sampleRate && graph.context.state !== 'closed') {
+    return graph;
+  }
+  if (graph !== null) {
+    try {
+      await graph.context.close();
+    } catch {
+      // Already gone.
+    }
+    graph = null;
+  }
+
+  const context = new AudioContext({ sampleRate, latencyHint: 'interactive' });
+  await context.audioWorklet.addModule(pcmWorkletUrl());
+  const node = new AudioWorkletNode(context, PCM_WORKLET_NAME, {
+    numberOfInputs: 1,
+    numberOfOutputs: 1,
+    outputChannelCount: [1],
+    channelCount: 1,
+    channelCountMode: 'explicit',
+    channelInterpretation: 'speakers',
+    processorOptions: {
+      framesPerPost: Math.max(128, Math.round((context.sampleRate * chunkBytes) / 32_000)),
+    },
+  });
+  const sink = context.createGain();
+  sink.gain.value = 0;
+  node.connect(sink);
+  sink.connect(context.destination);
+
+  if (context.state === 'running') {
+    // Idle-running is the Bluetooth-HFP hazard. Suspend until press.
+    await context.suspend();
+  }
+
+  const warmed: WarmGraph = { context, node, sink, sampleRate: context.sampleRate };
+  graph = warmed;
+  return warmed;
+}
 
 // Only two of `MainToRenderer`'s members concern this window; the rest are for
 // the HUD and settings, so this is an `if` rather than an exhaustive switch.
@@ -104,8 +171,28 @@ async function startCapture(
   // two sessions can never hold the device at once.
   if (active !== null) stopCapture(active.sessionId);
 
+  let warmed: WarmGraph;
+  try {
+    warmed = await ensureGraph(sampleRate, chunkBytes);
+  } catch (cause) {
+    api.send({
+      type: 'capture-error',
+      sessionId,
+      error: appError(
+        'audio_device',
+        'Grok Dictate could not start the audio pipeline.',
+        'Try again. If it keeps happening, restart Grok Dictate.',
+        cause instanceof Error ? cause.message : String(cause),
+      ),
+    });
+    return;
+  }
+  if (requested !== sessionId) return;
+
   let stream: MediaStream;
   try {
+    // **The only call that lights the orange indicator.** The graph is warm;
+    // the microphone is not. getUserMedia happens at press, never earlier.
     stream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS });
   } catch (cause) {
     api.send({ type: 'capture-error', sessionId, error: describeMediaError(cause) });
@@ -117,46 +204,34 @@ async function startCapture(
     return;
   }
 
-  let context: AudioContext;
-  let node: AudioWorkletNode;
-  let source: MediaStreamAudioSourceNode;
-  let sink: GainNode;
   try {
-    // Asking for 16 kHz makes Chromium resample the device internally, which is
-    // the whole reason  preferred a renderer to `cpal`. If it
-    // refuses, `PcmEncoder` downsamples explicitly (assumption 10.4).
-    context = new AudioContext({ sampleRate, latencyHint: 'interactive' });
-    await context.audioWorklet.addModule(pcmWorkletUrl());
-    if (requested !== sessionId) {
-      stopTracks(stream);
-      await context.close();
-      return;
+    if (warmed.context.state === 'suspended') {
+      await warmed.context.resume();
     }
-
-    node = new AudioWorkletNode(context, PCM_WORKLET_NAME, {
-      numberOfInputs: 1,
-      numberOfOutputs: 1,
-      outputChannelCount: [1],
-      // Force the graph to downmix for us, so the worklet always sees one
-      // channel however many the device offers.
-      channelCount: 1,
-      channelCountMode: 'explicit',
-      channelInterpretation: 'speakers',
-      processorOptions: {
-        framesPerPost: Math.max(128, Math.round((context.sampleRate * chunkBytes) / 32_000)),
-      },
+  } catch (cause) {
+    stopTracks(stream);
+    api.send({
+      type: 'capture-error',
+      sessionId,
+      error: appError(
+        'audio_device',
+        'Grok Dictate could not start the audio pipeline.',
+        'Try again. If it keeps happening, restart Grok Dictate.',
+        cause instanceof Error ? cause.message : String(cause),
+      ),
     });
+    return;
+  }
+  if (requested !== sessionId) {
+    stopTracks(stream);
+    void warmed.context.suspend().catch(() => undefined);
+    return;
+  }
 
-    source = context.createMediaStreamSource(stream);
-    source.connect(node);
-    // A worklet only runs while the graph is rendering, and the graph only
-    // renders towards a destination — so the node is connected through a muted
-    // gain stage. Without the gain of 0 this would play the microphone back
-    // through the speakers.
-    sink = context.createGain();
-    sink.gain.value = 0;
-    node.connect(sink);
-    sink.connect(context.destination);
+  let source: MediaStreamAudioSourceNode;
+  try {
+    source = warmed.context.createMediaStreamSource(stream);
+    source.connect(warmed.node);
   } catch (cause) {
     stopTracks(stream);
     api.send({
@@ -172,15 +247,16 @@ async function startCapture(
     return;
   }
 
+  // A fresh encoder per session. Reusing one across dictations would carry
+  // the previous turn's pending bytes into the next (the two-phase drain
+  // flushes, but only if stop ran; a cancelled start must not leak either).
   const capture: ActiveCapture = {
     sessionId,
-    context,
-    node,
-    sink,
+    graph: warmed,
     stream,
     source,
     encoder: new PcmEncoder({
-      inputSampleRate: context.sampleRate,
+      inputSampleRate: warmed.context.sampleRate,
       outputSampleRate: sampleRate,
       chunkBytes,
     }),
@@ -188,7 +264,10 @@ async function startCapture(
   };
   active = capture;
 
-  node.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
+  // Belt: a missed reset on the previous stop must not mix sessions.
+  resetWorkletPort(warmed.node.port);
+
+  warmed.node.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
     if (active !== capture) return;
     const samples = new Float32Array(event.data);
     api.send({ type: 'capture-level', sessionId, level: rmsOf(samples) });
@@ -204,7 +283,8 @@ async function startCapture(
   api.send({
     type: 'capture-started',
     sessionId,
-    actualSampleRate: context.sampleRate,
+    actualSampleRate: warmed.context.sampleRate,
+    sentAtMs: Date.now(),
     ...trackSettingsOf(stream),
   });
 }
@@ -229,17 +309,20 @@ function stopCapture(sessionId: string): void {
   // rather than "here is one more".
   api.send({ type: 'capture-drained', sessionId });
 
-  capture.node.port.onmessage = null;
+  // Drop the processor's leftover frames *before* disconnecting: empty
+  // `process()` after disconnect does not reset `_fill`, and a reused node
+  // would prepend those samples to the next session.
+  resetWorkletPort(capture.graph.node.port);
+  capture.graph.node.port.onmessage = null;
   try {
     capture.source.disconnect();
-    capture.node.disconnect();
-    capture.sink.disconnect();
   } catch {
     // A context already torn down by a device failure; nothing to do.
   }
   // Stopping the tracks is what turns the orange indicator off (§11.2.4).
+  // The graph stays: only the microphone is released.
   stopTracks(capture.stream);
-  void capture.context.close().catch(() => undefined);
+  void capture.graph.context.suspend().catch(() => undefined);
 }
 
 /* ------------------------------------------------------------------ *
@@ -251,7 +334,7 @@ function stopCapture(sessionId: string): void {
  * the stream silently — the worklet simply stops being fed and the user watches
  * an empty HUD until the no-speech watchdog fires ten seconds later.
  *
- * The `AudioContext` and the encoder are kept across a restart, so chunk framing
+ * The warm graph and the encoder are kept across a restart, so chunk framing
  * and the sample rate stay continuous; only the source node is replaced.
  */
 function watchDevice(capture: ActiveCapture): void {
@@ -314,8 +397,8 @@ async function restartDevice(capture: ActiveCapture): Promise<void> {
   stopTracks(capture.stream);
 
   capture.stream = stream;
-  capture.source = capture.context.createMediaStreamSource(stream);
-  capture.source.connect(capture.node);
+  capture.source = capture.graph.context.createMediaStreamSource(stream);
+  capture.source.connect(capture.graph.node);
   watchDevice(capture);
 
   // Re-announcing the open device is the only channel this renderer has for
@@ -324,7 +407,8 @@ async function restartDevice(capture: ActiveCapture): Promise<void> {
   api.send({
     type: 'capture-started',
     sessionId: capture.sessionId,
-    actualSampleRate: capture.context.sampleRate,
+    actualSampleRate: capture.graph.context.sampleRate,
+    sentAtMs: Date.now(),
     ...trackSettingsOf(stream),
   });
 }

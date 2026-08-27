@@ -247,6 +247,31 @@ describe('draining the tail after stop (2026-08-09 incident, BUG-2)', () => {
   });
 });
 
+describe('session isolation across a warm reuse', () => {
+  it("does not put the previous session's tail on the next session's first chunk", () => {
+    const audio = coordinator();
+    const first = new Recorder();
+    audio.start('s1', first);
+    audio.handleRendererMessage(chunk(1));
+    audio.stop('s1');
+    audio.handleRendererMessage(chunk(9));
+    audio.handleRendererMessage({ type: 'capture-drained', sessionId: 's1' });
+    expect(first.chunks.map((c) => c[0])).toEqual([1, 9]);
+
+    const second = new Recorder();
+    audio.start('s2', second);
+    audio.handleRendererMessage({
+      type: 'capture-chunk',
+      sessionId: 's2',
+      pcm: new Uint8Array(CHUNK_BYTES).fill(2).buffer,
+    });
+    expect(second.chunks).toHaveLength(1);
+    expect(second.chunks[0]?.[0]).toBe(2);
+    expect(audio.getUtteranceBuffer('s2')?.[0]).toBe(2);
+    expect(audio.getUtteranceBuffer('s1')?.[CHUNK_BYTES]).toBe(9);
+  });
+});
+
 describe('the full-utterance buffer', () => {
   it('accumulates every chunk and survives stop', () => {
     const audio = coordinator();

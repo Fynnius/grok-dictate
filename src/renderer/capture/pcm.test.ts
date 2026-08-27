@@ -54,6 +54,19 @@ describe('chunking', () => {
     expect(enc.flush()).toBeNull();
   });
 
+  it('does not carry pending bytes into a new encoder (warm-graph session isolation)', () => {
+    // Reusing one encoder across dictations would leak the previous turn's
+    // unflushed tail into the next session's first chunk. The capture
+    // renderer constructs a fresh PcmEncoder per session because of this.
+    const first = encoder();
+    first.push(new Float32Array(100).fill(1));
+    expect(first.pendingBytes).toBeGreaterThan(0);
+    const second = encoder();
+    const chunk = second.push(new Float32Array(1_600).fill(-1))[0];
+    expect(chunk).toBeDefined();
+    expect(samplesOf(chunk ?? new Uint8Array()).every((s) => s === -32_768)).toBe(true);
+  });
+
   it('does not reuse a buffer between chunks', () => {
     const enc = encoder();
     const first = enc.push(new Float32Array(1_600).fill(1))[0];
