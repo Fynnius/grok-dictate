@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import type { HudView, NotInsertedReason } from '@contracts/events.js';
 import { INSERT_TIERS } from '@contracts/helper-protocol.js';
-import { notInsertedCopy, present, tierLabel, unconfirmedInsertCopy } from './presentation.js';
+import {
+  LIVE_TEXT_MAX_CHARS,
+  notInsertedCopy,
+  present,
+  recentLiveText,
+  tierLabel,
+  unconfirmedInsertCopy,
+} from './presentation.js';
 
 /** A transcript long enough that any truncation would be obvious. */
 const LONG =
@@ -28,13 +35,16 @@ describe('present', () => {
     for (const view of ALL_VIEWS) expect(() => present(view)).not.toThrow();
   });
 
-  it('shows the FULL transcript in not_inserted', () => {
-    // This is the assertion that stops a "tidy" truncation from hiding the one
-    // state where the words exist and are nowhere else on screen.
-    expect(
-      present({ kind: 'not_inserted', text: LONG, reason: 'insert_failed', detail: null }).message
-        ?.body,
-    ).toBe(LONG);
+  it('keeps not_inserted wordless — the transcript is in history, not on the overlay', () => {
+    const p = present({
+      kind: 'not_inserted',
+      text: LONG,
+      reason: 'insert_failed',
+      detail: null,
+    });
+    expect(p.message).toBeNull();
+    expect(p.capsule).toEqual({ kind: 'alert' });
+    expect(p.layer).toBe('capsule');
   });
 
   it('reduces a CONFIRMED insert to the green check — no transcript (overhaul §16.4)', () => {
@@ -53,13 +63,14 @@ describe('present', () => {
     }
   });
 
-  it('offers Copy and Re-insert only where the text still needs rescuing', () => {
+  it('offers no overlay buttons on insert outcomes — recovery is History and ⌃⌘V', () => {
     const ids = (view: HudView): string[] =>
       (present(view).message?.actions ?? []).map((a) => a.id);
     expect(
       ids({ kind: 'not_inserted', text: LONG, reason: 'insert_failed', detail: null }),
-    ).toEqual(['copy', 'retry', 'scratchpad', 'dismiss']);
+    ).toEqual([]);
     expect(ids({ kind: 'inserted', text: LONG, tier: 'ax', verified: true })).toEqual([]);
+    expect(ids({ kind: 'inserted', text: LONG, tier: 'unicode', verified: null })).toEqual([]);
     expect(ids({ kind: 'recording', elapsedMs: 0, level: 0, interim: '', mode: 'hold' })).toEqual(
       [],
     );
@@ -67,6 +78,38 @@ describe('present', () => {
     // `error` too, since §19.3: it diagnoses, it does not ask for a decision,
     // and it fades on its own. A button would be one more thing to aim at.
     expect(ids({ kind: 'error', message: 'boom', hint: 'try again' })).toEqual([]);
+  });
+
+  it('never draws live words, even when the view still carries an interim', () => {
+    const recording = present({
+      kind: 'recording',
+      elapsedMs: 1_200,
+      level: 0.3,
+      interim: 'hello there',
+      mode: 'hold',
+    });
+    expect(recording.liveText).toBeNull();
+    expect(recording.capsule).toEqual({ kind: 'waveform', buttons: false });
+    expect(recording.message).toBeNull();
+
+    const processing = present({ kind: 'processing', interim: 'hello there' });
+    expect(processing.liveText).toBeNull();
+    expect(processing.capsule).toEqual({ kind: 'processing' });
+  });
+
+  it('leaves the capsule wordless when interim is empty', () => {
+    expect(
+      present({ kind: 'recording', elapsedMs: 0, level: 0, interim: '', mode: 'hold' }).liveText,
+    ).toBeNull();
+    expect(present({ kind: 'processing', interim: '' }).liveText).toBeNull();
+  });
+
+  it('truncates a long interim to the tail if a surface ever asks', () => {
+    const long = 'alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima';
+    const shown = recentLiveText(long);
+    expect(shown.startsWith('…')).toBe(true);
+    expect(shown.length).toBeLessThanOrEqual(LIVE_TEXT_MAX_CHARS + 1);
+    expect(shown).toContain('lima');
   });
 
   it('gives the ✕/✓ buttons to hands-free only (overhaul §16.5c)', () => {
@@ -89,6 +132,7 @@ describe('present', () => {
     // 71 × 30 pt holds nothing but the bars; the interim was never the text
     // that gets inserted anyway.
     expect(p.message).toBeNull();
+    expect(p.liveText).toBeNull();
   });
 
   it('colours failure red and the self-clearing pause amber (overhaul §16.5b)', () => {
@@ -111,9 +155,7 @@ describe('present', () => {
     expect(p.message?.detail).toBe('Run `grok` to refresh.');
   });
 
-  it('lets the helper speak for itself when it reported a failed verification', () => {
-    // On that path the helper's `error` is prose for the user and names the
-    // application it typed into; our own advice would repeat it word for word.
+  it('does not put helper diagnostics on the overlay when verification failed', () => {
     const fromHelper =
       'Terminal did not accept the keystrokes. Copy the text from the pill, or press ⌃⌘V somewhere else.';
     const p = present({
@@ -122,17 +164,9 @@ describe('present', () => {
       reason: 'verification_failed',
       detail: fromHelper,
     });
-    expect(p.message?.detail).toBe(fromHelper);
-
-    // …and an outcome that carried no prose still says what to do.
-    const bare = present({
-      kind: 'not_inserted',
-      text: 'hi',
-      reason: 'verification_failed',
-      detail: null,
-    });
-    expect(bare.message?.detail).toBe(notInsertedCopy('verification_failed').detail);
-    expect(bare.message?.detail).toMatch(/⌃⌘V/);
+    expect(p.message).toBeNull();
+    expect(p.layer).toBe('capsule');
+    expect(p.tone).toBe('error');
   });
 
   it('does not read a failed verification as "no tier would take it"', () => {
@@ -144,18 +178,18 @@ describe('present', () => {
       reason: 'verification_failed',
       detail: null,
     });
-    expect(p.message?.title).not.toBe(notInsertedCopy('insert_failed').title);
+    expect(p.label).not.toBe(notInsertedCopy('insert_failed').title);
     expect(p.tone).toBe('error');
   });
 
-  it('appends the helper diagnostic when there is one', () => {
+  it('keeps a helper diagnostic off the overlay even when there is one', () => {
     const p = present({
       kind: 'not_inserted',
       text: 'hi',
       reason: 'insert_failed',
       detail: 'kAXErrorAttributeUnsupported',
     });
-    expect(p.message?.detail).toContain('kAXErrorAttributeUnsupported');
+    expect(p.message).toBeNull();
   });
 
   it('agrees with the shared layer switch about who gets the message pill', () => {
@@ -167,12 +201,11 @@ describe('present', () => {
   });
 });
 
-describe('an insert the helper could not confirm (2026-08-09 incident)', () => {
+describe('an insert the helper could not confirm', () => {
   /**
-   * The incident: 60.3 s of dictation posted as 38 Unicode events in 245 ms
-   * into an Electron terminal that dropped every one. `ok: true` meant
-   * "posted", the pill showed a green check with no text, and the user had no
-   * way to notice. These four assertions are the ones that would have caught it.
+   * The overlay that used to distinguish this from a confirmed insert was a
+   * paragraph in the middle of the screen ("Typed — not confirmed"). That was
+   * not wanted. History still records `verified`; the HUD is the same check.
    */
   const unconfirmed = (verified: boolean | null): HudView => ({
     kind: 'inserted',
@@ -181,43 +214,18 @@ describe('an insert the helper could not confirm (2026-08-09 incident)', () => {
     verified,
   });
 
-  it('is visually distinct from a confirmed insert', () => {
+  it('draws the same wordless check as a confirmed insert', () => {
     const confirmed = present({ kind: 'inserted', text: LONG, tier: 'unicode', verified: true });
     for (const view of [unconfirmed(null), unconfirmed(false)]) {
-      const p = present(view);
-      expect(p.tone).not.toBe(confirmed.tone);
-      expect(p.capsule).not.toEqual(confirmed.capsule);
-      // Amber, not red: most unconfirmed inserts did land, and red is reserved
-      // for a failure the user must act on (§16.5b).
-      expect(p.tone).toBe('warning');
-      expect(p.capsule).toEqual({ kind: 'alert' });
+      expect(present(view)).toEqual(confirmed);
     }
   });
 
-  it('shows the FULL transcript, which is the only way to catch a partial drop', () => {
-    expect(present(unconfirmed(null)).message?.body).toBe(LONG);
-  });
-
-  it('offers the same rescue buttons as a failure', () => {
-    expect((present(unconfirmed(null)).message?.actions ?? []).map((a) => a.id)).toEqual([
-      'copy',
-      'retry',
-      'scratchpad',
-      'dismiss',
-    ]);
-  });
-
-  it('says it is unconfirmed rather than claiming success, and names the tier', () => {
+  it('puts no transcript and no buttons on the overlay', () => {
     const p = present(unconfirmed(null));
-    expect(p.message?.title).toMatch(/not confirmed/i);
-    expect(p.message?.detail).toContain(tierLabel('unicode'));
-    expect(p.message?.detail).toMatch(/⌃⌘V/);
-  });
-
-  it('treats an absent verification exactly like a failed one — both are unconfirmed', () => {
-    // An older helper build sends no `verified` at all. Reading that as
-    // "confirmed" is the bug; reading it as "unconfirmed" is the contract.
-    expect(present(unconfirmed(null))).toEqual(present(unconfirmed(false)));
+    expect(p.message).toBeNull();
+    expect(p.capsule).toEqual({ kind: 'check' });
+    expect(p.layer).toBe('capsule');
   });
 });
 

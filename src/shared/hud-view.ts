@@ -45,8 +45,10 @@ export function sameHudView(a: HudView, b: HudView): boolean {
  * - `none`             — nothing; the window hides.
  * - `capsule`          — only the bottom capsule (waveform / spinner / check).
  * - `capsule-message`  — the capsule plus the transient message pill above it,
- *                        for the states that need words: `not_inserted`,
- *                        `blocked`, `error`.
+ *                        for the states that need words: `blocked` (Secure
+ *                        Input) and `error` (auth / no speech). Insert
+ *                        outcomes stay in the capsule — a paragraph overlay
+ *                        over the document was not wanted.
  */
 export type HudLayer = 'none' | 'capsule' | 'capsule-message';
 
@@ -56,14 +58,9 @@ export function hudLayer(view: HudView): HudLayer {
       return 'none';
     case 'recording':
     case 'processing':
-      return 'capsule';
     case 'inserted':
-      // A *confirmed* insert is the bare check (§16.4). An unconfirmed one has
-      // words to say and a transcript to show, so it joins the message states —
-      // the 2026-08-09 incident is what a silent drop dressed as a green check
-      // costs (`contracts/events.ts`, `HudView.inserted.verified`).
-      return view.verified === true ? 'capsule' : 'capsule-message';
     case 'not_inserted':
+      return 'capsule';
     case 'blocked':
     case 'error':
       return 'capsule-message';
@@ -78,10 +75,8 @@ export function hudLayer(view: HudView): HudLayer {
  * swallowed by a window floating over it. Only states that
  * actually offer a button take the mouse.
  *
- * `blocked` shows a message pill but stays click-through — it has nothing to
- * press, and it can sit on screen for as long as a password field has focus.
- * `error` joined it in §19.3, for the same reason: its Dismiss button is gone,
- * so the only click it could take is one the user did not mean for it.
+ * Insert outcomes, `blocked`, and `error` stay click-through — they have
+ * nothing to press. Recovery is History and ⌃⌘V, not buttons on the overlay.
  *
  * Recording splits by mode (overhaul §16.5c): hold stays click-through — your
  * finger is on Fn and you could not click anyway — while hands-free takes the
@@ -92,17 +87,12 @@ export function hudLayer(view: HudView): HudLayer {
  */
 export function hudInteractive(view: HudView): boolean {
   switch (view.kind) {
-    case 'not_inserted':
-      return true;
-    case 'inserted':
-      // Only when it is unconfirmed, where the pill carries Copy / Re-insert /
-      // Scratchpad and the text exists nowhere else on screen. A confirmed
-      // insert is still a wordless check with nothing to press.
-      return view.verified !== true;
     case 'recording':
       return view.mode === 'toggle';
     case 'hidden':
     case 'processing':
+    case 'inserted':
+    case 'not_inserted':
     case 'blocked':
     case 'error':
       return false;

@@ -16,13 +16,12 @@
  * Two rules are encoded here rather than left to the markup, because they are
  * the parts that can silently regress:
  *
- *   - **`not_inserted` carries the full transcript** (§12.5, §16.5a). It is
- *     the one state where the words exist and are nowhere else on screen.
- *     `message.body` is therefore never truncated for it. A *confirmed*
- *     `inserted` shows no transcript at all — that trade is argued in overhaul
- *     §16.4 and was the user's call, not an accident — but an **unconfirmed**
- *     one does, because it is the same situation: the words may be nowhere.
- *     See `unconfirmedInsertCopy` for the incident that made the distinction.
+ *   - **Insert outcomes are wordless.** A confirmed insert is the green check
+ *     (overhaul §16.4). An unconfirmed one and a failure used to raise a
+ *     transcript overlay in the middle of the screen; that was not wanted.
+ *     Recovery is History and ⌃⌘V. `notInsertedCopy` / `unconfirmedInsertCopy`
+ *     still exist so each reason has its own sentence if a surface other than
+ *     the overlay needs one.
  *   - **Every not-inserted reason gets its own words** (`NotInsertedReason`).
  *     "We couldn't type it" and "you were in a password field" call for
  *     different actions, and IMPLEMENTATION-PLAN.md §4 requires the actionable
@@ -78,17 +77,36 @@ export interface HudPresentation {
   readonly label: string;
   readonly capsule: HudCapsule | null;
   readonly message: HudMessage | null;
+  /**
+   * Most recent words of the live interim, or `null` when the capsule is
+   * wordless. Drawn *inside* the capsule, not in the message pill, so
+   * hold-mode stays click-through (`hudInteractive` is independent of size).
+   */
+  readonly liveText: string | null;
+}
+
+/**
+ * How many characters of live preview the capsule will show.
+ *
+ * **Chosen, not measured.** 12 px system font is ~7 px per character; 42
+ * characters ≈ 294 px, which plus the ten bars and padding fits the 420 px
+ * live-text window. The *tail* is kept: a 60-second dictation is a lot of
+ * text and the pill is small, and the words that just arrived are the ones
+ * the eye is on. A leading ellipsis marks the truncation.
+ */
+export const LIVE_TEXT_MAX_CHARS = 42;
+
+export function recentLiveText(interim: string, maxChars = LIVE_TEXT_MAX_CHARS): string {
+  const trimmed = interim.trim();
+  if (trimmed.length === 0) return '';
+  if (trimmed.length <= maxChars) return trimmed;
+  const slice = trimmed.slice(-maxChars);
+  const space = slice.indexOf(' ');
+  const body = space === -1 ? slice : slice.slice(space + 1);
+  return `…${body}`;
 }
 
 const RETRY_HINT = 'Press ⌃⌘V to try again wherever you are now pointing.';
-
-/** The four buttons that rescue a transcript. Shared by every state that can. */
-const RESCUE_ACTIONS: readonly HudAction[] = [
-  { id: 'copy', label: 'Copy' },
-  { id: 'retry', label: 'Re-insert' },
-  { id: 'scratchpad', label: 'Scratchpad' },
-  { id: 'dismiss', label: 'Dismiss' },
-];
 
 /**
  * Copy for an insert the helper posted but could not confirm.
@@ -194,19 +212,16 @@ export function present(view: HudView): HudPresentation {
   const layer = hudLayer(view);
   switch (view.kind) {
     case 'hidden':
-      return { layer, tone: 'idle', label: '', capsule: null, message: null };
+      return { layer, tone: 'idle', label: '', capsule: null, message: null, liveText: null };
 
     case 'recording':
-      // No text, no timer, no interim preview: the reference capsule is
-      // 71 × 30 pt and holds nothing but the bars (overhaul §4.2, §11.2.6 —
-      // the interim was never the text that gets inserted anyway). Hands-free
-      // is distinguished by its ✕/✓ buttons, not by a word.
       return {
         layer,
         tone: 'recording',
         label: view.mode === 'toggle' ? 'Hands-free recording' : 'Listening',
         capsule: { kind: 'waveform', buttons: view.mode === 'toggle' },
         message: null,
+        liveText: null,
       };
 
     case 'processing':
@@ -216,76 +231,30 @@ export function present(view: HudView): HudPresentation {
         label: 'Transcribing',
         capsule: { kind: 'processing' },
         message: null,
+        liveText: null,
       };
 
-    case 'inserted': {
-      if (view.verified === true) {
-        // The green check, and nothing else — overhaul §16.4 records what this
-        // trades away and why the user chose it. It is now reserved for an
-        // insert the helper actually *confirmed*.
-        return {
-          layer,
-          tone: 'success',
-          label: 'Inserted',
-          capsule: { kind: 'check' },
-          message: null,
-        };
-      }
-      // Typed, unconfirmed. Amber rather than red, and by the same argument
-      // §16.5b uses for `blocked`: red is for a failure the user must act on,
-      // and most of these did land. But it must not read as success either —
-      // that is exactly what cost 60.3 seconds of dictation on 2026-08-09 — so
-      // it takes the message pill, the full transcript and the rescue buttons.
-      const { title, detail } = unconfirmedInsertCopy();
+    case 'inserted':
+      // Green check either way. `verified` still goes to history; the overlay
+      // does not narrate it. Recovery, if anything is missing, is ⌃⌘V.
       return {
         layer,
-        tone: 'warning',
-        label: title,
-        capsule: { kind: 'alert' },
-        message: {
-          title,
-          // Full text, never truncated: §12.5 / §16.5a. Seeing the whole thing
-          // next to what actually appeared is the only way a user catches a
-          // partial drop.
-          body: view.text,
-          detail: `${detail} (${tierLabel(view.tier)})`,
-          actions: RESCUE_ACTIONS,
-        },
+        tone: 'success',
+        label: 'Inserted',
+        capsule: { kind: 'check' },
+        message: null,
+        liveText: null,
       };
-    }
 
     case 'not_inserted': {
-      const { title, detail } = notInsertedCopy(view.reason);
-      /**
-       * The helper's diagnostic normally goes in parentheses after our copy,
-       * because it is an `AXError` or a note about what the ladder tried —
-       * useful, and not a sentence.
-       *
-       * `verification_failed` is the exception: on that path the helper writes
-       * prose for the user, naming the application it typed into and what to do
-       * about it. Appending our own advice to that would say the same thing
-       * twice in one paragraph, so the helper's wins and ours is the fallback
-       * for an outcome that carried no text at all.
-       */
-      const composed =
-        view.reason === 'verification_failed' && view.detail !== null
-          ? view.detail
-          : view.detail === null
-            ? detail
-            : `${detail} (${view.detail})`;
+      const { title } = notInsertedCopy(view.reason);
       return {
         layer,
-        // Red, not amber: this is the failure the user must act on (§16.3).
         tone: 'error',
         label: title,
         capsule: { kind: 'alert' },
-        message: {
-          title,
-          // Full text, not a summary: §12.5 / §16.5a.
-          body: view.text,
-          detail: composed,
-          actions: RESCUE_ACTIONS,
-        },
+        message: null,
+        liveText: null,
       };
     }
 
@@ -305,6 +274,7 @@ export function present(view: HudView): HudPresentation {
             'A password field has focus. macOS blocks all key monitoring while it does, so dictation is paused.',
           actions: [],
         },
+        liveText: null,
       };
 
     case 'error':
@@ -325,6 +295,7 @@ export function present(view: HudView): HudPresentation {
           // app underneath.
           actions: [],
         },
+        liveText: null,
       };
   }
 }

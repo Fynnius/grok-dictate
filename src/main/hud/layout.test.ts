@@ -26,7 +26,14 @@ const ALL = Object.values(VIEWS);
 
 describe('hudSize', () => {
   it('grows only for the states that carry the message pill (overhaul §16.3)', () => {
-    expect(hudSize(VIEWS.not_inserted)).toEqual(HUD_MESSAGE_WINDOW);
+    expect(hudSize(VIEWS.not_inserted)).toEqual(HUD_CAPSULE_WINDOW);
+    expect(hudSize({ kind: 'inserted', text: 'hallo', tier: 'unicode', verified: null })).toEqual(
+      HUD_CAPSULE_WINDOW,
+    );
+    expect(
+      hudSize({ kind: 'recording', elapsedMs: 0, level: 0, interim: '', mode: 'hold' }),
+    ).toEqual(HUD_CAPSULE_WINDOW);
+    expect(hudSize({ kind: 'processing', interim: '' })).toEqual(HUD_CAPSULE_WINDOW);
     expect(hudSize(VIEWS.recording)).toEqual(HUD_CAPSULE_WINDOW);
     expect(hudSize(VIEWS.processing)).toEqual(HUD_CAPSULE_WINDOW);
     // `inserted` is the green check in the capsule now — the transcript no
@@ -35,10 +42,9 @@ describe('hudSize', () => {
   });
 
   it('gives a sentence less room than a transcript (§19.3)', () => {
-    // `error` and `blocked` say one thing and leave; only `not_inserted` puts
-    // the words themselves on screen. The window is transparent, so a size it
-    // does not need is a rectangle floating over the user's document for no
-    // reason.
+    // `error` and `blocked` say one thing and leave. Insert outcomes no
+    // longer put the words on screen; `HUD_MESSAGE_WINDOW` is the size that
+    // overlay used to need, kept so bounds tests still cover a large window.
     expect(hudSize(VIEWS.error)).toEqual(HUD_NOTICE_WINDOW);
     expect(hudSize(VIEWS.blocked)).toEqual(HUD_NOTICE_WINDOW);
     expect(HUD_NOTICE_WINDOW.height).toBeLessThan(HUD_MESSAGE_WINDOW.height);
@@ -55,7 +61,7 @@ describe('hudSize', () => {
 
 describe('hudInteractive', () => {
   it('takes the mouse only where there is a button to press', () => {
-    expect(hudInteractive(VIEWS.not_inserted)).toBe(true);
+    expect(hudInteractive(VIEWS.not_inserted)).toBe(false);
     // Hands-free has the ✕/✓ buttons (§16.5c).
     expect(
       hudInteractive({ kind: 'recording', elapsedMs: 0, level: 0, interim: '', mode: 'toggle' }),
@@ -64,6 +70,17 @@ describe('hudInteractive', () => {
 
   it('is click-through while dictating hold, so a click reaches the app underneath', () => {
     expect(hudInteractive(VIEWS.recording)).toBe(false);
+    // Growth and interactivity are independent: a long interim must not make
+    // hold-mode a bigger hit target.
+    expect(
+      hudInteractive({
+        kind: 'recording',
+        elapsedMs: 8_000,
+        level: 0.4,
+        interim: 'this is a much longer live transcript that grows the pill',
+        mode: 'hold',
+      }),
+    ).toBe(false);
     expect(hudInteractive(VIEWS.processing)).toBe(false);
     expect(hudInteractive(VIEWS.inserted)).toBe(false);
     expect(hudInteractive(VIEWS.blocked)).toBe(false);
@@ -86,12 +103,18 @@ describe('hudDwellMs', () => {
     expect(hudDwellMs(VIEWS.blocked)).toBeNull();
   });
 
-  it('gives the recovery state far longer than the success state', () => {
+  it('gives insert outcomes the same short dwell — they are a flash, not a paragraph', () => {
     const notInserted = hudDwellMs(VIEWS.not_inserted);
     const inserted = hudDwellMs(VIEWS.inserted);
-    expect(inserted).not.toBeNull();
-    expect(notInserted).not.toBeNull();
-    expect(notInserted ?? 0).toBeGreaterThan((inserted ?? 0) * 4);
+    const unconfirmed = hudDwellMs({
+      kind: 'inserted',
+      text: 'hallo',
+      tier: 'unicode',
+      verified: null,
+    });
+    expect(inserted).toBe(2_000);
+    expect(notInserted).toBe(2_000);
+    expect(unconfirmed).toBe(2_000);
   });
 
   it('always ends a terminal state, because the machine emits no `hidden` after one', () => {

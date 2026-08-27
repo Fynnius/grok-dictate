@@ -95,6 +95,35 @@ body {
   padding: 3px;
 }
 
+/* Live interim: the capsule grows horizontally; the tail of the utterance
+   sits on the right, where speech arrives. No fly-in: text appears the way
+   the partials do. */
+.capsule.is-live {
+  width: auto;
+  min-width: 71px;
+  max-width: 380px;
+  padding: 0 12px 0 10px;
+  gap: 8px;
+  justify-content: flex-start;
+}
+
+.capsule.is-toggle.is-live {
+  padding: 3px 10px 3px 3px;
+}
+
+.live-text {
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  max-width: 280px;
+  color: #fff;
+  /* Fade the oldest visible word so a revision there does not jump the eye. */
+  mask-image: linear-gradient(90deg, transparent, #000 10px, #000);
+}
+
 /* ------------------------------------------------------------------ *
  * The waveform: 10 bars, symmetric envelope, dots at silence (§4.2)
  * ------------------------------------------------------------------ */
@@ -348,6 +377,7 @@ button.round:active {
   .capsule,
   .message {
     animation: none;
+    transition: none;
   }
 
   /* A 10 Hz animated bar row is exactly what this media query exists for:

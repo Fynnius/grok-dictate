@@ -12,12 +12,9 @@
  *     `executeJavaScript` into THIS renderer against `window.__grokDictateCues`.
  *     Removing the call deletes all audio with no build error, no failing test
  *     and no visible symptom. It survives every rewrite of this file.
- *   - The transcript in `not_inserted` is shown **in full**, scrollable, never
- *     truncated — it is the one state where
- *     the words are nowhere else on screen.
- *   - The buttons are the recovery path. *Copy* is the **only** route to the
- *     pasteboard in the entire product and it exists solely
- *     because the user clicked it.
+ *   - Insert outcomes are wordless. The transcript lives in History; ⌃⌘V
+ *     re-inserts it. *Copy* in History is the **only** route to the
+ *     pasteboard, and it exists solely because the user clicked it.
  */
 
 import { StrictMode, useEffect, useRef, useState } from 'react';
@@ -43,8 +40,7 @@ function runAction(id: HudActionId, text: string | null): void {
       api.send({ type: 'open-window', window: 'scratchpad' });
       return;
     case 'dismiss':
-      // Only ever offered on `not_inserted` and `error`, both of which are
-      // terminal — there is no turn left to cancel.
+      // Offered only if a presentation still carries a Dismiss action.
       api.send({ type: 'dismiss-hud' });
       return;
   }
@@ -183,10 +179,12 @@ function Capsule({ view, p }: { view: HudView; p: HudPresentation }): React.JSX.
   switch (capsule.kind) {
     case 'waveform': {
       const level = view.kind === 'recording' ? view.level : 0;
+      const live = p.liveText;
       if (!capsule.buttons) {
         return (
-          <div className="capsule is-hold">
+          <div className={`capsule is-hold${live === null ? '' : ' is-live'}`}>
             <Waveform level={level} />
+            {live === null ? null : <span className="live-text">{live}</span>}
           </div>
         );
       }
@@ -194,7 +192,7 @@ function Capsule({ view, p }: { view: HudView; p: HudPresentation }): React.JSX.
       // real buttons (§16.5c) — hands-free is exactly the mode where a hand is
       // free to click, and the window takes the mouse only in this mode.
       return (
-        <div className="capsule is-toggle">
+        <div className={`capsule is-toggle${live === null ? '' : ' is-live'}`}>
           <button
             type="button"
             className="round cancel"
@@ -208,6 +206,7 @@ function Capsule({ view, p }: { view: HudView; p: HudPresentation }): React.JSX.
             </svg>
           </button>
           <Waveform level={level} />
+          {live === null ? null : <span className="live-text">{live}</span>}
           <button
             type="button"
             className="round confirm"
@@ -231,8 +230,9 @@ function Capsule({ view, p }: { view: HudView; p: HudPresentation }): React.JSX.
     }
     case 'processing':
       return (
-        <div className="capsule is-processing">
+        <div className={`capsule is-processing${p.liveText === null ? '' : ' is-live'}`}>
           <Waveform level={0} />
+          {p.liveText === null ? null : <span className="live-text">{p.liveText}</span>}
           <Spinner />
         </div>
       );

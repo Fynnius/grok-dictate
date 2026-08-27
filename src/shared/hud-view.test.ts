@@ -13,10 +13,13 @@ const VIEWS: Record<HudView['kind'], HudView> = {
 };
 
 describe('hudLayer', () => {
-  it('shows the message pill exactly for the states that need words (§16.3)', () => {
-    expect(hudLayer(VIEWS.not_inserted)).toBe('capsule-message');
+  it('shows the message pill only for blocked and error — insert outcomes stay wordless', () => {
     expect(hudLayer(VIEWS.blocked)).toBe('capsule-message');
     expect(hudLayer(VIEWS.error)).toBe('capsule-message');
+    expect(hudLayer(VIEWS.not_inserted)).toBe('capsule');
+    expect(hudLayer({ kind: 'inserted', text: 'hallo', tier: 'unicode', verified: null })).toBe(
+      'capsule',
+    );
   });
 
   it('keeps the live and success states down to the capsule alone', () => {
@@ -31,10 +34,12 @@ describe('hudLayer', () => {
 });
 
 describe('hudInteractive', () => {
-  it('takes the mouse only where there is a button to press', () => {
-    // `not_inserted` is the last one: its Copy button is the only route to the
-    // pasteboard in the product, and the text exists nowhere else on screen.
-    expect(hudInteractive(VIEWS.not_inserted)).toBe(true);
+  it('is click-through for insert outcomes — recovery is History and ⌃⌘V, not overlay buttons', () => {
+    expect(hudInteractive(VIEWS.not_inserted)).toBe(false);
+    expect(hudInteractive(VIEWS.inserted)).toBe(false);
+    expect(
+      hudInteractive({ kind: 'inserted', text: 'hallo', tier: 'unicode', verified: null }),
+    ).toBe(false);
   });
 
   it('is click-through everywhere else, so a click reaches the app underneath', () => {
@@ -52,14 +57,23 @@ describe('hudInteractive', () => {
   it('splits recording by mode (§16.5c): hold is click-through, hands-free takes the mouse', () => {
     expect(hudInteractive(VIEWS.recording)).toBe(false);
     expect(
+      hudInteractive({
+        kind: 'recording',
+        elapsedMs: 4_000,
+        level: 0.5,
+        interim: 'a long live transcript must not make hold-mode take the mouse',
+        mode: 'hold',
+      }),
+    ).toBe(false);
+    expect(
       hudInteractive({ kind: 'recording', elapsedMs: 0, level: 0, interim: '', mode: 'toggle' }),
     ).toBe(true);
   });
 
-  it('takes the mouse for an unconfirmed insert, which has buttons to press', () => {
+  it('keeps an unconfirmed insert click-through, same as a confirmed one', () => {
     expect(
       hudInteractive({ kind: 'inserted', text: 'hallo', tier: 'unicode', verified: null }),
-    ).toBe(true);
+    ).toBe(false);
   });
 });
 
