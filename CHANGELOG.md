@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Dictation now pastes instead of typing, where pasting is better — and it costs you your clipboard.
+
+### Changed
+
+- **A long dictation lands in one step instead of streaming in character by character.** A 2,000-character transcript took **1,785 ms** to type; it now goes onto the clipboard as a promise and arrives with one ⌘V. 39 % of dictations were long enough to be affected, and the ones going into a terminal were the ones being dropped outright — `cmux` runs xterm.js, which cancels synthetic keystrokes before they reach the shell, so typing more slowly was never going to fix it. Terminals also get real _paste_ semantics now: bracketed paste, no shell autosuggestion churn per character, and embedded newlines that do not submit.
+
+  **The trade, stated plainly: whatever was on your clipboard is gone.** The transcript is never sitting there as plain data — macOS hands it over only when the target actually asks for it — it is marked so clipboard managers skip it, and it is taken back within about 200 ms of being read. But your previous clipboard is not restored, and that is deliberate rather than unfinished: restoring it would mean _reading_ your clipboard first, and reading is the operation macOS has started putting a permission prompt in front of. Writing never prompts.
+
+  **Settings → Dictation → Insert text by.** _Automatic_ (the default) pastes long text and terminals and types everything else. _Typing_ is exactly the old behaviour and never touches your clipboard. _Pasting_ always pastes.
+
+- **The app can now say the text arrived and mean it.** Every earlier "verified" was the app measuring a side effect and inferring from it — and in the application where most dictations land there was no side effect to measure, so it could say nothing at all. A paste comes with a read receipt from the operating system: the target asked us for the text. History shows `inserted · paste`.
+
+- **Typing sends 10× fewer events.** The 20-UTF-16-unit ceiling per keystroke event was folklore from a 2015-era bug report; measured on macOS 26.6, the API does not truncate at 20, 200, 1,000 or 2,000. It is now 200.
+
+### Removed
+
+- **Two subsystems that defended against the wrong thing, and five environment variables.** The slow-down for long text was written against a 60-second dictation a terminal dropped in August. The diagnosis was "too many events too fast", and it appears to have been wrong — the terminal was cancelling the keystrokes at the protocol level, which spacing does not touch. It taxed 39 % of dictations for nothing. The length check meant to catch such drops shipped switched off, because it produced seven false "not inserted" alarms over text that was on screen and never once caught a real one. Both are gone, and the receipt does the job properly. `GROK_DICTATE_INJECT_CHUNK`, `_INJECT_DELAY_MS`, `_INJECT_TAP`, `_INJECT_VERIFY` and `_AX_SKIP` went with them; one setting replaces all five.
+
 ## [0.2.0] — 2026-08-27
 
 The round trip is now measurable, and the app shows what it already knew. A dictation session writes a greppable timing line per lifecycle event. The pill stays wordless while you speak. Accidental silent taps no longer wait on the server. System output mutes while the microphone is open. Unicode injection prefers the target process over the global event stream. The audio graph stays warm across holds without lighting the orange indicator. Stats, derived only from history, sit next to History in the menu. Insert outcomes no longer raise a paragraph overlay — History and ⌃⌘V are the recovery.

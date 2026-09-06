@@ -86,7 +86,7 @@ Carried alongside the state; not part of it.
 | `SECURE_INPUT(true)`                  | `blocked`                   | `hud(blocked)`, `tray(blocked)`                                                                                                          |
 | `PTT_UP`, `CANCEL`, transcript events | —                           |                                                                                                                                          |
 
-`route` on every `insert` effect is the user's `insertMethod` setting, read from `MachineEnv` at the moment the insert is dispatched and passed through to the helper untouched. **The reducer does not decide how text is inserted and cannot** — that needs the focused element, which lives two processes away (`helper-protocol.md` §3). It only carries the preference. Unlike `repairSeams` it is deliberately *not* snapshotted at the start of the turn: nothing about the route affects text already in flight, and `INSERT_TEXT` re-inserts an old transcript with no turn behind it at all.
+`route` on every `insert` effect is the user's `insertMethod` setting, read from `MachineEnv` at the moment the insert is dispatched and passed through to the helper untouched. **The reducer does not decide how text is inserted and cannot** — that needs the focused element, which lives two processes away (`helper-protocol.md` §3). It only carries the preference. Unlike `repairSeams` it is deliberately _not_ snapshotted at the start of the turn: nothing about the route affects text already in flight, and `INSERT_TEXT` re-inserts an old transcript with no turn behind it at all.
 
 ### From `recording`
 

@@ -713,3 +713,46 @@ Internal, via SecondBrain (the `Grok_STT-injection-pacing` worktree, not in this
 
 Field data: `~/Library/Application Support/grok-dictate/history.json` (240 rows) and
 `~/Library/Logs/grok-dictate/main.log` (6,307 lines), both as of 2026-09-06 12:50 UTC.
+
+---
+
+## 13. What shipped
+
+Written 2026-09-06, after the work. Branch `feat/paste-tier`, worktree
+`Grok_STT-paste-tier`. The full account is in
+`docs/report-paste-tier-2026-09-06.md`; this is the diff against what §7–§10
+proposed, so that a reader of the analysis knows where it was followed and where
+it was not.
+
+**Followed.** The receipt-sequenced paste tier of §7.1, the routing rules of §7.3
+(user override, 120-unit length threshold, the xterm.js signature, no bundle-id
+table), option **(a)** of §7.2 — clear, never restore, never read — and the
+deletions in §8 rows 1–4. `insertMethod` is one user-visible setting where seven
+environment knobs used to be. `TextChunker` went 20 → 200 on §9.5 Q3.
+
+**Departed from, and why.**
+
+- **§8 row 5 — `AXWriteVerification` is kept.** The row assumed Arc's 20 sessions
+  move to the paste tier. They do not: Arc reports `kAXSelectedText` as settable
+  so it never matches the xterm.js signature, and the median transcript is 109
+  characters, under the length threshold. Roughly half of Arc's dictations still
+  take the AX tier, and deleting the caret read-back would restore the
+  2026-08-09 silent data-loss bug for them. See §9.5 Q4.
+- **The line count.** §8 projected −1,539 against +250. The real Swift figure is
+  roughly **−1,000 removed against +1,500 added**, a net *increase*. Three
+  reasons, none of them the plan being wrong about what to delete: row 5 was
+  kept (−402 not taken); the two new probes and the shared modifier wait are
+  ~360 lines the estimate did not budget for at all; and the +250 was
+  benchmarked against Handy's ~380 lines of Rust, in a codebase whose comment
+  density is a fraction of this one's. The three new decision files are 55–70 %
+  comment by line. `docs/report-paste-tier-2026-09-06.md` §4 has the breakdown.
+- **The staging of §10 was collapsed.** Stages 2 and 3 — land behind
+  `GROK_DICTATE_PASTE=1`, then flip the default — became one pass, on the user's
+  instruction of 2026-09-06. There is no flag; the setting is the escape hatch.
+
+**Still open, and both are in §9.5.** Whether a ⌘V posted with
+`CGEvent.postToPid` reaches an Electron terminal (Q1), and whether macOS 26's
+Terminal paste-protection dialog fires for us (Q2). Neither can be answered from
+this machine's shell, because posting a chord needs an Accessibility grant the
+launching terminal does not hold. `--probe-paste` answers both in one run from a
+terminal that does.

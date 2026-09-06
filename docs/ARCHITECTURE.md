@@ -45,13 +45,39 @@ client can rotate it out from under the CLI.
 
 ## Insertion
 
-The helper tries Accessibility (`AXUIElement`) first, then Unicode key
-synthesis. Unicode events prefer `CGEvent.postToPid` to the resolved target
-process, and fall back to the global HID tap when there is no live pid.
-Unicode length-checking is off unless `GROK_DICTATE_INJECT_VERIFY=1`.
-It never writes the pasteboard. The frontmost app is snapshotted at
-key-down; if focus moved during processing, the transcript is kept and offered
-for re-insert instead of being typed into the wrong window.
+The helper picks a **route** first (`InsertRouting`), and the route decides which
+rungs exist. The user's `insertMethod` setting wins outright; otherwise text over
+120 UTF-16 units pastes, as does a focused element with the xterm.js signature —
+`kAXSelectedText` not settable _and_ `kAXNumberOfCharacters == 0`. Everything
+else types. There is no bundle-id table.
+
+**Paste route.** The transcript is published as a _promise_ on the general
+pasteboard — `declareTypes:owner:` with `public.utf8-plain-text` plus the
+nspasteboard.org transient markers, and no data behind any of them — and a ⌘V
+chord goes out on the HID tap. When a consumer asks for the text AppKit calls
+back, and **that callback is the read receipt**: the only native "the target took
+it" signal on macOS, and a stronger one than either verifier this app used to
+ship. The pasteboard is cleared 200 ms after the last receipt, and always before
+the ladder falls through to injection, so a fall-through cannot type the
+transcript a second time. `PasteTransaction` is a pure function and holds every
+one of those decisions; `PasteInserter` is the syscalls under it. The pasteboard
+is **written, never read** — no snapshot, no restore, so the user's previous
+clipboard is lost. `contracts/helper-protocol.md` §5.1 records the repeal that
+allowed this and what it cost.
+
+**Type route.** Accessibility (`AXUIElement`) first, confirmed by reading the
+caret back, then Unicode key synthesis at 200 UTF-16 units per event with no
+inter-chunk delay. Unicode events prefer `CGEvent.postToPid` to the resolved
+target process and fall back to the global HID tap when there is no live pid.
+The injection tier verifies nothing and claims nothing — "typed, unconfirmed" is
+the strongest honest thing it can say.
+
+The frontmost app is snapshotted at key-down, but **the check is off in the
+product**: `machine.ts` sends `targetBundleId: null` on every insert, so the text
+goes wherever the user is pointing when the turn ends rather than where it
+started. That reverses the original design, at the user's direction after Phase 5
+(`contracts/state-machine.md` §6); the helper still implements the check and
+`--probe-insert` exercises it.
 
 ## HUD
 
@@ -94,4 +120,5 @@ text.
 - `docs/spike-results.md` — measured STT socket behaviour
 - `docs/report-latency-ux-2026-08-22.md` — timing channel, warm graph, mute, live HUD, stats
 - `docs/report-insertion-2026-09-06.md` — what the ladder costs, what the field data says, and the case for a paste tier
+- `docs/report-paste-tier-2026-09-06.md` — what shipped from it, what it measured, and what is still unverified
 - [xAI Speech to Text](https://docs.x.ai/developers/model-capabilities/audio/speech-to-text)

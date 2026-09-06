@@ -20,7 +20,9 @@ Unofficial menu-bar dictation for macOS, using the public [xAI streaming speech-
 | `Ctrl` + `Cmd` + `V` | re-insert the last transcript wherever you are now pointed |
 | `Esc`                | cancel a recording                                         |
 
-**The clipboard is never written automatically.** Insertion goes Accessibility API → Unicode injection, then stops. `Ctrl+Cmd+V` re-runs that ladder against an in-memory buffer; it is not a paste. The pasteboard is touched only when you click **Copy**.
+**Dictation replaces what is on your clipboard, and does not put it back.** By default Grok Dictate pastes long text and anything going into a terminal, because typing 2,000 characters one keystroke at a time takes nearly two seconds and terminals drop it. The transcript is marked so clipboard managers skip it, and it is taken back off the pasteboard within about 200 ms of the target reading it — but whatever you had copied before is gone.
+
+It is never _read_. There is no snapshot and no restore, deliberately: reading the pasteboard is the operation macOS has started putting a permission prompt in front of, and writing is not. If you would rather keep your clipboard, **Settings → Dictation → Insert text by → Typing** never touches it. `Ctrl+Cmd+V` re-runs insertion against an in-memory buffer and follows the same setting.
 
 ## Requirements
 
@@ -97,7 +99,7 @@ The token is never logged, never written to history, and never sent to the Swift
 
 - Audio is streamed to xAI only while you hold the dictation key (or until you end a hands-free turn)
 - Transcripts are stored locally, searchable, and expire according to your retention setting
-- Nothing is written to the system clipboard unless you click **Copy**
+- A pasted dictation replaces your clipboard, is marked transient so managers skip it, and is cleared once the target has read it. Nothing ever _reads_ your clipboard. **Settings → Dictation → Insert text by → Typing** leaves it alone entirely
 - Secure Input (password fields, `sudo`) blocks insertion and is named in the menu bar
 
 ## Architecture

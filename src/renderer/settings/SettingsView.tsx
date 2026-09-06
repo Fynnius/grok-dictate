@@ -40,6 +40,16 @@ const LANGUAGE_OPTIONS: readonly (readonly [LanguageMode, string])[] = [
   ['en', 'English'],
 ];
 
+/**
+ * `Automatic` first because it is the default and the one most people should
+ * leave alone; `Typing` last because it is the escape hatch, not the goal.
+ */
+const INSERT_METHOD_OPTIONS: readonly (readonly [AppConfig['insertMethod'], string])[] = [
+  ['auto', 'Automatic'],
+  ['paste', 'Pasting'],
+  ['type', 'Typing'],
+];
+
 export function SettingsView(): React.JSX.Element {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [auth, setAuth] = useState<AuthStatus | null>(null);
@@ -231,6 +241,20 @@ export function SettingsView(): React.JSX.Element {
               onChange={(next) => save({ repairSeams: next })}
               ariaLabel="Repair the joins between transcript segments"
             />
+          </div>
+          <div className="card-row">
+            <span className="row-label">
+              Insert text by
+              <InfoTip text="Pasting is fast whatever the length, and it is the only thing that reliably works in a terminal — but it replaces whatever is on your clipboard, every time, and does not put it back. Typing leaves your clipboard alone and is instant for a short reply, but it types one character at a time, so a long dictation visibly streams in and some apps drop it. Automatic pastes long text and terminals, types everything else." />
+            </span>
+            <span className="control">
+              <Segmented
+                options={INSERT_METHOD_OPTIONS}
+                value={config.insertMethod}
+                onChange={(method) => save({ insertMethod: method })}
+                ariaLabel="How text is inserted into other applications"
+              />
+            </span>
           </div>
         </div>
       </div>
