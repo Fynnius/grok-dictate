@@ -73,9 +73,11 @@ Commit on `feat/paste-tier`. **Never commit to `main`.** Push only if asked.
 - **2026-09-06** — `docs/report-insertion-2026-09-06.md` landed on `dev` as
   commit `1d5986a`, together with a pointer from `docs/ARCHITECTURE.md`. No code
   was changed. That commit is the whole of the prior work.
-- **`dev` is at `f547536`** as of this handoff, with unrelated in-flight edits to
-  `src/main/sound/*` and `src/renderer/hud/cues.ts` from a different piece of
-  work. Branch from `dev` as it stands; do not touch those files.
+- **`dev` is at `fa1ee12`** as of this handoff — this file. The two commits under
+  it (`f547536`, `0936524`) are unrelated audio-cue work that landed the same
+  day; they touch `src/main/sound/*` and `src/renderer/hud/cues.ts` and have
+  nothing to do with insertion. Branch from `dev` as it stands and leave those
+  files alone. Confirm the tree is clean before you branch (`git status`).
 - **Nothing is half-implemented.** There is no paste code anywhere. You are
   starting from a clean two-tier ladder.
 - **The measurements in §9.5 of the report have not been run.** They are W0
@@ -752,8 +754,8 @@ report success.
 
 - **Worktree:** `/Users/fynnauerbach/Documents/Programmieren/Grok_STT-paste-tier`,
   branch `feat/paste-tier`, branched from `dev`.
-- **Main checkout:** `/Users/fynnauerbach/Documents/Programmieren/Grok_STT` — has
-  unrelated in-flight edits, leave it alone.
+- **Main checkout:** `/Users/fynnauerbach/Documents/Programmieren/Grok_STT` — the
+  user's own working copy on `dev`. Do not edit it; do all work in the worktree.
 - **Log:** `~/Library/Logs/grok-dictate/main.log` (NDJSON).
 - **History:** `~/Library/Application Support/grok-dictate/history.json`.
 - **Config:** `~/Library/Application Support/grok-dictate/config.json`.
