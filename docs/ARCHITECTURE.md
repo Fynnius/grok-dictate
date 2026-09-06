@@ -93,4 +93,5 @@ text.
 - `contracts/helper-protocol.md` — helper frames
 - `docs/spike-results.md` — measured STT socket behaviour
 - `docs/report-latency-ux-2026-08-22.md` — timing channel, warm graph, mute, live HUD, stats
+- `docs/report-insertion-2026-09-06.md` — what the ladder costs, what the field data says, and the case for a paste tier
 - [xAI Speech to Text](https://docs.x.ai/developers/model-capabilities/audio/speech-to-text)
