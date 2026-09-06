@@ -79,6 +79,7 @@ describe('HelperSupervisor against the real mock helper process', () => {
       id: 'req-1',
       text: 'Grüße aus München — 😀',
       targetBundleId: null,
+      route: 'auto',
     });
     await waitFor(() => frames.some((f) => f.type === 'insert_result'));
 
@@ -112,6 +113,7 @@ describe('HelperSupervisor against the real mock helper process', () => {
       id: 'req-2',
       text: 'text',
       targetBundleId: 'com.microsoft.VSCode', // mock is frontmost=com.apple.TextEdit
+      route: 'auto',
     });
     await waitFor(() => frames.some((f) => f.type === 'insert_result'));
 

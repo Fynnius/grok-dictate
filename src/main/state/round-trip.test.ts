@@ -392,7 +392,7 @@ describe('the mocked dictation round-trip', () => {
     const h = await harness();
     await h.supervisor.stop(500);
 
-    const outcome = await h.helper.insert('text that must not vanish', null);
+    const outcome = await h.helper.insert('text that must not vanish', null, 'auto');
     expect(outcome).toEqual({
       tier: 'none',
       ok: false,
@@ -421,7 +421,7 @@ describe('contract coverage (§5.1 — an unexercised contract is unvalidated)',
     seen.add('frontmost');
 
     // app→helper: insert → insert_result
-    await h.helper.insert('probe', null);
+    await h.helper.insert('probe', null, 'auto');
     seen.add('insert_result');
 
     // app→helper: set_hotkeys, copy — both answered with a `log` frame.

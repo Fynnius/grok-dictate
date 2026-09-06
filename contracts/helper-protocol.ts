@@ -27,14 +27,20 @@ const version = z.literal(PROTOCOL_VERSION);
  * ------------------------------------------------------------------ */
 
 /**
- * Which insertion tier handled (or declined) a request. :
- *   ax      — AXUIElementSetAttributeValue on kAXSelectedTextAttribute.
- *             The only tier that genuinely reports success.
+ * Which insertion tier handled (or declined) a request.
+ *
+ *   paste   — a promised item on the pasteboard plus a synthetic ⌘V. O(1) in
+ *             transcript length, gets bracketed paste in terminals, and is the
+ *             only tier the OS gives a *read receipt* for. Added 2026-09-06;
+ *             see `helper-protocol.md` §5 for what it replaced.
+ *   ax      — AXUIElementSetAttributeValue on kAXSelectedTextAttribute. The
+ *             only tier that touches nothing outside the target's text field.
  *   unicode — CGEventKeyboardSetUnicodeString. Reports "sent", not "landed";
  *             it can half-succeed silently (§12.5).
- *   none    — neither worked. The clipboard is NOT touched (§5.8).
+ *   none    — nothing worked. Nothing was left on the pasteboard: a paste that
+ *             was attempted and did not produce a receipt still settles.
  */
-export const INSERT_TIERS = ['ax', 'unicode', 'none'] as const;
+export const INSERT_TIERS = ['paste', 'ax', 'unicode', 'none'] as const;
 export const InsertTierSchema = z.enum(INSERT_TIERS);
 export type InsertTier = (typeof INSERT_TIERS)[number];
 
@@ -46,7 +52,13 @@ export const HOTKEY_ACTIONS = ['ptt_down', 'ptt_up', 'toggle', 'retry_insert'] a
 export const HotkeyActionSchema = z.enum(HOTKEY_ACTIONS);
 export type HotkeyAction = (typeof HOTKEY_ACTIONS)[number];
 
-export const HELPER_CAPABILITIES = ['ax', 'unicode'] as const;
+/**
+ * `paste` is listed so a newer app talking to an older helper can tell the
+ * difference between "the helper chose not to paste" and "this build cannot".
+ * Without it, `insertMethod: 'paste'` against a pre-2026-09-06 helper would look
+ * like a routing bug rather than an out-of-date binary.
+ */
+export const HELPER_CAPABILITIES = ['paste', 'ax', 'unicode'] as const;
 export type HelperCapability = (typeof HELPER_CAPABILITIES)[number];
 
 export const ReadyFrameSchema = z.object({
@@ -104,7 +116,7 @@ export const FrontmostFrameSchema = z.object({
  *
  *   target_changed      — the frontmost app is no longer `targetBundleId` (§11.1.10)
  *   empty_text          — there was nothing to insert
- *   no_tier             — AX declined and Unicode injection failed
+ *   no_tier             — every tier the route offered declined or failed
  *   verification_failed — Unicode was posted and the target's text did not
  *                         change. Added by the 2026-08-09 incident (BUG-1): a
  *                         60.3 s dictation was posted as 38 events in 245 ms
@@ -113,6 +125,15 @@ export const FrontmostFrameSchema = z.object({
  *                         check and wrote `inserted: true` for text the user
  *                         never got. Sent with `ok: false` and
  *                         `verified: false` — the helper proved nothing landed.
+ *
+ * **The paste tier adds no reason, deliberately.** A `paste_not_read` was
+ * considered and rejected on the test the existing four were chosen by: does it
+ * produce different user-facing advice? It does not, because a paste that
+ * produces no receipt is never a terminal outcome — it falls through to Unicode
+ * injection, and what the user is told is whatever *that* concluded. "The paste
+ * was not read" is a fact about an intermediate rung, and the place for it is
+ * the log, not a field the app branches on. `verification_failed` likewise keeps
+ * its BUG-1 meaning exactly: it is only ever produced by the injection tier.
  *
  * Optional on the wire so an older helper binary still parses; absent means
  * "not stated", which the app treats as `no_tier`'s generic copy.
@@ -140,11 +161,19 @@ export const InsertResultFrameSchema = z.object({
    * Whether the helper **confirmed the text actually landed**, as opposed to
    * merely having posted it.
    *
-   *   true          — confirmed (an AX caret read-back, or an AX text-length
-   *                   delta measured across the Unicode posting).
+   *   true          — confirmed. For `paste`, a consumer read the pasteboard
+   *                   after our chord; for `ax`, the caret moved.
    *   false         — verification ran and proved nothing landed.
    *   null / absent — verification was not possible for this target, or the
    *                   helper is an older build that does not report it.
+   *
+   * **The paste tier makes this a stronger claim than it used to be.** Every
+   * earlier `true` was an inference from a length delta or a caret position —
+   * our own measurement of a side effect, in a target that might not expose
+   * one at all. A receipt is the operating system reporting that the target
+   * asked us for the text. It is still not proof the text was *kept*: a target
+   * that reads and then discards produces a receipt too (report §9.2). It is a
+   * strictly better signal than what it replaces, not a guarantee.
    *
    * Added by the 2026-08-09 incident (BUG-1). `CGEventKeyboardSetUnicodeString`
    * has no return channel, so `ok: true` has always meant "posted", not
@@ -224,6 +253,15 @@ export type HelperToApp = z.infer<typeof HelperToAppSchema>;
  * App → Helper
  * ------------------------------------------------------------------ */
 
+/**
+ * How the user wants text put into other applications. Mirrors
+ * `AppConfig.insertMethod`; see `contracts/config.ts` for the user-facing
+ * meaning of each value.
+ */
+export const INSERT_ROUTES = ['auto', 'paste', 'type'] as const;
+export const InsertRouteSchema = z.enum(INSERT_ROUTES);
+export type InsertRoute = (typeof INSERT_ROUTES)[number];
+
 export const InsertCommandSchema = z.object({
   v: version,
   type: z.literal('insert'),
@@ -235,6 +273,25 @@ export const InsertCommandSchema = z.object({
    * `null` disables the check.
    */
   targetBundleId: z.string().nullable(),
+  /**
+   * **The app sends policy; the helper resolves it.**
+   *
+   * The split is forced by where the information lives. Only the helper can see
+   * the focused element's AX signature and the target's pid, so only the helper
+   * can decide that a given window is an xterm.js terminal that will swallow
+   * injected keys — but the *preference* is the user's, it lives in
+   * `config.json`, and the helper has no access to that. So the preference
+   * travels and the decision stays put.
+   *
+   * `auto` lets the helper choose. `paste` and `type` are overrides and win
+   * outright; between them they replace four environment variables with one
+   * control a user can actually find.
+   *
+   * Defaulted rather than required so an older app — which sends no `route` at
+   * all — still parses, and gets the behaviour a user who has not touched the
+   * setting gets.
+   */
+  route: InsertRouteSchema.default('auto'),
 });
 
 export const CopyCommandSchema = z.object({

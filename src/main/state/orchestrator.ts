@@ -87,6 +87,7 @@ function productionEnv(config: ConfigPort): MachineEnv {
     liveHudText: () => config.get().liveHudText,
     silenceGate: () => config.get().silenceGate,
     muteWhileRecording: () => config.get().muteWhileRecording,
+    insertMethod: () => config.get().insertMethod,
   };
 }
 
@@ -393,8 +394,8 @@ export class Orchestrator {
 
       case 'insert': {
         const sessionId = effect.sessionId;
-        this.#mark('insert_begin', { text_len: effect.text.length });
-        void native.insert(effect.text, effect.targetBundleId).then((outcome) => {
+        this.#mark('insert_begin', { text_len: effect.text.length, route: effect.route });
+        void native.insert(effect.text, effect.targetBundleId, effect.route).then((outcome) => {
           this.dispatch({ type: 'INSERT_RESULT', sessionId, outcome });
         });
         return;

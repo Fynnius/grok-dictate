@@ -124,8 +124,20 @@ describe('happy path', () => {
         sessionId: 's1',
         text: 'Hello there, this is a test.',
         targetBundleId: null,
+        // `auto` is what an env with no `insertMethod` yields, which is the
+        // shipping default and what a test that has not asked for a route gets.
+        route: 'auto',
       },
     ]);
+  });
+
+  it('carries the user`s insertMethod on the effect, read when the insert is dispatched', () => {
+    // The reducer stays pure: the setting arrives through `MachineEnv`, the
+    // same way `repairSeams` does. What it does *not* do is snapshot the value
+    // at `PTT_DOWN` — the route affects nothing about text already in flight,
+    // so it is read here and only here.
+    const { all } = run(HAPPY, { ...testEnv(), insertMethod: () => 'type' });
+    expect(inserts(all).map((e) => e.route)).toEqual(['type']);
   });
 
   it('records history and shows the full transcript after a successful insert', () => {
@@ -462,6 +474,7 @@ describe('Ctrl+Cmd+V re-insert (contract §6, )', () => {
         sessionId: 's2',
         text: 'Hello there, this is a test.',
         targetBundleId: null,
+        route: 'auto',
       },
     ]);
   });
@@ -1428,7 +1441,13 @@ describe('INSERT_TEXT — an older history row, or a Scratchpad edit', () => {
     const { snapshot, effects } = run([{ type: 'INSERT_TEXT', text: 'etwas ganz anderes' }]);
     expect(snapshot.state).toBe('inserting');
     expect(inserts(effects)).toEqual([
-      { type: 'insert', sessionId: 's1', text: 'etwas ganz anderes', targetBundleId: null },
+      {
+        type: 'insert',
+        sessionId: 's1',
+        text: 'etwas ganz anderes',
+        targetBundleId: null,
+        route: 'auto',
+      },
     ]);
   });
 

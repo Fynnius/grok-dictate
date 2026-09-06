@@ -43,6 +43,34 @@ describe('config defaults', () => {
     expect(config.silenceGate).toBe(false);
     expect(config.muteWhileRecording).toBe(false);
   });
+
+  it('lets the helper choose the insertion route by default', () => {
+    expect(DEFAULT_CONFIG.insertMethod).toBe('auto');
+  });
+
+  it('keeps `type` reachable, which is the pre-paste behaviour exactly', () => {
+    // The escape hatch matters more than the default: it is what a user reaches
+    // for if pasting trips macOS 26's Terminal paste-protection dialog, and
+    // `type` never touches the pasteboard at all.
+    const { config, issues } = parseConfig({ insertMethod: 'type' });
+    expect(issues).toEqual([]);
+    expect(config.insertMethod).toBe('type');
+  });
+
+  it('falls back to auto for an insertMethod it does not recognise', () => {
+    // A config written by a future build, or hand-edited. Per-field salvage:
+    // the bad value is reported and everything else survives.
+    const { config, issues } = parseConfig({ insertMethod: 'telepathy', endpointingMs: 250 });
+    expect(issues.length).toBeGreaterThan(0);
+    expect(config.insertMethod).toBe('auto');
+    expect(config.endpointingMs).toBe(250);
+  });
+
+  it('parses a config.json written before the setting existed', () => {
+    const { config, issues } = parseConfig({ languageMode: 'de' });
+    expect(issues).toEqual([]);
+    expect(config.insertMethod).toBe('auto');
+  });
 });
 
 describe('parseConfig', () => {

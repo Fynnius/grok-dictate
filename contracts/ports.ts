@@ -29,7 +29,7 @@
 
 import type { AppConfig, HotkeyBindings } from './config.js';
 import type { HistoryEntry, HudView, SessionState } from './events.js';
-import type { InsertDeclineReason, InsertTier } from './helper-protocol.js';
+import type { InsertDeclineReason, InsertRoute, InsertTier } from './helper-protocol.js';
 import type { AppError, Result } from '../src/shared/result.js';
 
 /* ------------------------------------------------------------------ *
@@ -113,13 +113,21 @@ export interface NativeHelperPort extends NativeHelperEvents {
    * resolves to `{tier:'none', ok:false, error:…}` rather than rejecting, so
    * the state machine has exactly one shape to handle and a transcript is
    * never lost to an exception.
+   *
+   * `route` is `AppConfig.insertMethod`, passed straight through. The app sends
+   * the user's policy and the helper decides what to do with it — only the
+   * helper can see the focused element, and only the app can see the config.
    */
-  insert(text: string, targetBundleId: string | null): Promise<InsertOutcome>;
+  insert(text: string, targetBundleId: string | null, route: InsertRoute): Promise<InsertOutcome>;
 
   /**
-   * Write to the pasteboard. The ONLY method in this interface that may do so,
-   * and it must only ever be called from an explicit user action — the HUD's
-   * *Copy* button or history. Phase 5 audits every call site.
+   * Write plain text to the pasteboard on an explicit user action — the HUD's
+   * *Copy* button or history — and nothing else. Phase 5 audits every call site.
+   *
+   * Since 2026-09-06 this is no longer the only route to the pasteboard: the
+   * paste insertion tier publishes a promised item inside the helper, below this
+   * interface, and never as a result of anything here. `helper-protocol.md`
+   * §5.1 records the repeal and what replaced it.
    */
   copy(text: string): void;
 

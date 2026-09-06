@@ -138,6 +138,8 @@ export function unconfirmedInsertCopy(): { title: string; detail: string } {
 
 export function tierLabel(tier: InsertTier): string {
   switch (tier) {
+    case 'paste':
+      return 'Paste';
     case 'ax':
       return 'Accessibility';
     case 'unicode':

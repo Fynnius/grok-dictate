@@ -14,7 +14,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { HelperToApp } from '@contracts/helper-protocol.js';
+import type { HelperToApp, InsertRoute } from '@contracts/helper-protocol.js';
 import type {
   FrontmostApp,
   HelperPermissions,
@@ -107,9 +107,9 @@ export class HelperClient implements NativeHelperPort {
    * exception, so a dead helper or a timeout comes back as a normal failed
    * outcome that the state machine already knows how to show.
    */
-  insert(text: string, targetBundleId: string | null): Promise<InsertOutcome> {
+  insert(text: string, targetBundleId: string | null, route: InsertRoute): Promise<InsertOutcome> {
     const id = randomUUID();
-    const sent = this.#supervisor.send({ v: 1, type: 'insert', id, text, targetBundleId });
+    const sent = this.#supervisor.send({ v: 1, type: 'insert', id, text, targetBundleId, route });
     if (!sent) {
       return Promise.resolve({
         tier: 'none',

@@ -10,6 +10,7 @@
  */
 
 import type { AudioCue, FrontmostApp, InsertOutcome } from '@contracts/ports.js';
+import type { InsertRoute } from '@contracts/helper-protocol.js';
 import type {
   HistoryEntry,
   HudView,
@@ -83,7 +84,22 @@ export type Effect =
   | { type: 'finish_stt'; sessionId: string }
   | { type: 'abort_stt'; sessionId: string }
   | { type: 'request_frontmost'; sessionId: string }
-  | { type: 'insert'; sessionId: string; text: string; targetBundleId: string | null }
+  /**
+   * `route` is the user's `insertMethod`, read at the moment the insert is
+   * dispatched rather than snapshotted at the start of the turn — unlike
+   * `repairSeams`, which has to be stable across a dictation because it decides
+   * how that dictation is assembled. Nothing about the route affects text
+   * already in flight, and `INSERT_TEXT` re-inserts an old transcript with no
+   * turn behind it at all, so "whatever the setting says now" is both simpler
+   * and the honest reading.
+   */
+  | {
+      type: 'insert';
+      sessionId: string;
+      text: string;
+      targetBundleId: string | null;
+      route: InsertRoute;
+    }
   | { type: 'hud'; view: HudView }
   | { type: 'tray'; state: SessionState; secureInput: boolean }
   | { type: 'cue'; cue: AudioCue }
@@ -181,6 +197,8 @@ export interface MachineEnv {
   liveHudText?: () => boolean;
   silenceGate?: () => boolean;
   muteWhileRecording?: () => boolean;
+  /** `AppConfig.insertMethod`, read when an insert is dispatched. */
+  insertMethod?: () => InsertRoute;
 }
 
 export interface Step {
@@ -619,7 +637,13 @@ function adHocInsert(ctx: SessionContext, text: string, env: MachineEnv): Step {
     'inserting',
     { ...ctx, sessionId: insertId, inserting: text, targetBundleId: null, targetName: null },
     [
-      { type: 'insert', sessionId: insertId, text, targetBundleId: null },
+      {
+        type: 'insert',
+        sessionId: insertId,
+        text,
+        targetBundleId: null,
+        route: env.insertMethod?.() ?? 'auto',
+      },
       { type: 'tray', state: 'inserting', secureInput: ctx.secureInput },
     ],
   );
@@ -651,12 +675,18 @@ function adHocInsert(ctx: SessionContext, text: string, env: MachineEnv): Step {
  * at all (Secure Input, a failed session). Where an insertion *is* attempted,
  * the helper reports the application it actually acted on and that wins.
  */
-function beginInsert(ctx: SessionContext, extraFinal: string | null): Step {
+function beginInsert(ctx: SessionContext, extraFinal: string | null, env: MachineEnv): Step {
   const committed = extraFinal === null ? ctx.committed : [...ctx.committed, extraFinal];
   const next: SessionContext = { ...ctx, committed, interim: '' };
   const text = committedText(next);
   return step('inserting', { ...next, inserting: text }, [
-    { type: 'insert', sessionId: ctx.sessionId ?? '', text, targetBundleId: null },
+    {
+      type: 'insert',
+      sessionId: ctx.sessionId ?? '',
+      text,
+      targetBundleId: null,
+      route: env.insertMethod?.() ?? 'auto',
+    },
     { type: 'tray', state: 'inserting', secureInput: ctx.secureInput },
   ]);
 }
@@ -782,7 +812,7 @@ export function noSpeechCopy(peakLevel: number): { message: string; hint: string
 }
 
 /** The turn ended with nothing said, or with text but no more finals coming. */
-function endTurn(ctx: SessionContext, durationSec: number | null): Step {
+function endTurn(ctx: SessionContext, durationSec: number | null, env: MachineEnv): Step {
   const withDuration: SessionContext = { ...ctx, durationSec };
   if (committedText(withDuration).length === 0) {
     const { message, hint } = noSpeechCopy(withDuration.peakLevel);
@@ -792,7 +822,7 @@ function endTurn(ctx: SessionContext, durationSec: number | null): Step {
       { type: 'cue', cue: 'error' },
     ]);
   }
-  return beginInsert(withDuration, null);
+  return beginInsert(withDuration, null, env);
 }
 
 /* ------------------------------------------------------------------ *
@@ -843,7 +873,7 @@ export function reduce(snapshot: Snapshot, event: SessionEvent, env: MachineEnv)
     case 'recording':
       return reduceRecording(snapshot, event, env);
     case 'processing':
-      return reduceProcessing(snapshot, event);
+      return reduceProcessing(snapshot, event, env);
     case 'inserting':
       return reduceInserting(snapshot, event, env);
     case 'blocked':
@@ -984,7 +1014,7 @@ function reduceRecording(snapshot: Snapshot, event: PostSecureEvent, env: Machin
       // orange indicator stays lit through insertion and beyond, which reads as
       // spyware — and the elapsed/cap timers keep ticking
       // because the orchestrator clears them on `stop_capture`.
-      const ended = endTurn(ctx, event.durationSec);
+      const ended = endTurn(ctx, event.durationSec, env);
       return {
         snapshot: ended.snapshot,
         effects: [{ type: 'stop_capture', sessionId }, ...unmuteEffect(ctx), ...ended.effects],
@@ -1034,7 +1064,7 @@ function reduceRecording(snapshot: Snapshot, event: PostSecureEvent, env: Machin
   }
 }
 
-function reduceProcessing(snapshot: Snapshot, event: PostSecureEvent): Step {
+function reduceProcessing(snapshot: Snapshot, event: PostSecureEvent, env: MachineEnv): Step {
   const { ctx } = snapshot;
   const sessionId = ctx.sessionId ?? '';
 
@@ -1069,7 +1099,7 @@ function reduceProcessing(snapshot: Snapshot, event: PostSecureEvent): Step {
       );
 
     case 'TURN_ENDED':
-      return endTurn(ctx, event.durationSec);
+      return endTurn(ctx, event.durationSec, env);
 
     case 'TRANSCRIPT_INTERIM': {
       const next = { ...ctx, interim: event.text };

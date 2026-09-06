@@ -20,6 +20,12 @@
  *     the server. Off restores "every release goes to STT". Default on.
  *   - `muteWhileRecording` — mute system output while the mic is open. Off
  *     leaves the user's music alone. Default on.
+ *
+ * ## 2026-09-06 paste tier
+ *
+ * One flag, `insertMethod`, for the same reason and by the same rule: pasting
+ * replaces what the user had on their clipboard, and anything that discards
+ * something of the user's gets a switch. Default `auto`.
  */
 
 import { z } from 'zod';
@@ -193,6 +199,31 @@ export const AppConfigSchema = z.object({
    * behaviour: an expired token is an error that says to run `grok`.
    */
   autoRenewLogin: z.boolean().default(true),
+
+  /**
+   * How text is put into other applications.
+   *
+   *   auto  — the helper chooses per insertion: paste for long text and for
+   *           terminals, type for everything else. The default.
+   *   paste — always publish the transcript and press ⌘V. Fast everywhere ⌘V
+   *           works, and replaces what is on the clipboard every time.
+   *   type  — never touch the clipboard. Synthetic key events, which is what
+   *           every dictation did before 2026-09-06.
+   *
+   * **A setting because pasting replaces what the user had on their clipboard**,
+   * which is the app discarding something the user produced — the same category
+   * as `repairSeams` and `silenceGate`, and the same rule: if the app throws
+   * away or rewrites something of the user's, there is a switch. It is also the
+   * escape hatch if the paste route turns out to trip macOS 26's Terminal
+   * paste-protection dialog, which is measured nowhere as of this writing
+   * (report §9.5 Q2).
+   *
+   * `auto` rather than `type` as the default because the numbers are lopsided:
+   * a 2,000-character dictation takes 1,785 ms to type and ~20 ms to paste, and
+   * 86 % of this user's dictations go into a terminal, where typing is defeated
+   * outright by xterm.js cancelling the synthetic keydown.
+   */
+  insertMethod: z.enum(['auto', 'paste', 'type']).default('auto'),
 
   /**
    * Emit `{"type":"finalize"}` instead of `{"type":"audio.done"}` at end of turn.

@@ -79,12 +79,14 @@ Carried alongside the state; not part of it.
 | ------------------------------------- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | `PTT_DOWN`                            | `recording` (`mode=hold`)   | new `sessionId`; `request_frontmost`, `start_capture`, `start_stt`, `hud(recording)`, `cue(start)`, `mute_output` (if the setting is on) |
 | `TOGGLE`                              | `recording` (`mode=toggle`) | as above                                                                                                                                 |
-| `RETRY_INSERT` with `lastTranscript`  | `inserting`                 | `insert(lastTranscript, targetBundleId=null)` — see §6                                                                                   |
+| `RETRY_INSERT` with `lastTranscript`  | `inserting`                 | `insert(lastTranscript, targetBundleId=null, route)` — see §6                                                                            |
 | `RETRY_INSERT` without                | `idle`                      | `hud(error "nothing to re-insert")`                                                                                                      |
-| `INSERT_TEXT` with text               | `inserting`                 | `insert(text, targetBundleId=null)` — a history row or a Scratchpad edit; also §6                                                        |
+| `INSERT_TEXT` with text               | `inserting`                 | `insert(text, targetBundleId=null, route)` — a history row or a Scratchpad edit; also §6                                                 |
 | `INSERT_TEXT` with empty text         | —                           |                                                                                                                                          |
 | `SECURE_INPUT(true)`                  | `blocked`                   | `hud(blocked)`, `tray(blocked)`                                                                                                          |
 | `PTT_UP`, `CANCEL`, transcript events | —                           |                                                                                                                                          |
+
+`route` on every `insert` effect is the user's `insertMethod` setting, read from `MachineEnv` at the moment the insert is dispatched and passed through to the helper untouched. **The reducer does not decide how text is inserted and cannot** — that needs the focused element, which lives two processes away (`helper-protocol.md` §3). It only carries the preference. Unlike `repairSeams` it is deliberately *not* snapshotted at the start of the turn: nothing about the route affects text already in flight, and `INSERT_TEXT` re-inserts an old transcript with no turn behind it at all.
 
 ### From `recording`
 
