@@ -9,10 +9,9 @@
  *   - `shell.beep()` — one sound, no way to distinguish start from stop, and it
  *     is the system alert, which is wrong for a routine event.
  *   - spawning `afplay` per cue — a process spawn plus CoreAudio start-up blows
- *     the ~80 ms budget §11.1.4 sets, and it would need audio files, which
- *     would need an asset pipeline in the frozen `electron.vite.config.ts`.
+ *     the ~80 ms budget §11.1.4 sets, and it would need audio files.
  *   - a dedicated hidden window — correct, but a second renderer process (tens
- *     of megabytes) for two oscillator ramps.
+ *     of megabytes) for three short earcons.
  *
  * The HUD window already exists for the whole life of the app, already has a
  * renderer process, and carries `backgroundThrottling: false` precisely so this
