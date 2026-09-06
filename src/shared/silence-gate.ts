@@ -5,10 +5,13 @@
  * is dropped without waiting on the server. A brushed hotkey otherwise opens
  * a socket, ships room tone, and shows a failure.
  *
- * **Duration is a precondition, not the gate.** "Yes", "no", "OK", "ship it"
- * are legitimate dictations and are short by definition. Amplitude is what
- * decides. Bias hard toward transcribing: a wasted API call costs a fraction
- * of a cent, a swallowed sentence costs the user's trust.
+ * **Duration is a precondition, not the gate** — except for a hard floor at
+ * `MIN_PTT_HOLD_MS`. Accidental FN brushes are ~50–150 ms and often produce
+ * no full capture chunk; shipping that to STT is what surfaces a false
+ * dead-mic error. A spoken "yes" is 200–500 ms of audio *and* a longer hold.
+ * Above that floor, amplitude decides. Bias hard toward transcribing: a
+ * wasted API call costs a fraction of a cent, a swallowed sentence costs
+ * the user's trust.
  *
  * **If any partial with text already arrived, never gate.** The server heard
  * speech; that outranks an amplitude heuristic.
@@ -37,6 +40,13 @@ import { BYTES_PER_SAMPLE, CHUNK_BYTES, SAMPLE_RATE_HZ } from './constants.js';
  * this function exists to avoid.
  */
 export const SILENCE_GATE_MAX_DURATION_MS = 900;
+
+/**
+ * Accidental FN brushes are ~50–150ms; a spoken "yes" is 200–500ms of audio
+ * and a longer hold. Cancelling below 200ms means we never show processing
+ * and never ask STT. Do NOT delay `start_capture`/`start_stt` on down.
+ */
+export const MIN_PTT_HOLD_MS = 200;
 
 /**
  * Peak (normalized 0..1) above which the buffer contains something that
@@ -75,7 +85,13 @@ export interface SilenceGateInput {
 }
 
 export type SilenceGateReason =
-  'disabled' | 'too_long' | 'has_transcript' | 'no_audio' | 'speech' | 'silent';
+  | 'disabled'
+  | 'too_long'
+  | 'has_transcript'
+  | 'too_short'
+  | 'no_audio'
+  | 'speech'
+  | 'silent';
 
 export interface SilenceGateDecision {
   readonly gated: boolean;
@@ -105,11 +121,13 @@ export function assessSilenceGate(input: SilenceGateInput): SilenceGateDecision 
   if (durationMs > SILENCE_GATE_MAX_DURATION_MS) {
     return { gated: false, reason: 'too_long', durationMs, peak, rms };
   }
+  if (durationMs < MIN_PTT_HOLD_MS) {
+    return { gated: true, reason: 'too_short', durationMs, peak, rms };
+  }
   if (input.pcm === null || input.pcm.byteLength < CHUNK_BYTES) {
-    // Cannot measure. A hold shorter than one capture chunk (100 ms) has
-    // not produced a full buffer yet — that is "too soon", not "silent".
-    // Bias to transcribe.
-    return { gated: false, reason: 'no_audio', durationMs, peak, rms };
+    // Cannot measure. A sub-chunk tap is exactly "too soon", and sending
+    // it to STT is what produces the false dead-mic error.
+    return { gated: true, reason: 'no_audio', durationMs, peak, rms };
   }
   if (peak >= SILENCE_GATE_PEAK || rms >= SILENCE_GATE_RMS) {
     return { gated: false, reason: 'speech', durationMs, peak, rms };

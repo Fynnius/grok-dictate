@@ -27,6 +27,26 @@ import './hud.css';
 
 const api = window.grokDictate;
 
+/** Clicks shorter than this (screen px) on an error pill dismiss; longer drags. */
+const DRAG_SLOP_PX = 4;
+
+type ChromeHandlers = {
+  onPointerEnter: () => void;
+  onPointerLeave: (event: React.PointerEvent) => void;
+  onPointerDown: (event: React.PointerEvent<HTMLElement>) => void;
+  onPointerMove: (event: React.PointerEvent) => void;
+  onPointerUp: (event: React.PointerEvent) => void;
+  onPointerCancel: (event: React.PointerEvent) => void;
+};
+
+function isNoDragTarget(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest('button, .no-drag') !== null;
+}
+
+function isHudChrome(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest('.capsule, .message') !== null;
+}
+
 function runAction(id: HudActionId, text: string | null): void {
   switch (id) {
     case 'copy':
@@ -172,7 +192,21 @@ function AlertGlyph({ tone }: { tone: HudTone }): React.JSX.Element {
  * The bottom capsule — the app's permanent grammar (§16.3): one shape, always
  * in the same place, whose contents carry the state.
  */
-function Capsule({ view, p }: { view: HudView; p: HudPresentation }): React.JSX.Element | null {
+function capsuleClass(base: string, dragging: boolean): string {
+  return dragging ? `${base} is-dragging` : base;
+}
+
+function Capsule({
+  view,
+  p,
+  dragging,
+  chrome,
+}: {
+  view: HudView;
+  p: HudPresentation;
+  dragging: boolean;
+  chrome: ChromeHandlers;
+}): React.JSX.Element | null {
   const capsule = p.capsule;
   if (capsule === null) return null;
 
@@ -182,7 +216,10 @@ function Capsule({ view, p }: { view: HudView; p: HudPresentation }): React.JSX.
       const live = p.liveText;
       if (!capsule.buttons) {
         return (
-          <div className={`capsule is-hold${live === null ? '' : ' is-live'}`}>
+          <div
+            className={capsuleClass(`capsule is-hold${live === null ? '' : ' is-live'}`, dragging)}
+            {...chrome}
+          >
             <Waveform level={level} />
             {live === null ? null : <span className="live-text">{live}</span>}
           </div>
@@ -191,12 +228,19 @@ function Capsule({ view, p }: { view: HudView; p: HudPresentation }): React.JSX.
       // Hands-free: ✕ discards the turn, ✓ ends it and transcribes. These are
       // real buttons (§16.5c) — hands-free is exactly the mode where a hand is
       // free to click, and the window takes the mouse only in this mode.
+      // `no-drag` + stopPropagation: a press on ✕/✓ must not start a window drag.
       return (
-        <div className={`capsule is-toggle${live === null ? '' : ' is-live'}`}>
+        <div
+          className={capsuleClass(`capsule is-toggle${live === null ? '' : ' is-live'}`, dragging)}
+          {...chrome}
+        >
           <button
             type="button"
-            className="round cancel"
+            className="round cancel no-drag"
             aria-label="Cancel dictation"
+            onPointerDown={(event) => {
+              event.stopPropagation();
+            }}
             onClick={() => {
               api.send({ type: 'cancel' });
             }}
@@ -209,8 +253,11 @@ function Capsule({ view, p }: { view: HudView; p: HudPresentation }): React.JSX.
           {live === null ? null : <span className="live-text">{live}</span>}
           <button
             type="button"
-            className="round confirm"
+            className="round confirm no-drag"
             aria-label="Stop and insert"
+            onPointerDown={(event) => {
+              event.stopPropagation();
+            }}
             onClick={() => {
               api.send({ type: 'stop-recording' });
             }}
@@ -230,7 +277,13 @@ function Capsule({ view, p }: { view: HudView; p: HudPresentation }): React.JSX.
     }
     case 'processing':
       return (
-        <div className={`capsule is-processing${p.liveText === null ? '' : ' is-live'}`}>
+        <div
+          className={capsuleClass(
+            `capsule is-processing${p.liveText === null ? '' : ' is-live'}`,
+            dragging,
+          )}
+          {...chrome}
+        >
           <Waveform level={0} />
           {p.liveText === null ? null : <span className="live-text">{p.liveText}</span>}
           <Spinner />
@@ -238,13 +291,13 @@ function Capsule({ view, p }: { view: HudView; p: HudPresentation }): React.JSX.
       );
     case 'check':
       return (
-        <div className="capsule is-check">
+        <div className={capsuleClass('capsule is-check', dragging)} {...chrome}>
           <Check />
         </div>
       );
     case 'alert':
       return (
-        <div className={`capsule is-alert tone-${p.tone}`}>
+        <div className={capsuleClass(`capsule is-alert tone-${p.tone}`, dragging)} {...chrome}>
           <AlertGlyph tone={p.tone} />
         </div>
       );
@@ -253,6 +306,9 @@ function Capsule({ view, p }: { view: HudView; p: HudPresentation }): React.JSX.
 
 function Hud(): React.JSX.Element | null {
   const [view, setView] = useState<HudView>({ kind: 'hidden' });
+  const [dragging, setDragging] = useState(false);
+  const dragStart = useRef<{ x: number; y: number } | null>(null);
+  const dragMoved = useRef(false);
 
   useEffect(
     () =>
@@ -262,14 +318,79 @@ function Hud(): React.JSX.Element | null {
     [],
   );
 
+  const chrome: ChromeHandlers = {
+    onPointerEnter: () => {
+      api.send({ type: 'hud-pointer', phase: 'enter' });
+    },
+    onPointerLeave: (event) => {
+      if (dragStart.current !== null) return;
+      if (isHudChrome(event.relatedTarget)) return;
+      api.send({ type: 'hud-pointer', phase: 'leave' });
+    },
+    onPointerDown: (event) => {
+      if (event.button !== 0) return;
+      if (isNoDragTarget(event.target)) return;
+      event.currentTarget.setPointerCapture(event.pointerId);
+      dragStart.current = { x: event.screenX, y: event.screenY };
+      dragMoved.current = false;
+    },
+    onPointerMove: (event) => {
+      const start = dragStart.current;
+      if (start === null) return;
+      if (!dragMoved.current) {
+        if (Math.hypot(event.screenX - start.x, event.screenY - start.y) < DRAG_SLOP_PX) return;
+        // Start the drag from the original press, not this sample, so the
+        // first move is not short by the slop.
+        dragMoved.current = true;
+        setDragging(true);
+        api.send({ type: 'hud-drag-start', screenX: start.x, screenY: start.y });
+      }
+      api.send({ type: 'hud-drag-move', screenX: event.screenX, screenY: event.screenY });
+    },
+    onPointerUp: (event) => {
+      if (dragStart.current === null) return;
+      const moved = dragMoved.current;
+      dragStart.current = null;
+      setDragging(false);
+      if (moved) {
+        api.send({ type: 'hud-drag-end' });
+      } else if (view.kind === 'error') {
+        api.send({ type: 'dismiss-hud' });
+      }
+      const under = document.elementFromPoint(event.clientX, event.clientY);
+      if (!isHudChrome(under)) {
+        api.send({ type: 'hud-pointer', phase: 'leave' });
+      }
+    },
+    onPointerCancel: (event) => {
+      if (dragStart.current === null) return;
+      const moved = dragMoved.current;
+      dragStart.current = null;
+      setDragging(false);
+      if (moved) api.send({ type: 'hud-drag-end' });
+      const under = document.elementFromPoint(event.clientX, event.clientY);
+      if (!isHudChrome(under)) {
+        api.send({ type: 'hud-pointer', phase: 'leave' });
+      }
+    },
+  };
+
   if (view.kind === 'hidden') return null;
   const p = present(view);
   const m = p.message;
+  const messageClass = [
+    'message',
+    `tone-${p.tone}`,
+    view.kind === 'error' ? 'is-error' : '',
+    dragging ? 'is-dragging' : '',
+  ]
+    .filter((part) => part.length > 0)
+    .join(' ');
 
   return (
     <div className="hud" role="status" aria-label={p.label}>
       {m === null ? null : (
-        <div className={`message tone-${p.tone}`}>
+        <div className={messageClass} {...chrome}>
           <div className="message-title">{m.title}</div>
           {m.body === null ? null : <div className="message-body">{m.body}</div>}
           {m.detail === null ? null : <div className="message-detail">{m.detail}</div>}
@@ -279,7 +400,10 @@ function Hud(): React.JSX.Element | null {
                 <button
                   key={action.id}
                   type="button"
-                  className={action.id === 'dismiss' ? 'quiet' : ''}
+                  className={action.id === 'dismiss' ? 'quiet no-drag' : 'no-drag'}
+                  onPointerDown={(event) => {
+                    event.stopPropagation();
+                  }}
                   onClick={() => {
                     runAction(action.id, m.body);
                   }}
@@ -291,7 +415,7 @@ function Hud(): React.JSX.Element | null {
           )}
         </div>
       )}
-      <Capsule view={view} p={p} />
+      <Capsule view={view} p={p} dragging={dragging} chrome={chrome} />
     </div>
   );
 }

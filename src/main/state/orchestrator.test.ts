@@ -12,6 +12,7 @@
  * events in and observable calls out.
  */
 
+import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryConfig, MemoryHistory, MemoryHud, MemorySound, MemoryTray } from '@mocks/mock-ui.js';
 import type { AppConfig, HotkeyBindings } from '@contracts/config.js';
@@ -28,6 +29,7 @@ import type {
 } from '@contracts/ports.js';
 import { CHUNK_BYTES } from '@shared/constants.js';
 import { addLogSink, clearLogSinks, createLogger } from '@shared/logger.js';
+import type { MachineEnv } from './machine.js';
 import { Orchestrator } from './orchestrator.js';
 
 /**
@@ -56,7 +58,7 @@ class ScriptedAudio implements AudioSourcePort {
   cancel(sessionId: string): void {
     this.cancelled.push(sessionId);
   }
-  /** Test seam for the silence gate. `null` means "cannot measure" and does not gate. */
+  /** Test seam for the silence gate. `null` / sub-chunk is `no_audio` and now gates. */
   buffer: Uint8Array | null = null;
   getUtteranceBuffer(): Uint8Array | null {
     return this.buffer;
@@ -142,8 +144,20 @@ class StubHelper implements NativeHelperPort {
   onReady(): () => void {
     return () => undefined;
   }
-  onHotkey(): () => void {
-    return () => undefined;
+  hotkeyListener:
+    ((action: 'ptt_down' | 'ptt_up' | 'toggle' | 'retry_insert', ts: number) => void) | null = null;
+
+  onHotkey(
+    listener: (action: 'ptt_down' | 'ptt_up' | 'toggle' | 'retry_insert', ts: number) => void,
+  ): () => void {
+    this.hotkeyListener = listener;
+    return () => {
+      this.hotkeyListener = null;
+    };
+  }
+
+  fireHotkey(action: 'ptt_down' | 'ptt_up' | 'toggle' | 'retry_insert', ts = 1): void {
+    this.hotkeyListener?.(action, ts);
   }
   onSecureInput(): () => void {
     return () => undefined;
@@ -178,6 +192,7 @@ function harness(
     eagerDrain?: boolean;
     config?: Partial<AppConfig>;
     unmuteBeforeCueMs?: number;
+    env?: MachineEnv;
   } = {},
 ): Harness {
   const audio = new ScriptedAudio(options.eagerDrain ?? false);
@@ -186,6 +201,7 @@ function harness(
   const hud = new MemoryHud();
   const history = new MemoryHistory();
   const sound = new MemorySound();
+  const config = new MemoryConfig(options.config);
   const orchestrator = new Orchestrator({
     native: helper,
     audio,
@@ -194,11 +210,21 @@ function harness(
     tray: new MemoryTray(),
     sound,
     history,
-    config: new MemoryConfig(options.config),
+    config,
     logger: createLogger('orchestrator-test'),
     tickIntervalMs: 0,
     muteAfterCueMs: 0,
     unmuteBeforeCueMs: options.unmuteBeforeCueMs ?? 0,
+    env: options.env ?? {
+      newSessionId: () => randomUUID(),
+      now: () => Date.now(),
+      minPttHoldMs: () => 0,
+      repairSeams: () => config.get().repairSeams,
+      liveHudText: () => config.get().liveHudText,
+      silenceGate: () => config.get().silenceGate,
+      muteWhileRecording: () => config.get().muteWhileRecording,
+      insertMethod: () => config.get().insertMethod,
+    },
   });
   live.push(orchestrator);
   return { orchestrator, audio, stt, helper, hud, history, sound };
@@ -224,7 +250,7 @@ describe('audio.done waits for the capture tail (2026-08-09 incident, BUG-2)', (
   });
 
   it('sends the tail chunk that arrives after the stop, then finishes', () => {
-    const { orchestrator, audio, stt } = harness();
+    const { orchestrator, audio, stt } = harness({ config: { silenceGate: false } });
     orchestrator.dispatch({ type: 'PTT_DOWN', ts: 1 });
     audio.chunk(pcm(1));
     orchestrator.dispatch({ type: 'PTT_UP', ts: 2 });
@@ -236,7 +262,7 @@ describe('audio.done waits for the capture tail (2026-08-09 incident, BUG-2)', (
   });
 
   it('finishes exactly once, however many times the drain is reported', () => {
-    const { orchestrator, audio, stt } = harness();
+    const { orchestrator, audio, stt } = harness({ config: { silenceGate: false } });
     orchestrator.dispatch({ type: 'PTT_DOWN', ts: 1 });
     orchestrator.dispatch({ type: 'PTT_UP', ts: 2 });
     audio.drain();
@@ -273,7 +299,7 @@ describe('audio.done waits for the capture tail (2026-08-09 incident, BUG-2)', (
     // `MockAudioSource` has no renderer to wait for and calls `onDrained`
     // synchronously. The bookkeeping is registered *before* `audio.stop()` so
     // that this case is not mistaken for "still draining" and left hanging.
-    const { orchestrator, stt } = harness({ eagerDrain: true });
+    const { orchestrator, stt } = harness({ eagerDrain: true, config: { silenceGate: false } });
     orchestrator.dispatch({ type: 'PTT_DOWN', ts: 1 });
     orchestrator.dispatch({ type: 'PTT_UP', ts: 2 });
     expect(stt.only.finishes).toBe(1);
@@ -313,7 +339,7 @@ describe('the HUD is not sent a frame it is already showing (BUG-7)', () => {
   });
 
   it('does not swallow the transition out of recording', () => {
-    const { orchestrator, audio, hud } = harness();
+    const { orchestrator, audio, hud } = harness({ config: { silenceGate: false } });
     orchestrator.dispatch({ type: 'PTT_DOWN', ts: 1 });
     orchestrator.dispatch({ type: 'PTT_UP', ts: 2 });
     audio.drain();
@@ -351,7 +377,7 @@ describe('a finished turn is let go (2026-08-09 incident, BUG-5)', () => {
   };
 
   it('leaves the map empty after a successful dictation', () => {
-    const h = harness();
+    const h = harness({ config: { silenceGate: false } });
     completeOneDictation(h);
     expect(h.orchestrator.snapshot.state).toBe('idle');
     expect(h.helper.inserted).toEqual(['Ein ganz normaler Satz.']);
@@ -383,7 +409,7 @@ describe('a finished turn is let go (2026-08-09 incident, BUG-5)', () => {
   });
 
   it('does not accumulate turns across many dictations', () => {
-    const h = harness();
+    const h = harness({ config: { silenceGate: false } });
     for (let n = 0; n < 5; n += 1) completeOneDictation(h);
     expect(h.stt.turns).toHaveLength(5);
 
@@ -448,6 +474,31 @@ describe('mute around recording (2026-08-22)', () => {
 });
 
 describe('silence gate at drain (2026-08-22)', () => {
+  it('cancels a sub-threshold FN tap before processing', () => {
+    let now = 1_000_000;
+    const { orchestrator, stt, hud } = harness({
+      env: {
+        newSessionId: () => randomUUID(),
+        now: () => now,
+        minPttHoldMs: () => 200,
+        repairSeams: () => true,
+        liveHudText: () => false,
+        silenceGate: () => true,
+        muteWhileRecording: () => true,
+        insertMethod: () => 'auto',
+      },
+    });
+    orchestrator.dispatch({ type: 'PTT_DOWN', ts: 1 });
+    now += 100;
+    orchestrator.dispatch({ type: 'PTT_UP', ts: 2 });
+    expect(orchestrator.snapshot.state).toBe('idle');
+    expect(hud.last).toEqual({ kind: 'hidden' });
+    expect(hud.views.some((v) => v.kind === 'processing')).toBe(false);
+    expect(hud.views.some((v) => v.kind === 'error')).toBe(false);
+    expect(stt.only.aborts).toBeGreaterThanOrEqual(1);
+    expect(stt.only.finishes).toBe(0);
+  });
+
   it('skips STT finish on a short silent utterance and hides the HUD without an error', () => {
     const { orchestrator, audio, stt, hud } = harness();
     audio.buffer = new Uint8Array(CHUNK_BYTES);
@@ -501,6 +552,58 @@ describe('W0 timing channel', () => {
     expect(joined).toContain('event=hotkey_up');
     expect(joined).not.toContain('secret words');
     expect(joined).not.toContain('must not leak');
+  });
+});
+
+describe('error HUD dismiss (click / FN)', () => {
+  it('dismissHud hides and lets the same error show again', () => {
+    const { orchestrator, hud } = harness();
+    orchestrator.reportError('auth_missing', 'Not signed in.', 'Open Settings.');
+    expect(hud.last).toMatchObject({ kind: 'error', message: 'Not signed in.' });
+    const shown = hud.views.filter((view) => view.kind === 'error').length;
+    orchestrator.dismissHud();
+    expect(hud.last).toEqual({ kind: 'hidden' });
+    orchestrator.reportError('auth_missing', 'Not signed in.', 'Open Settings.');
+    expect(hud.last).toMatchObject({ kind: 'error', message: 'Not signed in.' });
+    expect(hud.views.filter((view) => view.kind === 'error').length).toBe(shown + 1);
+  });
+
+  it('dismissHud is idempotent', () => {
+    const { orchestrator, hud } = harness();
+    orchestrator.reportError('auth_missing', 'Not signed in.', null);
+    orchestrator.dismissHud();
+    const n = hud.views.length;
+    orchestrator.dismissHud();
+    expect(hud.views.length).toBe(n);
+  });
+
+  it('FN while the error is up dismisses it without starting a recording', () => {
+    const { orchestrator, helper, hud, audio } = harness();
+    orchestrator.start();
+    orchestrator.reportError('auth_missing', 'Not signed in.', null);
+    helper.fireHotkey('ptt_down', 10);
+    expect(hud.last).toEqual({ kind: 'hidden' });
+    expect(orchestrator.snapshot.state).toBe('idle');
+    expect(audio.sessionId).toBeNull();
+  });
+
+  it('toggle FN also dismisses without starting', () => {
+    const { orchestrator, helper, audio } = harness();
+    orchestrator.start();
+    orchestrator.reportError('auth_missing', 'Not signed in.', null);
+    helper.fireHotkey('toggle', 10);
+    expect(orchestrator.snapshot.state).toBe('idle');
+    expect(audio.sessionId).toBeNull();
+  });
+
+  it('the next FN after dismiss starts recording', () => {
+    const { orchestrator, helper, audio } = harness();
+    orchestrator.start();
+    orchestrator.reportError('auth_missing', 'Not signed in.', null);
+    helper.fireHotkey('ptt_down', 10);
+    helper.fireHotkey('ptt_down', 20);
+    expect(orchestrator.snapshot.state).toBe('recording');
+    expect(audio.sessionId).not.toBeNull();
   });
 });
 

@@ -13,6 +13,7 @@
  * person to speak; that is the human test batch in `docs/phase-3-report.md`.
  */
 
+import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MockAudioSource } from '@mocks/mock-audio.js';
 import { MemoryConfig, MemoryHistory, MemoryHud, MemorySound, MemoryTray } from '@mocks/mock-ui.js';
@@ -105,6 +106,7 @@ function buildOrchestrator(timeouts: Partial<SttTimeouts> = {}): void {
   helper = new StubHelper();
   hud = new MemoryHud();
   history = new MemoryHistory();
+  const config = new MemoryConfig({ keyterms: ['kubectl'], silenceGate: false });
 
   orchestrator = new Orchestrator({
     native: helper,
@@ -116,11 +118,21 @@ function buildOrchestrator(timeouts: Partial<SttTimeouts> = {}): void {
     tray: new MemoryTray(),
     sound: new MemorySound(),
     history,
-    config: new MemoryConfig({ keyterms: ['kubectl'] }),
+    config,
     logger,
     tickIntervalMs: 0,
     muteAfterCueMs: 0,
     unmuteBeforeCueMs: 0,
+    env: {
+      newSessionId: () => randomUUID(),
+      now: () => Date.now(),
+      minPttHoldMs: () => 0,
+      repairSeams: () => config.get().repairSeams,
+      liveHudText: () => config.get().liveHudText,
+      silenceGate: () => config.get().silenceGate,
+      muteWhileRecording: () => config.get().muteWhileRecording,
+      insertMethod: () => config.get().insertMethod,
+    },
   });
   orchestrator.start();
 }

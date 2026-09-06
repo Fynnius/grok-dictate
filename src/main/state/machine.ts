@@ -190,6 +190,13 @@ export interface MachineEnv {
   newSessionId(): string;
   now(): number;
   /**
+   * Floor on a hold-mode press, milliseconds. A release faster than this is
+   * an accidental tap: cancel from recording, never processing. Optional so
+   * a test may omit it and get 0 — `PTT_DOWN`/`PTT_UP` in the same breath
+   * still reach processing.
+   */
+  minPttHoldMs?: () => number;
+  /**
    * The `repairSeams` setting, read once per turn. Optional so that a test may
    * supply a two-field env and get the shipping behaviour.
    */
@@ -941,11 +948,36 @@ function reduceRecording(snapshot: Snapshot, event: PostSecureEvent, env: Machin
     ]);
 
   switch (event.type) {
-    case 'PTT_UP':
+    case 'PTT_UP': {
       // In toggle mode this is the Fn release that follows Fn+Space (§4).
-      return ctx.mode === 'hold'
-        ? stopAndProcess()
-        : ignored(snapshot, 'toggle mode ignores the Fn release', event);
+      if (ctx.mode !== 'hold') {
+        return ignored(snapshot, 'toggle mode ignores the Fn release', event);
+      }
+      // Accidental FN brushes are ~50–150ms. Cancel from recording so we
+      // never show processing and never ask STT. Mic/socket still open on
+      // down — delaying start clips the first word.
+      const minHoldMs = env.minPttHoldMs?.() ?? 0;
+      if (minHoldMs > 0 && ctx.startedAt !== null && env.now() - ctx.startedAt < minHoldMs) {
+        return step(
+          'idle',
+          { ...ctx, sessionId: null, committed: [], interim: '', pendingStart: false, level: 0 },
+          [
+            { type: 'cancel_capture', sessionId },
+            { type: 'abort_stt', sessionId },
+            ...unmuteEffect(ctx),
+            { type: 'hud', view: { kind: 'hidden' } },
+            { type: 'tray', state: 'idle', secureInput: ctx.secureInput },
+            {
+              type: 'log',
+              level: 'debug',
+              message: 'ignored a sub-threshold FN tap',
+              fields: { minHoldMs },
+            },
+          ],
+        );
+      }
+      return stopAndProcess();
+    }
 
     case 'TOGGLE':
       // §4: a `toggle` during a hold converts the session to hands-free; a

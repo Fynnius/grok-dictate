@@ -1,11 +1,8 @@
 /**
- * The dwell and the fade — the pill's exit, which since §19.3 is the *only* way
- * an `error` leaves the screen. It has no Dismiss button any more, so a broken
- * timer here would mean a red capsule sitting over the user's work until the
- * next dictation replaces it.
+ * The dwell, the fade, click-through, and the in-memory drag anchor.
  *
  * Electron is mocked rather than launched: `focus.e2e.test.ts` covers the real
- * window server, and what is asserted here is arithmetic on timers.
+ * window server, and what is asserted here is arithmetic on timers and bounds.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -19,6 +16,7 @@ interface FakeWindow {
   destroyed: boolean;
   bounds: { x: number; y: number; width: number; height: number } | null;
   ignoreMouse: boolean | null;
+  ignoreForward: boolean;
   sent: unknown[];
 }
 
@@ -31,7 +29,12 @@ vi.mock('electron', () => {
     isFocusable = (): boolean => false;
     isAlwaysOnTop = (): boolean => true;
     setOpacity = (value: number): void => void fake.opacity.push(value);
-    setIgnoreMouseEvents = (value: boolean): void => void (fake.ignoreMouse = value);
+    setIgnoreMouseEvents = (value: boolean, opts?: { forward?: boolean }): void => {
+      fake.ignoreMouse = value;
+      fake.ignoreForward = opts?.forward === true;
+    };
+    getBounds = (): { x: number; y: number; width: number; height: number } =>
+      fake.bounds ?? { x: 0, y: 0, width: 160, height: 64 };
     setBounds = (bounds: FakeWindow['bounds']): void => void (fake.bounds = bounds);
     showInactive = (): void => void (fake.visible = true);
     hide = (): void => {
@@ -58,14 +61,17 @@ vi.mock('electron', () => {
 });
 
 const { HudWindow } = await import('./hud-window.js');
-const { HUD_FADE_MS, hudDwellMs } = await import('./layout.js');
+const { HUD_FADE_MS, HUD_NOTICE_WINDOW, hudBounds, hudDwellMs } = await import('./layout.js');
 const { createLogger } = await import('@shared/logger.js');
 
 /** One 60 Hz frame — the fade's step. */
 const FRAME = 16;
 
 const ERROR: HudView = { kind: 'error', message: 'No speech was detected.', hint: 'Check it.' };
+const HOLD: HudView = { kind: 'recording', elapsedMs: 0, level: 0, interim: '', mode: 'hold' };
+const TOGGLE: HudView = { kind: 'recording', elapsedMs: 0, level: 0, interim: '', mode: 'toggle' };
 const ERROR_DWELL = hudDwellMs(ERROR) ?? 0;
+const WORK_AREA = { x: 0, y: 0, width: 1512, height: 944 };
 
 async function shown(view: HudView): Promise<InstanceType<typeof HudWindow>> {
   const hud = new HudWindow(createLogger('test'), () => undefined);
@@ -83,6 +89,7 @@ beforeEach(() => {
     destroyed: false,
     bounds: null,
     ignoreMouse: null,
+    ignoreForward: false,
     sent: [],
   };
 });
@@ -129,7 +136,7 @@ describe('dwell and fade', () => {
     await vi.advanceTimersByTimeAsync(ERROR_DWELL - HUD_FADE_MS + FRAME * 4);
     expect(fake.opacity.some((value) => value < 1)).toBe(true);
 
-    hud.show({ kind: 'recording', elapsedMs: 0, level: 0, interim: '', mode: 'hold' });
+    hud.show(HOLD);
     expect(fake.opacity.at(-1)).toBe(1);
     expect(fake.visible).toBe(true);
 
@@ -158,9 +165,106 @@ describe('dwell and fade', () => {
   });
 
   it('never sets a dwell for a state that ends when the session does', async () => {
-    await shown({ kind: 'recording', elapsedMs: 0, level: 0, interim: '', mode: 'hold' });
+    await shown(HOLD);
     await vi.advanceTimersByTimeAsync(60_000);
     expect(fake.visible).toBe(true);
     expect(fake.hidden).toBe(0);
+  });
+
+  it('notifies onHidden once when the dwell hide runs', async () => {
+    const hud = await shown(ERROR);
+    let hidden = 0;
+    hud.onHidden = () => {
+      hidden += 1;
+    };
+    await vi.advanceTimersByTimeAsync(ERROR_DWELL + FRAME);
+    expect(fake.visible).toBe(false);
+    expect(hidden).toBe(1);
+    hud.hide();
+    expect(hidden).toBe(1);
+  });
+});
+
+describe('mouse ignore', () => {
+  it('forwards through empty chrome on error, and captures on hover', async () => {
+    const hud = await shown(ERROR);
+    expect(fake.ignoreMouse).toBe(true);
+    expect(fake.ignoreForward).toBe(true);
+
+    hud.onPointer('enter');
+    expect(fake.ignoreMouse).toBe(false);
+
+    hud.onPointer('leave');
+    expect(fake.ignoreMouse).toBe(true);
+    expect(fake.ignoreForward).toBe(true);
+  });
+
+  it('takes the mouse for hands-free even before hover', async () => {
+    await shown(TOGGLE);
+    expect(fake.ignoreMouse).toBe(false);
+    expect(fake.ignoreForward).toBe(false);
+  });
+
+  it('forwards on hold — drag is hover-forward, not hudInteractive', async () => {
+    await shown(HOLD);
+    expect(fake.ignoreMouse).toBe(true);
+    expect(fake.ignoreForward).toBe(true);
+  });
+
+  it('blocked is fully click-through, including the pills', async () => {
+    await shown({ kind: 'blocked' });
+    expect(fake.ignoreMouse).toBe(true);
+    expect(fake.ignoreForward).toBe(false);
+  });
+
+  it('a click without a move does not pin the session position', async () => {
+    const hud = await shown(HOLD);
+    hud.beginDrag(400, 800);
+    hud.endDrag();
+    hud.show(ERROR);
+    expect(fake.bounds).toEqual(hudBounds(WORK_AREA, HUD_NOTICE_WINDOW));
+  });
+
+  it('does not restore click-through on leave mid-drag', async () => {
+    const hud = await shown(ERROR);
+    hud.beginDrag(400, 800);
+    expect(fake.ignoreMouse).toBe(false);
+    hud.onPointer('leave');
+    expect(fake.ignoreMouse).toBe(false);
+    hud.endDrag();
+    // The renderer re-sends leave after pointerup if the cursor is off the pill.
+    hud.onPointer('leave');
+    expect(fake.ignoreMouse).toBe(true);
+    expect(fake.ignoreForward).toBe(true);
+  });
+});
+
+describe('session drag anchor', () => {
+  it('does not snap back to default bottom-centre after a drag', async () => {
+    const hud = await shown(HOLD);
+    const start = fake.bounds;
+    expect(start).not.toBeNull();
+    const originX = 400;
+    const originY = 800;
+    hud.beginDrag(originX, originY);
+    hud.dragTo(originX - 120, originY - 40);
+    hud.endDrag();
+    const dragged = fake.bounds;
+    expect(dragged).not.toBeNull();
+    if (start === null || dragged === null) throw new Error('bounds missing');
+    expect(dragged.x).toBe(start.x - 120);
+    expect(dragged.y).toBe(start.y - 40);
+
+    hud.show(ERROR);
+    const next = fake.bounds;
+    expect(next).not.toBeNull();
+    if (next === null) throw new Error('bounds missing');
+    expect(next.width).toBe(HUD_NOTICE_WINDOW.width);
+    expect(next.height).toBe(HUD_NOTICE_WINDOW.height);
+    expect(next.x + next.width / 2).toBe(dragged.x + dragged.width / 2);
+    expect(next.y + next.height).toBe(dragged.y + dragged.height);
+
+    const fallback = hudBounds(WORK_AREA, HUD_NOTICE_WINDOW);
+    expect(next.x).not.toBe(fallback.x);
   });
 });

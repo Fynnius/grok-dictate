@@ -1664,6 +1664,48 @@ describe('mute / unmute effects (2026-08-22)', () => {
   });
 });
 
+describe('minimum PTT hold', () => {
+  function holdEnv(): MachineEnv & { at: (ms: number) => void } {
+    let n = 0;
+    let now = 0;
+    return {
+      newSessionId: () => `s${String(++n)}`,
+      now: () => now,
+      at: (ms: number) => {
+        now = ms;
+      },
+      minPttHoldMs: () => 200,
+    };
+  }
+
+  it('cancels a 100ms hold without processing or an error', () => {
+    const env = holdEnv();
+    env.at(0);
+    const recording = reduce(INITIAL_SNAPSHOT, { type: 'PTT_DOWN', ts: 1 }, env);
+    env.at(100);
+    const { snapshot, effects } = reduce(recording.snapshot, { type: 'PTT_UP', ts: 2 }, env);
+    expect(snapshot.state).toBe('idle');
+    expect(huds(effects).at(-1)?.view).toEqual({ kind: 'hidden' });
+    expect(kinds(effects)).toContain('cancel_capture');
+    expect(kinds(effects)).toContain('abort_stt');
+    expect(kinds(effects)).not.toContain('finish_stt');
+    expect(huds(effects).some((e) => e.view.kind === 'processing')).toBe(false);
+    expect(huds(effects).some((e) => e.view.kind === 'error')).toBe(false);
+    expect(effects.some((e) => e.type === 'cue' && e.cue === 'error')).toBe(false);
+  });
+
+  it('still processes a 250ms hold', () => {
+    const env = holdEnv();
+    env.at(0);
+    const recording = reduce(INITIAL_SNAPSHOT, { type: 'PTT_DOWN', ts: 1 }, env);
+    env.at(250);
+    const { snapshot, effects } = reduce(recording.snapshot, { type: 'PTT_UP', ts: 2 }, env);
+    expect(snapshot.state).toBe('processing');
+    expect(kinds(effects)).toContain('finish_stt');
+    expect(huds(effects).some((e) => e.view.kind === 'processing')).toBe(true);
+  });
+});
+
 describe('SILENCE_GATED', () => {
   it('returns to idle with a hidden HUD, not an error', () => {
     const { snapshot, effects } = run([

@@ -6,6 +6,7 @@ import {
   HUD_FADE_MS,
   HUD_MESSAGE_WINDOW,
   HUD_NOTICE_WINDOW,
+  boundsFromAnchor,
   hudBounds,
   hudDwellMs,
   hudInteractive,
@@ -85,9 +86,9 @@ describe('hudInteractive', () => {
     expect(hudInteractive(VIEWS.inserted)).toBe(false);
     expect(hudInteractive(VIEWS.blocked)).toBe(false);
     expect(hudInteractive(VIEWS.hidden)).toBe(false);
-    // `error` joined them in §19.3 when its Dismiss button went: the only click
-    // it could take now is one the user aimed at the app underneath.
-    expect(hudInteractive(VIEWS.error)).toBe(false);
+    // `error` takes the mouse so a click on the pill dismisses it. Empty
+    // chrome around the 400×152 notice window still forwards (hover-forward).
+    expect(hudInteractive(VIEWS.error)).toBe(true);
   });
 });
 
@@ -171,5 +172,54 @@ describe('hudBounds — multi-display (IMPLEMENTATION-PLAN.md §5b)', () => {
       expect(bounds.x + bounds.width).toBeLessThanOrEqual(small.x + small.width);
       expect(bounds.y + bounds.height).toBeLessThanOrEqual(small.y + small.height);
     }
+  });
+});
+
+describe('boundsFromAnchor', () => {
+  const PRIMARY = { x: 0, y: 0, width: 1512, height: 944 };
+
+  it('matches hudBounds when the anchor is the default bottom-centre', () => {
+    const placed = hudBounds(PRIMARY, HUD_CAPSULE_WINDOW);
+    const anchor = {
+      x: placed.x + placed.width / 2,
+      y: placed.y + placed.height,
+    };
+    expect(boundsFromAnchor(anchor, HUD_CAPSULE_WINDOW, PRIMARY)).toEqual(placed);
+  });
+
+  it('keeps the bottom-centre when the window grows for an error', () => {
+    const placed = hudBounds(PRIMARY, HUD_CAPSULE_WINDOW);
+    const anchor = {
+      x: placed.x + placed.width / 2,
+      y: placed.y + placed.height,
+    };
+    const next = boundsFromAnchor(anchor, HUD_NOTICE_WINDOW, PRIMARY);
+    expect(next.x + next.width / 2).toBe(anchor.x);
+    expect(next.y + next.height).toBe(anchor.y);
+    expect(next.width).toBe(HUD_NOTICE_WINDOW.width);
+    expect(next.height).toBe(HUD_NOTICE_WINDOW.height);
+  });
+
+  it('clamps onto a display with a negative origin', () => {
+    const left = { x: -1920, y: -120, width: 1920, height: 1080 };
+    const bounds = boundsFromAnchor({ x: -4000, y: -4000 }, HUD_CAPSULE_WINDOW, left);
+    expect(bounds.x).toBe(left.x);
+    expect(bounds.y).toBe(left.y);
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(left.x + left.width);
+    expect(bounds.y + bounds.height).toBeLessThanOrEqual(left.y + left.height);
+  });
+
+  it('clamps a drag that would leave the work area', () => {
+    const off = boundsFromAnchor({ x: 20_000, y: 20_000 }, HUD_CAPSULE_WINDOW, PRIMARY);
+    expect(off.x + off.width).toBe(PRIMARY.x + PRIMARY.width);
+    expect(off.y + off.height).toBe(PRIMARY.y + PRIMARY.height);
+
+    const nearRight = boundsFromAnchor(
+      { x: PRIMARY.x + PRIMARY.width - 10, y: 900 },
+      HUD_NOTICE_WINDOW,
+      PRIMARY,
+    );
+    expect(nearRight.x + nearRight.width).toBeLessThanOrEqual(PRIMARY.x + PRIMARY.width);
+    expect(nearRight.y).toBeGreaterThanOrEqual(PRIMARY.y);
   });
 });

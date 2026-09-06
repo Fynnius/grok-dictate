@@ -227,6 +227,12 @@ export type RendererToMain =
   /** Take the pill off the screen without touching the session. Added in
    *  Phase 5, replacing a `cancel` that meant two different things. */
   | { type: 'dismiss-hud' }
+  /** Pointer is over a visible pill — take the mouse so a click/drag lands. */
+  | { type: 'hud-pointer'; phase: 'enter' | 'leave' }
+  /** Manual drag of the never-key overlay; screen coords, not window-local. */
+  | { type: 'hud-drag-start'; screenX: number; screenY: number }
+  | { type: 'hud-drag-move'; screenX: number; screenY: number }
+  | { type: 'hud-drag-end' }
   | { type: 'set-language-mode'; mode: LanguageMode }
   | { type: 'open-window'; window: 'settings' | 'history' | 'scratchpad' | 'signin' | 'stats' }
   /** PCM16 mono @16 kHz, 100 ms / 3200-byte chunks. */

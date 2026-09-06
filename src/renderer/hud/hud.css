@@ -19,6 +19,9 @@ body {
   height: 100%;
   background: transparent;
   overflow: hidden;
+  /* Empty chrome of the transparent overlay must not steal document clicks.
+     Only `.capsule` / `.message` opt back in. */
+  pointer-events: none;
 }
 
 body {
@@ -54,6 +57,7 @@ body {
   align-items: center;
   gap: 8px;
   max-width: 100%;
+  pointer-events: none;
 }
 
 /* ------------------------------------------------------------------ *
@@ -70,6 +74,8 @@ body {
   background: rgba(24, 24, 26, 0.96);
   border: 0.5px solid rgba(255, 255, 255, 0.14);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.42);
+  pointer-events: auto;
+  cursor: grab;
   /* One window width, capsule widths animated in CSS — overhaul §11.1.2:
      resizing the window between 71/92/100 pt would read as jitter. */
   transition:
@@ -78,10 +84,18 @@ body {
   animation: capsule-in 160ms ease-out;
 }
 
+.capsule.is-dragging {
+  cursor: grabbing;
+}
+
 .capsule.is-hold,
 .capsule.is-check,
 .capsule.is-alert {
   width: 71px;
+}
+
+.capsule.is-alert.tone-error {
+  cursor: pointer;
 }
 
 .capsule.is-processing {
@@ -271,6 +285,17 @@ button.round:active {
   -webkit-backdrop-filter: blur(24px);
   backdrop-filter: blur(24px);
   animation: message-in 180ms ease-out;
+  pointer-events: auto;
+  cursor: grab;
+}
+
+.message.is-error {
+  cursor: pointer;
+}
+
+.message.is-dragging,
+.message.is-error.is-dragging {
+  cursor: grabbing;
 }
 
 .message-title {

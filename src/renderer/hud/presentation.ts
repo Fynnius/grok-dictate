@@ -289,12 +289,9 @@ export function present(view: HudView): HudPresentation {
           title: view.message,
           body: null,
           detail: view.hint,
-          // No Dismiss (§19.3). Nothing here needs rescuing — the words are a
-          // diagnosis, not a decision — so the button was one more thing to
-          // aim at for something that leaves on its own in five seconds. It is
-          // also what lets `error` stay click-through (`hudInteractive`): with
-          // no button, the window has no reason to take a click meant for the
-          // app underneath.
+          // No Dismiss *button* (§19.3). The pill itself is the hit target —
+          // click the message or the alert capsule, or press FN. `actions`
+          // stays empty so we do not draw a second control to aim at.
           actions: [],
         },
         liveText: null,

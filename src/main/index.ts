@@ -189,6 +189,12 @@ function main(): void {
     },
   });
 
+  // Dwell/fade hide must clear orchestrator `#hudView`, or a second identical
+  // error is skipped and FN after the pill is gone still swallows recording.
+  hud.onHidden = () => {
+    orchestrator.dismissHud();
+  };
+
   cancelFromEscape = () => {
     orchestrator.dispatch({ type: 'CANCEL' });
   };
@@ -242,7 +248,19 @@ function main(): void {
         orchestrator.dispatch({ type: 'TOGGLE', ts: Date.now() });
         return;
       case 'dismiss-hud':
-        hud.hide();
+        orchestrator.dismissHud();
+        return;
+      case 'hud-pointer':
+        hud.onPointer(message.phase);
+        return;
+      case 'hud-drag-start':
+        hud.beginDrag(message.screenX, message.screenY);
+        return;
+      case 'hud-drag-move':
+        hud.dragTo(message.screenX, message.screenY);
+        return;
+      case 'hud-drag-end':
+        hud.endDrag();
         return;
       case 'retry-insert':
         orchestrator.dispatch({ type: 'RETRY_INSERT' });

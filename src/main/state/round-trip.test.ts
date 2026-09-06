@@ -12,6 +12,7 @@
  * reason.
  */
 
+import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { MockAudioSource } from '@mocks/mock-audio.js';
@@ -76,6 +77,7 @@ async function harness(
     ...(options.pcm === undefined ? {} : { pcm: options.pcm }),
   });
   const stt = new MockSttClient(options.script ?? DEFAULT_SCRIPT);
+  const config = new MemoryConfig(options.config);
 
   const orchestrator = new Orchestrator({
     native: helper,
@@ -85,11 +87,21 @@ async function harness(
     tray,
     sound,
     history,
-    config: new MemoryConfig(options.config),
+    config,
     logger,
     tickIntervalMs: 0, // no HUD ticking; it only adds noise here
     muteAfterCueMs: 0,
     unmuteBeforeCueMs: 0,
+    env: {
+      newSessionId: () => randomUUID(),
+      now: () => Date.now(),
+      minPttHoldMs: () => 0,
+      repairSeams: () => config.get().repairSeams,
+      liveHudText: () => config.get().liveHudText,
+      silenceGate: () => config.get().silenceGate,
+      muteWhileRecording: () => config.get().muteWhileRecording,
+      insertMethod: () => config.get().insertMethod,
+    },
   });
   orchestrator.start();
   supervisor.start();
@@ -355,7 +367,7 @@ describe('the mocked dictation round-trip', () => {
   it('queues a press that arrives during insertion and starts a new recording', async () => {
     // The  resolution, exercised through the real helper.
     const h = await harness({ script: { ...DEFAULT_SCRIPT, finalAfterFinishMs: 5 } });
-    await dictate(h, 150);
+    await dictate(h, 250);
     await waitFor(
       () =>
         h.orchestrator.snapshot.state === 'inserting' || h.orchestrator.snapshot.state === 'idle',
@@ -370,7 +382,7 @@ describe('the mocked dictation round-trip', () => {
 
   it('survives a helper crash mid-session without losing the transcript', async () => {
     const h = await harness({ script: { ...DEFAULT_SCRIPT, finalAfterFinishMs: 400 } });
-    await dictate(h, 100);
+    await dictate(h, 250);
     await waitFor(() => h.orchestrator.snapshot.state === 'processing');
 
     h.mock({ action: 'crash' });

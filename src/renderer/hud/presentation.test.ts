@@ -75,8 +75,7 @@ describe('present', () => {
       [],
     );
     expect(ids({ kind: 'blocked' })).toEqual([]);
-    // `error` too, since §19.3: it diagnoses, it does not ask for a decision,
-    // and it fades on its own. A button would be one more thing to aim at.
+    // `error` too: click the pill, don't add a Dismiss button to aim at.
     expect(ids({ kind: 'error', message: 'boom', hint: 'try again' })).toEqual([]);
   });
 

@@ -30,7 +30,7 @@ import { sameHudView } from '@shared/hud-view.js';
 import type { Logger } from '@shared/logger.js';
 import { appError } from '@shared/result.js';
 import { CUE_SPECS } from '../sound/cues.js';
-import { assessSilenceGate, pcmDurationMs } from '@shared/silence-gate.js';
+import { assessSilenceGate, MIN_PTT_HOLD_MS, pcmDurationMs } from '@shared/silence-gate.js';
 import {
   TimingSession,
   formatTimingLine,
@@ -81,6 +81,7 @@ function productionEnv(config: ConfigPort): MachineEnv {
   return {
     newSessionId: () => randomUUID(),
     now: () => Date.now(),
+    minPttHoldMs: () => MIN_PTT_HOLD_MS,
     // Read per turn, not captured once: the settings window can toggle this
     // between two dictations and the next one should honour it.
     repairSeams: () => config.get().repairSeams,
@@ -162,6 +163,12 @@ export class Orchestrator {
         native.unmuteOutput();
       }),
       native.onHotkey((action, ts) => {
+        // Error is HUD chrome on idle, not a machine state. FN dismisses it
+        // without starting a recording; the next press after hide does.
+        if ((action === 'ptt_down' || action === 'toggle') && this.#hudView.kind === 'error') {
+          this.dismissHud();
+          return;
+        }
         switch (action) {
           case 'ptt_down':
             this.dispatch({ type: 'PTT_DOWN', ts });
@@ -693,5 +700,17 @@ export class Orchestrator {
       sessionId: this.#snapshot.ctx.sessionId,
       error: appError(code, message, hint),
     });
+  }
+
+  /**
+   * Take the error (or any) pill off screen without touching the session.
+   * Clears `#hudView` so a second identical error can show and so FN after a
+   * dwell-hide starts a recording instead of being swallowed. Idempotent:
+   * `hide()` may call `onHidden` which calls this again.
+   */
+  dismissHud(): void {
+    if (this.#hudView.kind === 'hidden') return;
+    this.#hudView = { kind: 'hidden' };
+    this.#deps.hud.hide();
   }
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { BYTES_PER_SAMPLE, SAMPLE_RATE_HZ } from './constants.js';
 import {
+  MIN_PTT_HOLD_MS,
   SILENCE_GATE_MAX_DURATION_MS,
   SILENCE_GATE_PEAK,
   assessSilenceGate,
@@ -120,7 +121,7 @@ describe('assessSilenceGate', () => {
     expect(decision.reason).toBe('too_long');
   });
 
-  it('does not gate when there is no buffer to measure — bias to transcribe', () => {
+  it('gates a hold with no buffer to measure as too short', () => {
     expect(
       assessSilenceGate({
         pcm: null,
@@ -128,10 +129,10 @@ describe('assessSilenceGate', () => {
         hasTranscriptText: false,
         enabled: true,
       }),
-    ).toMatchObject({ gated: false, reason: 'no_audio' });
+    ).toMatchObject({ gated: true, reason: 'too_short' });
   });
 
-  it('does not gate a hold shorter than one capture chunk — too soon to measure', () => {
+  it('gates a hold shorter than one capture chunk as too short', () => {
     expect(
       assessSilenceGate({
         pcm: new Uint8Array(0),
@@ -139,6 +140,30 @@ describe('assessSilenceGate', () => {
         hasTranscriptText: false,
         enabled: true,
       }),
-    ).toMatchObject({ gated: false, reason: 'no_audio' });
+    ).toMatchObject({ gated: true, reason: 'too_short' });
+  });
+
+  it('gates a sub-chunk buffer as no_audio once the hold outlasts the accidental-tap floor', () => {
+    expect(
+      assessSilenceGate({
+        pcm: null,
+        durationMs: 300,
+        hasTranscriptText: false,
+        enabled: true,
+      }),
+    ).toMatchObject({ gated: true, reason: 'no_audio' });
+  });
+
+  it('does not gate a 300ms speech-like tone that outlasts the accidental-tap floor', () => {
+    expect(300).toBeGreaterThan(MIN_PTT_HOLD_MS);
+    const pcm = tone(300, 200, 0.2);
+    const decision = assessSilenceGate({
+      pcm,
+      durationMs: 300,
+      hasTranscriptText: false,
+      enabled: true,
+    });
+    expect(decision.gated).toBe(false);
+    expect(decision.reason).toBe('speech');
   });
 });

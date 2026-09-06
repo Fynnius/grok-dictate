@@ -49,9 +49,11 @@ describe('hudInteractive', () => {
     // `blocked` shows words but offers nothing to press — it must never
     // swallow the click that dismisses the password field it points at.
     expect(hudInteractive(VIEWS.blocked)).toBe(false);
-    // `error` is the same shape since §19.3 took its Dismiss button away: it
-    // is a sentence that leaves on its own, not something to interact with.
-    expect(hudInteractive(VIEWS.error)).toBe(false);
+  });
+
+  it('lets a click on the error pill dismiss it; blocked stays click-through', () => {
+    expect(hudInteractive(VIEWS.error)).toBe(true);
+    expect(hudInteractive(VIEWS.blocked)).toBe(false);
   });
 
   it('splits recording by mode (§16.5c): hold is click-through, hands-free takes the mouse', () => {

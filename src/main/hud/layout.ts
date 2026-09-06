@@ -87,6 +87,44 @@ export function hudBounds(
 }
 
 /**
+ * The capsule's bottom-centre in screen coordinates. Window height jumps
+ * 64 → 152 for `error`; pinning this point (not the window top-left) is what
+ * keeps the pill from hopping when the overlay grows.
+ */
+export interface HudAnchor {
+  readonly x: number;
+  readonly y: number;
+}
+
+function clamp(n: number, lo: number, hi: number): number {
+  if (hi < lo) return lo;
+  return Math.min(Math.max(n, lo), hi);
+}
+
+/**
+ * Window bounds that keep `anchor` as the bottom-centre, then clamp the
+ * rectangle fully inside `workArea`. Work areas may have a negative origin
+ * (a display to the left or above the primary).
+ */
+export function boundsFromAnchor(
+  anchor: HudAnchor,
+  size: HudSize,
+  workArea: WorkArea,
+): { x: number; y: number; width: number; height: number } {
+  const x = clamp(
+    Math.round(anchor.x - size.width / 2),
+    workArea.x,
+    workArea.x + workArea.width - size.width,
+  );
+  const y = clamp(
+    Math.round(anchor.y - size.height),
+    workArea.y,
+    workArea.y + workArea.height - size.height,
+  );
+  return { x, y, width: size.width, height: size.height };
+}
+
+/**
  * Window size per state, derived from the shared surface switch so the main
  * process and the renderer can no longer disagree about which states carry
  * the message pill.
@@ -136,11 +174,11 @@ export function hudDwellMs(view: HudView): number | null {
       // History and ⌃⌘V, not a paragraph over the document.
       return 2_000;
     case 'error':
-      // Shortened from 8 s (§19.3). The pill no longer carries a Dismiss
-      // button, so this timer is the only way it leaves — and the user asked
-      // for it to "blend out earlier" instead of being clicked away. Five
-      // seconds is a comfortable read of a title plus one line of advice; the
-      // last 260 ms of it are the fade in `hud-window.ts`.
+      // Shortened from 8 s (§19.3). Click or FN dismisses immediately; this
+      // timer is the fallback so a red capsule does not sit over the document
+      // until the next dictation. Five seconds is a comfortable read of a
+      // title plus one line of advice; the last 260 ms of it are the fade in
+      // `hud-window.ts`.
       return 5_000;
   }
 }

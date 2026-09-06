@@ -68,33 +68,33 @@ export function hudLayer(view: HudView): HudLayer {
 }
 
 /**
- * Whether the window takes the mouse at all.
+ * Whether the view has something to click, as opposed to being status-only.
  *
- * Click-through is a focus-safety property, not an ergonomic one: every moment
- * the pill is clickable is a moment a click aimed at the app underneath can be
- * swallowed by a window floating over it. Only states that
- * actually offer a button take the mouse.
+ * Click-through is a focus-safety property: every moment the pill is clickable
+ * is a moment a click aimed at the app underneath can be swallowed by a window
+ * floating over it. This switch names the states that *want* the mouse; the
+ * window still uses hover-forward so empty chrome around the pills does not
+ * steal document clicks (`hud-window.ts`).
  *
- * Insert outcomes, `blocked`, and `error` stay click-through — they have
- * nothing to press. Recovery is History and ⌃⌘V, not buttons on the overlay.
+ * Hands-free recording takes the mouse for its ✕/✓ (overhaul §16.5c). `error`
+ * takes it so a click on the pill dismisses it. `blocked` stays click-through
+ * — that click has to reach the password field it is pointing at. Hold
+ * recording is not interactive here; hover-forward is what makes the capsule
+ * hittable for drag.
  *
- * Recording splits by mode (overhaul §16.5c): hold stays click-through — your
- * finger is on Fn and you could not click anyway — while hands-free takes the
- * mouse, because its ✕/✓ are real buttons and hands-free is exactly the mode
- * where a hand is free to press them. This is the one behaviour change in the
- * safety-critical direction, which is why `focus.e2e.test.ts` must be re-run
- * whenever it moves (§9.8, §12.1).
+ * `focus.e2e.test.ts` must be re-run whenever this moves (§9.8, §12.1).
  */
 export function hudInteractive(view: HudView): boolean {
   switch (view.kind) {
     case 'recording':
       return view.mode === 'toggle';
+    case 'error':
+      return true;
     case 'hidden':
     case 'processing':
     case 'inserted':
     case 'not_inserted':
     case 'blocked':
-    case 'error':
       return false;
   }
 }
