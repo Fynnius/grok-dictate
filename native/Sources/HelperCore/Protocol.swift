@@ -34,12 +34,14 @@ public enum HotkeyAction: String, Sendable, CaseIterable {
     case retryInsert = "retry_insert"
 }
 
-/// Contract §2. `ax` reports success only when the caret proved it; `unicode`
-/// posts synthetic key events and then checks the target's text length, which
-/// answers "landed", "did not land" or "cannot tell" — see `verified` below;
-/// `none` means nothing was attempted or everything failed, and the
-/// clipboard has *not* been touched.
+/// Contract §2. `paste` reports success only when a consumer read the promised
+/// pasteboard item after our chord; `ax` only when the caret proved it;
+/// `unicode` posts synthetic key events and then checks the target's text
+/// length, which answers "landed", "did not land" or "cannot tell" — see
+/// `verified` below; `none` means nothing was attempted or everything failed,
+/// and any paste attempted along the way has already been settled.
 public enum InsertTier: String, Sendable {
+    case paste
     case ax
     case unicode
     case none
@@ -104,6 +106,7 @@ public enum LogLevel: String, Sendable {
 
 /// What this build can actually attempt, sent in `ready.caps`.
 public enum HelperCapability: String, Sendable {
+    case paste
     case ax
     case unicode
 }
@@ -225,7 +228,7 @@ public enum HelperFrame: Sendable, Equatable {
 // MARK: - App → Helper
 
 public enum AppCommand: Sendable, Equatable {
-    case insert(id: String, text: String, targetBundleId: String?)
+    case insert(id: String, text: String, targetBundleId: String?, route: InsertRoutePreference)
     case copy(text: String)
     case getFrontmost(id: String)
     case setHotkeys(ptt: String, toggle: String, retry: String)
@@ -291,7 +294,23 @@ public enum CommandDecoder {
             // and absent both mean "do not check the target", so failing here
             // would drop an insert — and a dropped insert loses a transcript.
             let target = nullableString(object["targetBundleId"])
-            return .command(.insert(id: id, text: text, targetBundleId: target))
+            // `route` is absent from an older app and means `auto`. A *present*
+            // value this build does not recognise is rejected rather than
+            // coerced: a newer app naming a route we cannot perform is a version
+            // mismatch worth a log line, and silently reading it as `auto` could
+            // paste when the user asked us not to.
+            let route: InsertRoutePreference
+            if let raw = object["route"], !(raw is NSNull) {
+                guard
+                    let known = (raw as? String).flatMap(InsertRoutePreference.init(rawValue:))
+                else {
+                    return .malformed(reason: "insert names a \"route\" this helper does not know")
+                }
+                route = known
+            } else {
+                route = .auto
+            }
+            return .command(.insert(id: id, text: text, targetBundleId: target, route: route))
 
         case "copy":
             guard let text = object["text"] as? String else {

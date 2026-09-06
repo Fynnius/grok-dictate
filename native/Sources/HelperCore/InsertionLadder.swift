@@ -1,13 +1,31 @@
-/// The insertion ladder — , contract §3.
+/// The insertion ladder — contract §3.
+///
+/// **The route is chosen first** (`InsertRouting`), and it decides which rungs
+/// exist at all:
+///
+///   *paste route* — long text, a terminal-shaped focused element, or the user
+///   said so.
+///
+///   1. **Paste** — a promise on the pasteboard plus a synthetic ⌘V, confirmed
+///      by the operating system reporting that a consumer read it
+///      (`PasteTransaction`). O(1) in transcript length.
+///   2. **Unicode injection** — the fallback, reached only when nothing read the
+///      pasteboard. Safe because the paste tier clears the pasteboard before it
+///      declines: falling through after a paste that *did* land would type the
+///      transcript twice.
+///
+///   *type route* — everything else.
 ///
 ///   1. **AX** — `AXUIElementSetAttributeValue` on `kAXSelectedTextAttribute`,
 ///      confirmed by reading the caret back (`AXWriteVerification`).
 ///   2. **Unicode injection** — `CGEventKeyboardSetUnicodeString`. The events
-///      carry no return channel, so posting them proves nothing; since BUG-1 the
-///      tier measures the target's text length around the injection instead and
-///      says which of "landed", "did not land" and "cannot tell" it observed.
-///   3. **Neither** → `tier: "none"`, `ok: false`. **The clipboard is not
-///      touched.**
+///      carry no return channel, so posting them proves nothing.
+///
+///   3. **Nothing worked** → `tier: "none"`, `ok: false`.
+///
+/// The AX tier is skipped on the paste route deliberately: every terminal
+/// declines it at `IsAttributeSettable`, and the check costs an AX round trip
+/// for an answer the routing already has.
 ///
 /// Every rung reports a `verification` alongside `ok`, and the two are not the
 /// same claim: `ok: true` with `verification == .notPossible` means "typed,
@@ -15,14 +33,14 @@
 /// into `cmux` was posted as 38 events in 245 ms, dropped in full, and reported
 /// as plain success because the ladder had no way to say anything weaker.
 ///
-/// There is no `import AppKit` in this file and no reference to `NSPasteboard`
-/// anywhere beneath it. That is not a coincidence and not a convention: the
-/// clipboard is reachable from exactly one file in this package
-/// (`Pasteboard.swift`), wired to exactly one command (`copy`), and
-/// `ClipboardContainmentTests` asserts both — the source-level check and a spy
-/// that counts zero writes across every branch below, including every failure
-/// branch.  is a hard product requirement, and
-/// IMPLEMENTATION-PLAN.md §5b audits it again in Phase 5.
+/// There is still no `import AppKit` in this file and no reference to
+/// `NSPasteboard` anywhere in this *package*. The paste tier reaches the
+/// pasteboard from the executable target, behind `PasteInserting`, and
+/// `ClipboardDisciplineTests` holds the line that replaced the old one: the
+/// pasteboard is **written, never read**, every write carries the transient
+/// markers, and every publish is followed by exactly one settle — including on
+/// every failure branch below. `contracts/helper-protocol.md` §5.1 records why
+/// the old rule was repealed and what it cost.
 
 import Foundation
 
@@ -172,6 +190,16 @@ public protocol AccessibilityInserting: AnyObject {
     /// target check approved — two independent queries could disagree if focus
     /// moved between them — and because the AX route needs its pid.
     func insertSelectedText(_ text: String, into app: FrontmostAppInfo) -> TierAttempt
+
+    /// What one AX round trip says about the focused element — `InsertRouting`
+    /// rule 3.
+    ///
+    /// On this protocol rather than one of its own because the AX layer is the
+    /// only thing that can answer an AX question, and a second protocol would
+    /// be a second dependency to inject and a second stub to keep in step.
+    /// Returns `.unknown` when nothing could be learned, which routes to `type`
+    /// — the conservative answer, since typing never touches the clipboard.
+    func focusSignature(of app: FrontmostAppInfo) -> FocusSignature
 }
 
 public protocol UnicodeInserting: AnyObject {
@@ -201,11 +229,13 @@ public protocol InsertionPerforming: AnyObject {
     func perform(
         text: String,
         targetBundleId: String?,
+        route: InsertRoutePreference,
         completion: @escaping (InsertionOutcome) -> Void
     )
 }
 
 public final class InsertionLadder: InsertionPerforming {
+    private let paste: PasteInserting
     private let accessibility: AccessibilityInserting
     private let unicode: UnicodeInserting
     private let frontmost: FrontmostAppProviding
@@ -230,12 +260,14 @@ public final class InsertionLadder: InsertionPerforming {
     private let axSkipBundleIds: Set<String>
 
     public init(
+        paste: PasteInserting,
         accessibility: AccessibilityInserting,
         unicode: UnicodeInserting,
         frontmost: FrontmostAppProviding,
         axSkipBundleIds: Set<String> = [],
         log: @escaping (LogLevel, String) -> Void = { _, _ in }
     ) {
+        self.paste = paste
         self.accessibility = accessibility
         self.unicode = unicode
         self.frontmost = frontmost
@@ -246,12 +278,17 @@ public final class InsertionLadder: InsertionPerforming {
     public func perform(
         text: String,
         targetBundleId: String?,
+        route: InsertRoutePreference,
         completion: @escaping (InsertionOutcome) -> Void
     ) {
-        completion(run(text: text, targetBundleId: targetBundleId))
+        completion(run(text: text, targetBundleId: targetBundleId, route: route))
     }
 
-    public func run(text: String, targetBundleId: String?) -> InsertionOutcome {
+    public func run(
+        text: String,
+        targetBundleId: String?,
+        route: InsertRoutePreference = .auto
+    ) -> InsertionOutcome {
         guard !text.isEmpty else {
             return InsertionOutcome(
                 tier: .none,
@@ -286,7 +323,42 @@ public final class InsertionLadder: InsertionPerforming {
 
         var reasons: [String] = []
 
-        if let bundleId = current.bundleId, axSkipBundleIds.contains(bundleId) {
+        let chosen = InsertRouting.route(
+            preference: route,
+            utf16Count: text.utf16.count,
+            focus: { self.accessibility.focusSignature(of: current) }
+        )
+
+        if chosen == .paste {
+            switch paste.paste(text, into: current) {
+            case .confirmed:
+                return InsertionOutcome(
+                    tier: .paste,
+                    ok: true,
+                    verification: .confirmed,
+                    error: nil,
+                    frontmost: current
+                )
+            case let .failed(reason):
+                // The paste tier has already taken the pasteboard back by the
+                // time it says this, so injecting below cannot produce the text
+                // twice. That ordering is the tier's contract, not a hope.
+                reasons.append("paste: \(reason)")
+                log(.info, "the paste tier declined, falling through to Unicode injection — \(reason)")
+            case .succeeded, .notLanded:
+                // Neither is producible by `PasteInserting`: a chord that was
+                // posted proves nothing, which is the claim BUG-1 was about, and
+                // this tier answers only "a consumer read it" or "it did not".
+                reasons.append("paste: the tier returned an outcome it cannot produce")
+            }
+
+            // The AX tier is skipped on this route. Either the text is long, in
+            // which case an AX write of 2,000 characters into a field that
+            // accepts one is not the problem this change is solving, or the
+            // focused element already reported the terminal signature — and a
+            // terminal declines the AX tier at `IsAttributeSettable` anyway, for
+            // the cost of one more round trip.
+        } else if let bundleId = current.bundleId, axSkipBundleIds.contains(bundleId) {
             reasons.append("AX: skipped for \(bundleId) by GROK_DICTATE_AX_SKIP")
             log(.info, "AX tier skipped for \(bundleId) by configuration")
         } else {

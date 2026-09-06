@@ -5,11 +5,16 @@
 /// process is single-threaded apart from one serial queue. The main thread runs
 /// a `CFRunLoop` that owns the event tap, both timers and every stdout write.
 /// Insertion is the sole exception — it is pushed to a background serial queue
-/// by `BackgroundInsertion`, because Unicode injection paces itself between
-/// chunks and a paced loop on the main thread would stall the tap callback long
-/// enough for macOS to disable the tap. Results hop back to
-/// main before being emitted, so stdout has exactly one writer and frame order
-/// is preserved (contract §1).
+/// by `BackgroundInsertion`, because a tier that waits (the paste tier waits for
+/// a read receipt; injection used to pace itself between chunks) would stall the
+/// tap callback on the main thread long enough for macOS to disable the tap.
+/// Results hop back to main before being emitted, so stdout has exactly one
+/// writer and frame order is preserved (contract §1).
+///
+/// The paste tier hops back the *other* way for two short moments — promised
+/// pasteboard data is serviced by AppKit on the main run loop, so publishing and
+/// releasing have to happen there. `PasteInserter` documents that split; it is
+/// the one place in this process where the insertion queue calls back into main.
 
 import Foundation
 import HelperCore
@@ -28,6 +33,7 @@ final class HelperApp {
     private var router: CommandRouter?
     private var insertion: BackgroundInsertion?
     private var outputMute: SystemOutputMute?
+    private var pasteInserter: PasteInserter?
     private var stdoutIsBroken = false
     private var isShuttingDown = false
 
@@ -50,10 +56,12 @@ final class HelperApp {
         }
         self.workspace = workspace
 
+        let paste: PasteInserting
         let accessibility: AccessibilityInserting
         let unicode: UnicodeInserting
         if settings.dryRun {
             let dryRun = DryRunInserter()
+            paste = dryRun
             accessibility = dryRun
             unicode = dryRun
         } else {
@@ -64,11 +72,19 @@ final class HelperApp {
             // a write and discards it (`AXWriteVerification`). The ladder's own
             // log reports every decline at `info`; that one is a diagnosis of
             // the other application and belongs a level up.
+            let pasteInserter = PasteInserter(settings: settings, log: emitLog)
+            // Held so `shutdown` can take the pasteboard back: the release
+            // happens after the insertion has already been reported, and a quit
+            // in that window would otherwise leave the transcript on the
+            // clipboard for good.
+            self.pasteInserter = pasteInserter
+            paste = pasteInserter
             accessibility = AXInserter(verifyWrites: settings.verifyAXWrites, log: emitLog)
             unicode = UnicodeInserter(settings: settings, log: emitLog)
         }
 
         let ladder = InsertionLadder(
+            paste: paste,
             accessibility: accessibility,
             unicode: unicode,
             frontmost: workspace,
@@ -101,7 +117,7 @@ final class HelperApp {
         )
 
         // First frame, before anything that might warn (contract §2).
-        emit(.ready(version: helperVersion, caps: [.ax, .unicode]))
+        emit(.ready(version: helperVersion, caps: [.paste, .ax, .unicode]))
 
         if settings.dryRun {
             emit(
@@ -263,6 +279,9 @@ final class HelperApp {
     }
 
     func shutdown() {
+        // Before anything else: a paste that has been reported but not yet
+        // released would otherwise leave the transcript on the clipboard.
+        pasteInserter?.settleNow()
         outputMute?.unmute()
         tap?.uninstall()
         secureInput?.stop()
@@ -349,6 +368,7 @@ final class HelperApp {
     private func beginShutdown() {
         guard !isShuttingDown else { return }
         isShuttingDown = true
+        pasteInserter?.settleNow()
         tap?.uninstall()
         secureInput?.stop()
         workspace?.stop()
@@ -393,11 +413,12 @@ final class BackgroundInsertion: InsertionPerforming {
     func perform(
         text: String,
         targetBundleId: String?,
+        route: InsertRoutePreference,
         completion: @escaping (InsertionOutcome) -> Void
     ) {
         pendingCount += 1
         queue.async { [ladder] in
-            let outcome = ladder.run(text: text, targetBundleId: targetBundleId)
+            let outcome = ladder.run(text: text, targetBundleId: targetBundleId, route: route)
             DispatchQueue.main.async { [weak self] in
                 self?.pendingCount -= 1
                 completion(outcome)

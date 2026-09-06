@@ -37,6 +37,7 @@ struct ClipboardDisciplineTests {
         let pasteboard = SpyPasteboard()
         let recorder = FrameRecorder()
         let ladder = InsertionLadder(
+            paste: StubPasteInserter(),
             accessibility: StubAccessibilityInserter(result: ax),
             unicode: StubUnicodeInserter(result: unicode),
             frontmost: StubFrontmost(bundleId: bundleId, name: "Notes")

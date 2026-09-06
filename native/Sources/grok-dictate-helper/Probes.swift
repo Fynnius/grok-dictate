@@ -139,7 +139,7 @@ enum Probes {
 
     struct InsertOptions {
         var countdownSeconds = 5
-        var tier: String = "auto"  // auto | ax | unicode
+        var tier: String = "auto"  // auto | paste | ax | unicode
         var text: String = Probes.injectionFixture
         var outputPath = "probe-out/expected.txt"
     }
@@ -191,51 +191,89 @@ enum Probes {
         // Without it, an app that falls through to Unicode looks identical to
         // an app the AX tier was never offered, which is the difference between
         // "AX does not support this app" and "our AX call is wrong".
+        let pasteInserter = PasteInserter(settings: settings, log: log)
         let ladder: InsertionLadder
+        let route: InsertRoutePreference
         switch options.tier {
+        case "paste":
+            ladder = InsertionLadder(
+                paste: pasteInserter,
+                accessibility: disabled,
+                unicode: disabled,
+                frontmost: workspace,
+                log: log
+            )
+            route = .paste
         case "ax":
             ladder = InsertionLadder(
+                paste: disabled,
                 accessibility: AXInserter(verifyWrites: settings.verifyAXWrites, log: log),
                 unicode: disabled,
                 frontmost: workspace,
                 axSkipBundleIds: settings.axSkipBundleIds,
                 log: log
             )
+            route = .type
         case "unicode":
             // Skipping AX by forcing its stub to fail, so the recorded outcome
             // reads `tier: unicode` — which is what the per-app table needs.
             ladder = InsertionLadder(
+                paste: disabled,
                 accessibility: disabled,
                 unicode: unicodeInserter,
                 frontmost: workspace,
                 log: log
             )
+            route = .type
         default:
             ladder = InsertionLadder(
+                paste: pasteInserter,
                 accessibility: AXInserter(verifyWrites: settings.verifyAXWrites, log: log),
                 unicode: unicodeInserter,
                 frontmost: workspace,
                 axSkipBundleIds: settings.axSkipBundleIds,
                 log: log
             )
+            route = .auto
         }
 
         report("")
         report("Switch to the target app and put the caret in a text field.")
         for remaining in stride(from: options.countdownSeconds, through: 1, by: -1) {
-            report("  injecting in \(remaining)…")
+            report("  inserting in \(remaining)…")
             Thread.sleep(forTimeInterval: 1)
         }
 
         let target = workspace.frontmostApp
         report("")
-        report("Frontmost at injection: \(target.name ?? "?") (\(target.bundleId ?? "no bundle id"))")
+        report("Frontmost at insertion: \(target.name ?? "?") (\(target.bundleId ?? "no bundle id"))")
 
+        // Run the ladder off the main thread with the run loop turning, which is
+        // exactly what `BackgroundInsertion` does in protocol mode. Not a
+        // detail: promised pasteboard data is serviced on the main run loop, so
+        // a paste driven straight from main here would publish, post its chord
+        // and then block the very thread that has to answer the target's
+        // request — and time out after eight seconds against an application
+        // that was pasting correctly.
         let started = Date()
-        // `targetBundleId: nil` disables the frontmost check — this probe is
-        // pointed by hand, so there is nothing to compare against.
-        let outcome = ladder.run(text: options.text, targetBundleId: nil)
+        let result = ProbeBox<InsertionOutcome>()
+        DispatchQueue.global(qos: .userInitiated).async {
+            // `targetBundleId: nil` disables the frontmost check — this probe is
+            // pointed by hand, so there is nothing to compare against.
+            result.value = ladder.run(text: options.text, targetBundleId: nil, route: route)
+            CFRunLoopStop(CFRunLoopGetMain())
+        }
+        CFRunLoopRun()
         let elapsedMs = Int(Date().timeIntervalSince(started) * 1000)
+        guard let outcome = result.value else {
+            report("the run loop stopped before the ladder answered")
+            exit(1)
+        }
+
+        // Let a landed paste release its promise before the process exits, the
+        // way `HelperApp.shutdown` does. Without it the probe would leave the
+        // transcript on the clipboard and look like the bug it is testing for.
+        pasteInserter.settleNow()
 
         report("")
         report("tier:     \(outcome.tier.rawValue)")
@@ -254,6 +292,13 @@ enum Probes {
         report("Now copy what actually landed in the app into a file and run:")
         report("  ./verify-insert.sh <that-file>")
         exit(outcome.ok ? 0 : 1)
+    }
+
+    /// A value handed from a background queue back to main. The hand-off is
+    /// ordered by `CFRunLoopStop`, which is written after the value and read
+    /// after the run loop returns.
+    private final class ProbeBox<Value>: @unchecked Sendable {
+        var value: Value?
     }
 
     private enum WriteResult {

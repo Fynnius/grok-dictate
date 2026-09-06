@@ -188,13 +188,19 @@ final class UnicodeInserter: UnicodeInserting {
 /// and their correlation are exercised for real, and nothing is typed anywhere.
 /// Both tiers fail, so the reported outcome is `tier:"none", ok:false` — an
 /// honest "nothing happened" rather than a fake success.
-final class DryRunInserter: AccessibilityInserting, UnicodeInserting {
+final class DryRunInserter: PasteInserting, AccessibilityInserting, UnicodeInserting {
     private static let reason =
         "dry run — insertion is disabled by GROK_DICTATE_HELPER_DRY_RUN"
 
+    func paste(_ text: String, into app: FrontmostAppInfo) -> TierAttempt {
+        .failed(reason: Self.reason)
+    }
     func insertSelectedText(_ text: String, into app: FrontmostAppInfo) -> TierAttempt {
         .failed(reason: Self.reason)
     }
+    /// `.unknown` routes to typing, which under a dry run types nothing. The
+    /// point of the mode is that no pasteboard is published either.
+    func focusSignature(of app: FrontmostAppInfo) -> FocusSignature { .unknown }
     func typeText(_ text: String, into app: FrontmostAppInfo) -> TierAttempt {
         .failed(reason: Self.reason)
     }

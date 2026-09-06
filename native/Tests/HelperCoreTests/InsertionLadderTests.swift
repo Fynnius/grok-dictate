@@ -44,6 +44,7 @@ struct InsertionLadderTests {
         let axStub = StubAccessibilityInserter(result: ax)
         let unicodeStub = StubUnicodeInserter(result: unicode)
         let ladder = InsertionLadder(
+            paste: StubPasteInserter(),
             accessibility: axStub,
             unicode: unicodeStub,
             frontmost: StubFrontmost(bundleId: bundleId, name: "Notes")
@@ -141,6 +142,7 @@ struct InsertionLadderTests {
         // belongs to whoever measured it.
         var logged: [(LogLevel, String)] = []
         let ladder = InsertionLadder(
+            paste: StubPasteInserter(),
             accessibility: StubAccessibilityInserter(result: .failed(reason: "not settable")),
             unicode: StubUnicodeInserter(
                 result: .notLanded(reason: "the focused element still reports 4096 characters")
@@ -285,6 +287,7 @@ struct InsertionLadderTests {
         // different application than the one the target check approved.
         let ax = StubAccessibilityInserter(result: .succeeded)
         let ladder = InsertionLadder(
+            paste: StubPasteInserter(),
             accessibility: ax,
             unicode: StubUnicodeInserter(result: .succeeded),
             frontmost: StubFrontmost(bundleId: "com.apple.Notes", name: "Notes", processId: 5012)
@@ -303,6 +306,7 @@ struct InsertionLadderTests {
         let ax = StubAccessibilityInserter(result: .succeeded)
         let unicode = StubUnicodeInserter(result: .succeeded)
         let ladder = InsertionLadder(
+            paste: StubPasteInserter(),
             accessibility: ax,
             unicode: unicode,
             frontmost: StubFrontmost(bundleId: "com.microsoft.VSCode", name: "Code"),
@@ -318,6 +322,7 @@ struct InsertionLadderTests {
     func axSkipListIsScoped() {
         let ax = StubAccessibilityInserter(result: .succeeded)
         let ladder = InsertionLadder(
+            paste: StubPasteInserter(),
             accessibility: ax,
             unicode: StubUnicodeInserter(result: .succeeded),
             frontmost: StubFrontmost(bundleId: "com.apple.Notes", name: "Notes"),
@@ -330,6 +335,7 @@ struct InsertionLadderTests {
     @Test("a skipped AX tier that then fails Unicode still explains both")
     func axSkipListBothFail() {
         let ladder = InsertionLadder(
+            paste: StubPasteInserter(),
             accessibility: StubAccessibilityInserter(result: .succeeded),
             unicode: StubUnicodeInserter(result: .failed(reason: "no event source")),
             frontmost: StubFrontmost(bundleId: "com.microsoft.VSCode", name: "Code"),
@@ -351,6 +357,7 @@ struct InsertionLadderTests {
         // load-bearing diagnostics, so it is asserted rather than assumed.
         var logged: [(LogLevel, String)] = []
         let ladder = InsertionLadder(
+            paste: StubPasteInserter(),
             accessibility: StubAccessibilityInserter(
                 result: .failed(
                     reason:
@@ -377,7 +384,141 @@ struct InsertionLadderTests {
     func performMatchesRun() {
         let (ladder, _, _) = self.ladder(ax: .succeeded, unicode: .succeeded)
         var received: InsertionOutcome?
-        ladder.perform(text: "hallo", targetBundleId: nil) { received = $0 }
+        ladder.perform(text: "hallo", targetBundleId: nil, route: .auto) { received = $0 }
         #expect(received == ladder.run(text: "hallo", targetBundleId: nil))
+    }
+}
+
+@Suite("Insertion ladder — the paste route")
+struct PasteRouteLadderTests {
+    private func ladder(
+        paste: TierAttempt,
+        ax: TierAttempt = .confirmed,
+        unicode: TierAttempt = .succeeded
+    ) -> (InsertionLadder, StubPasteInserter, StubAccessibilityInserter, StubUnicodeInserter) {
+        let pasteStub = StubPasteInserter(result: paste)
+        let axStub = StubAccessibilityInserter(result: ax)
+        let unicodeStub = StubUnicodeInserter(result: unicode)
+        let ladder = InsertionLadder(
+            paste: pasteStub,
+            accessibility: axStub,
+            unicode: unicodeStub,
+            frontmost: StubFrontmost(bundleId: "com.cmuxterm.app", name: "cmux")
+        )
+        return (ladder, pasteStub, axStub, unicodeStub)
+    }
+
+    @Test("a read receipt reports tier paste, confirmed, and stops there")
+    func pasteWins() {
+        let (ladder, paste, ax, unicode) = self.ladder(paste: .confirmed)
+        let outcome = ladder.run(text: "hallo", targetBundleId: nil, route: .paste)
+
+        #expect(outcome.tier == .paste)
+        #expect(outcome.ok)
+        // Not an inference from a length delta — the operating system reported
+        // that the target asked us for the text.
+        #expect(outcome.verification == .confirmed)
+        #expect(outcome.frontmost?.bundleId == "com.cmuxterm.app")
+        #expect(paste.calls == ["hallo"])
+        // **The one hazard.** Falling through after a landed paste types the
+        // transcript twice.
+        #expect(unicode.calls.isEmpty)
+        #expect(ax.calls.isEmpty)
+    }
+
+    @Test("the AX tier is skipped entirely on the paste route")
+    func axIsSkipped() {
+        // Every terminal declines it at `IsAttributeSettable`, and the check
+        // costs an AX round trip for an answer the routing already has.
+        let (ladder, _, ax, unicode) = self.ladder(paste: .failed(reason: "nobody read it"))
+        let outcome = ladder.run(text: "hallo", targetBundleId: nil, route: .paste)
+
+        #expect(ax.calls.isEmpty)
+        #expect(ax.signatureReads == 0)
+        #expect(unicode.calls == ["hallo"])
+        #expect(outcome.tier == .unicode)
+    }
+
+    @Test("a paste nobody read falls through to injection")
+    func fallsThroughOnNoReceipt() {
+        let (ladder, paste, _, unicode) = self.ladder(
+            paste: .failed(reason: "cmux never read the pasteboard after ⌘V"),
+            unicode: .succeeded
+        )
+        let outcome = ladder.run(text: "hallo", targetBundleId: nil, route: .paste)
+
+        #expect(paste.calls == ["hallo"])
+        #expect(unicode.calls == ["hallo"])
+        #expect(outcome.tier == .unicode)
+        #expect(outcome.ok)
+    }
+
+    @Test("both rungs failing names both, so the error says what was tried")
+    func bothFail() {
+        let (ladder, _, _, _) = self.ladder(
+            paste: .failed(reason: "nobody read it"),
+            unicode: .failed(reason: "no event source")
+        )
+        let outcome = ladder.run(text: "hallo", targetBundleId: nil, route: .paste)
+
+        #expect(outcome.tier == .none)
+        #expect(outcome.ok == false)
+        #expect(outcome.reason == .noTier)
+        #expect(outcome.error?.contains("paste: nobody read it") == true)
+        #expect(outcome.error?.contains("Unicode: no event source") == true)
+    }
+
+    @Test("the type route never touches the paste tier")
+    func typeRouteSkipsPaste() {
+        // `insertMethod: "type"` is the promise that the pasteboard is not
+        // touched at all. It has to hold through the ladder, not just through
+        // the routing function.
+        let (ladder, paste, ax, _) = self.ladder(paste: .confirmed, ax: .confirmed)
+        let outcome = ladder.run(text: "hallo", targetBundleId: nil, route: .type)
+
+        #expect(paste.calls.isEmpty)
+        #expect(ax.calls == ["hallo"])
+        #expect(outcome.tier == .ax)
+        // …and it does not pay for the routing round trip either.
+        #expect(ax.signatureReads == 0)
+    }
+
+    @Test("auto routes a long transcript to paste without reading the focused element")
+    func autoRoutesByLength() {
+        let (ladder, paste, ax, _) = self.ladder(paste: .confirmed)
+        let long = String(repeating: "a", count: InsertRouting.pasteAboveUTF16Units + 1)
+        let outcome = ladder.run(text: long, targetBundleId: nil, route: .auto)
+
+        #expect(outcome.tier == .paste)
+        #expect(paste.calls == [long])
+        #expect(ax.signatureReads == 0)
+    }
+
+    @Test("auto routes a short transcript into a terminal to paste, at the cost of one round trip")
+    func autoRoutesByFocusSignature() {
+        let (ladder, paste, ax, _) = self.ladder(paste: .confirmed)
+        ax.signature = FocusSignature(selectedTextIsSettable: false, characterCount: 0)
+        let outcome = ladder.run(text: "ls -la", targetBundleId: nil, route: .auto)
+
+        #expect(outcome.tier == .paste)
+        #expect(paste.calls == ["ls -la"])
+        // Exactly one. Rule 3 is the only rule that costs anything.
+        #expect(ax.signatureReads == 1)
+    }
+
+    @Test("a declined insert never reaches any tier")
+    func declinesBeforeRouting() {
+        // Empty text and a moved target are decided before the route is, so a
+        // decline cannot publish a promise on the way to saying no.
+        let (ladder, paste, ax, unicode) = self.ladder(paste: .confirmed)
+        let empty = ladder.run(text: "", targetBundleId: nil, route: .paste)
+        #expect(empty.reason == .emptyText)
+
+        let moved = ladder.run(text: "hallo", targetBundleId: "com.apple.Notes", route: .paste)
+        #expect(moved.reason == .targetChanged)
+
+        #expect(paste.calls.isEmpty)
+        #expect(ax.calls.isEmpty)
+        #expect(unicode.calls.isEmpty)
     }
 }

@@ -21,6 +21,7 @@ struct CommandRouterTests {
         let frontmost = StubFrontmost(bundleId: bundleId, name: name)
         let router = CommandRouter(
             insertion: InsertionLadder(
+                paste: StubPasteInserter(),
                 accessibility: StubAccessibilityInserter(result: ax),
                 unicode: StubUnicodeInserter(result: unicode),
                 frontmost: frontmost
@@ -79,6 +80,7 @@ struct CommandRouterTests {
         let frontmost = StubFrontmost(bundleId: "com.apple.Notes")
         let router = CommandRouter(
             insertion: InsertionLadder(
+                paste: StubPasteInserter(),
                 accessibility: StubAccessibilityInserter(result: .succeeded),
                 unicode: StubUnicodeInserter(result: .succeeded),
                 frontmost: frontmost
@@ -120,6 +122,7 @@ struct CommandRouterTests {
         let frontmost = StubFrontmost(bundleId: "com.apple.Notes", name: "Notes")
         let router = CommandRouter(
             insertion: InsertionLadder(
+                paste: StubPasteInserter(),
                 accessibility: StubAccessibilityInserter(result: .succeeded),
                 unicode: StubUnicodeInserter(result: .succeeded),
                 frontmost: frontmost

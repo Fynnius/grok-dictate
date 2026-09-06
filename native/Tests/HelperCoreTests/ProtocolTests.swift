@@ -203,7 +203,7 @@ struct CommandDecodingTests {
         #expect(
             CommandDecoder.decode(
                 line: #"{"v":1,"type":"insert","id":"b","text":"hallo","targetBundleId":"com.apple.Notes"}"#
-            ) == .command(.insert(id: "b", text: "hallo", targetBundleId: "com.apple.Notes"))
+            ) == .command(.insert(id: "b", text: "hallo", targetBundleId: "com.apple.Notes", route: .auto))
         )
         #expect(
             CommandDecoder.decode(line: #"{"v":1,"type":"copy","text":"hallo"}"#)
@@ -229,12 +229,50 @@ struct CommandDecodingTests {
         )
     }
 
+    @Test("an insert carries the user's route, and an absent one means auto")
+    func decodesRoute() {
+        for (wire, expected) in [("paste", InsertRoutePreference.paste), ("type", .type), ("auto", .auto)] {
+            #expect(
+                CommandDecoder.decode(
+                    line:
+                        #"{"v":1,"type":"insert","id":"b","text":"x","targetBundleId":null,"route":"\#(wire)"}"#
+                ) == .command(.insert(id: "b", text: "x", targetBundleId: nil, route: expected))
+            )
+        }
+        // An app that predates the setting. Absent must not be a parse failure:
+        // a dropped insert loses a transcript.
+        #expect(
+            CommandDecoder.decode(
+                line: #"{"v":1,"type":"insert","id":"b","text":"x","targetBundleId":null}"#
+            ) == .command(.insert(id: "b", text: "x", targetBundleId: nil, route: .auto))
+        )
+    }
+
+    @Test("a route this build does not know is rejected rather than coerced")
+    func rejectsUnknownRoute() {
+        // The opposite trade from `targetBundleId` above, and deliberately so. A
+        // missing target and a null target mean the same thing, so absent is
+        // safe to interpret. A route named by a *newer app* that this helper
+        // cannot perform means something specific we do not know how to honour —
+        // and reading it as `auto` could paste when the user asked us not to.
+        for bad in ["\"telepathy\"", "7", "true"] {
+            let decoded = CommandDecoder.decode(
+                line: #"{"v":1,"type":"insert","id":"b","text":"x","targetBundleId":null,"route":\#(bad)}"#
+            )
+            guard case let .malformed(reason) = decoded else {
+                Issue.record("route \(bad) decoded to \(decoded)")
+                continue
+            }
+            #expect(reason.contains("route"))
+        }
+    }
+
     @Test("a null targetBundleId disables the frontmost check")
     func nullTarget() {
         #expect(
             CommandDecoder.decode(
                 line: #"{"v":1,"type":"insert","id":"b","text":"x","targetBundleId":null}"#
-            ) == .command(.insert(id: "b", text: "x", targetBundleId: nil))
+            ) == .command(.insert(id: "b", text: "x", targetBundleId: nil, route: .auto))
         )
     }
 
@@ -244,7 +282,7 @@ struct CommandDecodingTests {
         // an insert, and a dropped insert loses a transcript.
         #expect(
             CommandDecoder.decode(line: #"{"v":1,"type":"insert","id":"b","text":"x"}"#)
-                == .command(.insert(id: "b", text: "x", targetBundleId: nil))
+                == .command(.insert(id: "b", text: "x", targetBundleId: nil, route: .auto))
         )
     }
 
@@ -254,7 +292,7 @@ struct CommandDecodingTests {
         #expect(
             CommandDecoder.decode(
                 line: #"{"v":1,"type":"insert","id":"b","text":"","targetBundleId":null}"#
-            ) == .command(.insert(id: "b", text: "", targetBundleId: nil))
+            ) == .command(.insert(id: "b", text: "", targetBundleId: nil, route: .auto))
         )
     }
 
@@ -319,7 +357,7 @@ struct CommandDecodingTests {
         if case .command = decoded {
             // One case above is deliberately borderline: a non-string
             // targetBundleId is treated as absent rather than fatal.
-            #expect(decoded == .command(.insert(id: "b", text: "x", targetBundleId: nil)))
+            #expect(decoded == .command(.insert(id: "b", text: "x", targetBundleId: nil, route: .auto)))
         }
     }
 

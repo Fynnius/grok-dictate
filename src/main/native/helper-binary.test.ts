@@ -129,7 +129,11 @@ describe.skipIf(!lookup.found)('the built helper binary', () => {
     const ready = await h.waitForFrame((f) => f.type === 'ready', 'ready');
     expect(ready).toMatchObject({ v: 1, type: 'ready' });
     if (ready.type !== 'ready') throw new Error('unreachable');
-    expect(ready.caps).toEqual(['ax', 'unicode']);
+    // `paste` since 2026-09-06. Pinned as a list rather than checked loosely,
+    // because `caps` is how the app tells "this helper build cannot paste" apart
+    // from "the helper chose not to", and a silently shrinking list would make
+    // that distinction useless.
+    expect(ready.caps).toEqual(['paste', 'ax', 'unicode']);
     expect(ready.version).toMatch(/^\d+\.\d+\.\d+$/);
     // Contract §2: the first frame after start-up.
     expect(h.frames[0]?.type).toBe('ready');

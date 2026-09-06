@@ -22,12 +22,36 @@ final class SpyPasteboard: PasteboardWriting {
     }
 }
 
+final class StubPasteInserter: PasteInserting {
+    var result: TierAttempt
+    private(set) var calls: [String] = []
+    private(set) var targets: [FrontmostAppInfo] = []
+
+    /// Declining by default, so a test that has not thought about the paste
+    /// tier gets the pre-2026-09-06 ladder rather than a silent new rung.
+    init(result: TierAttempt = .failed(reason: "the stub paste tier always declines")) {
+        self.result = result
+    }
+
+    func paste(_ text: String, into app: FrontmostAppInfo) -> TierAttempt {
+        calls.append(text)
+        targets.append(app)
+        return result
+    }
+}
+
 final class StubAccessibilityInserter: AccessibilityInserting {
     var result: TierAttempt
+    /// What `focusSignature` answers. `.unknown` routes to typing, which is
+    /// what a test that has not asked about routing should get.
+    var signature: FocusSignature = .unknown
     private(set) var calls: [String] = []
     /// The app the ladder handed over — asserted so the tier cannot quietly
     /// act on a different application than the target check approved.
     private(set) var targets: [FrontmostAppInfo] = []
+    /// How many AX round trips the routing cost. Asserted, because rule 3 is
+    /// the only rule that is not free.
+    private(set) var signatureReads = 0
 
     init(result: TierAttempt) {
         self.result = result
@@ -37,6 +61,11 @@ final class StubAccessibilityInserter: AccessibilityInserting {
         calls.append(text)
         targets.append(app)
         return result
+    }
+
+    func focusSignature(of app: FrontmostAppInfo) -> FocusSignature {
+        signatureReads += 1
+        return signature
     }
 }
 

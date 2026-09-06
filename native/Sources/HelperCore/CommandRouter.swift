@@ -65,8 +65,9 @@ public final class CommandRouter {
 
     private func handle(command: AppCommand) -> [Effect] {
         switch command {
-        case let .insert(id, text, targetBundleId):
-            insertion.perform(text: text, targetBundleId: targetBundleId) { [emit] outcome in
+        case let .insert(id, text, targetBundleId, route):
+            insertion.perform(text: text, targetBundleId: targetBundleId, route: route) {
+                [emit] outcome in
                 emit(
                     .insertResult(
                         id: id,

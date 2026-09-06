@@ -106,6 +106,49 @@ final class AXInserter: AccessibilityInserting {
         return .failed(reason: "no focused element (\(failures.joined(separator: "; ")))")
     }
 
+    /// `InsertRouting` rule 3: does the focused element have the shape of a
+    /// terminal that will silently swallow injected keys?
+    ///
+    /// One round trip into the target for two attributes, and only ever on the
+    /// short-text `auto` path — long text has already routed to paste without
+    /// asking. Every failure is `.unknown` rather than a guess: nothing here is
+    /// worth an error, because the conservative answer routes to typing, which
+    /// is what the app did before this tier existed.
+    ///
+    /// `kAXNumberOfCharacters` is read here and nowhere on the insertion path.
+    /// The insertion path deliberately avoids it — many fields do not implement
+    /// it, and its expected delta needs the selection length — but as *half of a
+    /// shape* it is exactly right: xterm.js reports `0` whether or not the
+    /// screen is full, and a real text field never pairs that with
+    /// `settable: false`.
+    func focusSignature(of app: FrontmostAppInfo) -> FocusSignature {
+        guard AXIsProcessTrusted(), let processId = app.processId else { return .unknown }
+        let application = AXUIElementCreateApplication(processId)
+        AXUIElementSetMessagingTimeout(application, Self.messagingTimeout)
+        guard case let .success(element) = copyFocusedElement(of: application) else {
+            return .unknown
+        }
+
+        var isSettable: DarwinBoolean = false
+        let settableError = AXUIElementIsAttributeSettable(
+            element,
+            kAXSelectedTextAttribute as CFString,
+            &isSettable
+        )
+
+        var characters: CFTypeRef?
+        let countError = AXUIElementCopyAttributeValue(
+            element,
+            kAXNumberOfCharactersAttribute as CFString,
+            &characters
+        )
+
+        return FocusSignature(
+            selectedTextIsSettable: settableError == .success ? isSettable.boolValue : nil,
+            characterCount: countError == .success ? characters as? Int : nil
+        )
+    }
+
     private func write(
         _ text: String,
         to element: AXUIElement,
