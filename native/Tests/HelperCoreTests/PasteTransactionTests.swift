@@ -60,10 +60,20 @@ struct PasteTransactionTests {
 
         #expect(tx.receiptsBeforeChord == 1)
         #expect(tx.receiptsAfterChord == 0)
-        #expect(tx.outcome(now: 0.5) == nil)
+        #expect(tx.outcome(now: 0.4) == nil)
         // …and it must not have started the release clock either, or the
         // transcript would be cleared before the target ever reads it.
-        #expect(tx.mayRelease(now: 0.5) == false)
+        #expect(tx.mayRelease(now: 0.4) == false)
+    }
+
+    @Test("the transcript is not fulfilled until the chord, and not after settle")
+    func shouldProvideTextTracksTheChord() {
+        var tx = PasteTransaction(publishedAt: 0)
+        #expect(tx.shouldProvideText == false)
+        tx.recordChord(at: 0.05)
+        #expect(tx.shouldProvideText == true)
+        tx.markSettled()
+        #expect(tx.shouldProvideText == false)
     }
 
     @Test("losing the pasteboard with nothing read falls through")
@@ -100,19 +110,19 @@ struct PasteTransactionTests {
     @Test("nothing ever reads it, so it times out at the ceiling")
     func timesOut() {
         let tx = chorded()
-        #expect(tx.outcome(now: 7.9) == nil)
-        #expect(tx.mayRelease(now: 7.9) == false)
-        #expect(tx.outcome(now: 8.0) == .timedOut)
-        #expect(tx.mayRelease(now: 8.0) == true)
+        #expect(tx.outcome(now: 0.49) == nil)
+        #expect(tx.mayRelease(now: 0.49) == false)
+        #expect(tx.outcome(now: 0.5) == .timedOut)
+        #expect(tx.mayRelease(now: 0.5) == true)
     }
 
     @Test("the ceiling releases even under a stream of reads")
     func ceilingBeatsAStreamOfReceipts() {
         var tx = chorded()
-        for tick in stride(from: 0.1, through: 8.5, by: 0.1) { tx.recordTextReceipt(at: tick) }
+        for tick in stride(from: 0.05, through: 0.6, by: 0.05) { tx.recordTextReceipt(at: tick) }
         // Quiet would never arrive; the transcript must not live on the
         // clipboard indefinitely because something keeps polling it.
-        #expect(tx.mayRelease(now: 8.5) == true)
+        #expect(tx.mayRelease(now: 0.6) == true)
     }
 
     @Test("settling makes every later event a no-op")
@@ -154,9 +164,11 @@ struct PasteTransactionTests {
     func verdictUpgradesALateReceipt() {
         var tx = chorded()
         // Decided to give up…
-        #expect(tx.outcome(now: 8.0) == .timedOut)
+        #expect(tx.outcome(now: 0.5) == .timedOut)
         // …and the target read it in the window before `clearContents()` ran.
-        tx.recordTextReceipt(at: 8.001)
+        // The inserter drains the runloop before asking, so a `provideDataForType:`
+        // that was already queued is visible here rather than dropped by settle.
+        tx.recordTextReceipt(at: 0.501)
         #expect(tx.verdict(after: .timedOut) == .landed)
     }
 

@@ -15,7 +15,11 @@
 /// 1. **Only receipts observed after the chord was posted count.** An earlier
 ///    read is a clipboard manager or an antivirus reacting to the pasteboard
 ///    *change*, not the paste target reacting to ⌘V. Counting one of those as a
-///    landing would report success for text nobody pasted.
+///    landing would report success for text nobody pasted. The promise also
+///    refuses to fulfil the transcript until the chord is recorded
+///    (`shouldProvideText`): a manager that asks early would otherwise cache
+///    the bytes, the later target paste would never generate a receipt, and
+///    the ladder would wait, clear, and inject — double-type.
 /// 2. **Only take the pasteboard back while we still own it.** If the user
 ///    copied something in the meantime, their action wins and we touch nothing.
 ///    Ownership is `changeCount` plus `pasteboardChangedOwner:`, both answers
@@ -99,20 +103,36 @@ public struct PasteTransaction: Equatable {
     /// injection tier standing by.
     public static let chordFailureGrace: TimeInterval = 0.5
 
+    /// How long to wait after publishing the promise before posting ⌘V.
+    ///
+    /// **Chosen, not measured.** Long enough for a clipboard manager reacting
+    /// to the pasteboard-change notification to ask *before* the chord; short
+    /// enough that a 2,000-character paste can still beat 150 ms.
+    ///
+    /// Publish and chord used to happen in one `onMain` block, so every manager
+    /// read was after `chordAt` and counted as a landing — silent success with
+    /// nothing in the target (BUG-1 again). Too short: the manager caches the
+    /// transcript, we count a false landing, no fallback. Too long: the wait
+    /// is added to every insert's latency.
+    public static let clipboardObserverGrace: TimeInterval = 0.05
+
     /// The hard ceiling, after which the paste is given up on regardless.
     ///
-    /// **Chosen, not measured**, and Handy's number. It is long because the
-    /// cost of overrunning is bounded and small: the fall-through clears the
-    /// pasteboard *before* it injects, so a target that reads late reads
-    /// nothing and the user gets their text once. The cost of cutting it too
-    /// short is the same, so there is no strong pull in either direction and no
-    /// reason to differ from the one implementation that has field data.
-    public static let timeout: TimeInterval = 8.0
+    /// **Chosen, not measured.** Handy used 8 s as a *restore* budget — how
+    /// long to wait before putting the previous clipboard back. Here the same
+    /// number was how long the user stares at a frozen insert before unicode
+    /// fallback, on the serial insertion queue. The wrong quantity. 500 ms is
+    /// ~10× a typical chord-to-receipt, and the cost of shortening is near
+    /// zero because we already clear before injecting.
+    ///
+    /// Too short: an empty paste then injection (loud). Too long: a stuck HUD
+    /// (silent).
+    public static let timeout: TimeInterval = 0.5
 
     // MARK: - State
 
     /// All times are on a **monotonic** clock (`ProcessInfo.systemUptime`), not
-    /// wall time: a transaction is at most 8 seconds long and an NTP step
+    /// wall time: a transaction is at most half a second long and an NTP step
     /// during one must not be able to settle or extend it.
     public let publishedAt: TimeInterval
     public private(set) var chordAt: TimeInterval?
@@ -177,6 +197,14 @@ public struct PasteTransaction: Equatable {
         settled = true
     }
 
+    /// Whether a consumer asking for the transcript should be given it.
+    ///
+    /// True only after the chord is recorded and before settle. A clipboard
+    /// manager that asks between `declareTypes` and ⌘V must not receive the
+    /// bytes — see rule 1 — and a request after settle must not resurrect a
+    /// transcript we just took back.
+    public var shouldProvideText: Bool { chordAt != nil && !settled }
+
     // MARK: - Deciding
 
     /// Has the insertion resolved? `nil` means keep waiting.
@@ -214,15 +242,16 @@ public struct PasteTransaction: Equatable {
         return outcome(now: now) != nil
     }
 
-    /// The settlement to report, re-read **after** the pasteboard has been
-    /// taken back.
+    /// The settlement to report, asked **after** a runloop drain and **before**
+    /// settle-or-release.
     ///
-    /// Callbacks arrive on the same thread that performs the release, so once
-    /// `clearContents()` has returned no receipt can still be in flight. A
-    /// receipt that arrived in the window between deciding to give up and
-    /// actually clearing turns a fall-through into a landing — which is the
-    /// difference between the user getting their text once and getting it
-    /// twice. Cheap, and it closes the only race left in the design.
+    /// Call site (`PasteInserter`): drain a pending `provideDataForType:` with
+    /// `CFRunLoopRunInMode` — GCD `main.sync` is not a drain of AppKit
+    /// pasteboard sources — then `verdict(after:)`, then `scheduleRelease` on
+    /// `.landed` or `release` otherwise. A receipt sitting in the runloop when
+    /// the wait loop decided to give up turns a fall-through into a landing,
+    /// which is the difference between the user getting their text once and
+    /// getting it twice. Cheap, and it closes the only race left in the design.
     public func verdict(after decision: Settlement) -> Settlement {
         receiptsAfterChord > 0 ? .landed : decision
     }
