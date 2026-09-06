@@ -150,6 +150,22 @@ public enum TierAttempt: Sendable, Equatable {
     case failed(reason: String)
 }
 
+public protocol PasteInserting: AnyObject {
+    /// Publish the text as a promise, post ⌘V, and answer whether a consumer
+    /// read it.
+    ///
+    /// Only two answers are possible and that is the point. `.confirmed` means
+    /// the operating system reported that the target asked us for the text;
+    /// `.failed` means it did not, and the ladder falls through. There is no
+    /// `.succeeded` here — "I posted a chord" is a statement about this process
+    /// and it is precisely the claim BUG-1 was about.
+    ///
+    /// **The implementation must have taken the pasteboard back before it
+    /// returns `.failed`**, so that a target reading late reads nothing. That is
+    /// what makes the fall-through safe from double-typing.
+    func paste(_ text: String, into app: FrontmostAppInfo) -> TierAttempt
+}
+
 public protocol AccessibilityInserting: AnyObject {
     /// `app` is the frontmost application the ladder already resolved. Passed
     /// in rather than re-queried so the tier acts on exactly the app the

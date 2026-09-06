@@ -152,6 +152,286 @@ final class PromisedPasteboardOwner: NSObject, NSPasteboardTypeOwner {
     }
 }
 
+/// The transaction, and the lock that lets the callbacks (main thread) and the
+/// wait (insertion queue) both touch it.
+///
+/// **Deliberately does not reference the owner.** The owner's callbacks capture
+/// this, so an owner reachable from here would be an owner that keeps itself
+/// alive — one leaked promise per dictation, invisible until the process has
+/// been up for a day.
+private final class PasteState {
+    private let lock = NSLock()
+    private var transaction: PasteTransaction
+
+    init(_ transaction: PasteTransaction) {
+        self.transaction = transaction
+    }
+
+    func read<T>(_ body: (PasteTransaction) -> T) -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return body(transaction)
+    }
+
+    func write<T>(_ body: (inout PasteTransaction) -> T) -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return body(&transaction)
+    }
+}
+
+/// One paste that has published and not yet released.
+///
+/// Three things have to outlive the call that started them: the owner, because
+/// AppKit holds it weakly and a deallocated owner resolves the promise to
+/// nothing; the state, because the release happens after the insertion has
+/// already been reported; and the `changeCount`, which is the token deciding
+/// whether we may still take the pasteboard back.
+private final class LivePaste {
+    let owner: PromisedPasteboardOwner
+    let changeCount: Int
+    let state: PasteState
+
+    init(owner: PromisedPasteboardOwner, changeCount: Int, state: PasteState) {
+        self.owner = owner
+        self.changeCount = changeCount
+        self.state = state
+    }
+}
+
+/// Tier 1 on the paste route.
+///
+/// **Threading, and getting it wrong is the canonical dead-hotkey bug.** This
+/// process's main thread runs the `CFRunLoop` that owns the `CGEventTap`, and
+/// stalling it gets the tap disabled by macOS with
+/// `kCGEventTapDisabledByTimeout`. Insertion therefore runs on
+/// `BackgroundInsertion`'s serial queue. But promised pasteboard data is
+/// serviced by AppKit **on the main run loop**, so the promise has to be
+/// published there or nothing will ever answer a consumer's request. The split:
+///
+///   - **publish and post the chord on main**, briefly and synchronously;
+///   - **wait on the insertion queue**, where sleeping is free;
+///   - **release back on main**, after the insertion has already been reported.
+///
+/// The release is deliberately not part of the wait. Reporting happens on the
+/// first receipt — the moment the target has the text — and the pasteboard is
+/// taken back later, once the reads go quiet. Folding the two together would
+/// put `PasteTransaction.receiptQuietPeriod` into every insertion's latency,
+/// which is the number this whole tier exists to reduce.
+final class PasteInserter: PasteInserting {
+    /// Where the ⌘V chord enters the system.
+    ///
+    /// **Chosen, not measured**, and the measurement is written down as still
+    /// open in `docs/report-insertion-2026-09-06.md` §9.5 Q1 — a chord cannot be
+    /// posted from a terminal that does not hold Accessibility, and this
+    /// machine's does not.
+    ///
+    /// The HID tap is where Espanso, cliclick and Karabiner put their events and
+    /// reaches the widest set of applications. The alternative,
+    /// `CGEvent.postToPid`, is what the injection tier prefers — but FluidVoice
+    /// forces the *global* clipboard path for Ghostty, which is evidence that
+    /// pid-posted ⌘V is unreliable in exactly the Electron terminals that take
+    /// 59 % of this app's traffic.
+    ///
+    /// The cost of being wrong is bounded and visible: no receipt, so the ladder
+    /// falls through to injection and the user gets their text at the old speed.
+    /// `--probe-paste --route pid|hid` settles it in two runs.
+    private static let chordRoute: PasteChord.Route = .hidTap
+
+    /// How often the insertion queue asks whether the paste has resolved.
+    ///
+    /// Adds up to this much to a landed paste, against a chord-to-receipt time
+    /// measured in tens of milliseconds. Small enough not to matter, large
+    /// enough not to spin.
+    private static let waitPollInterval: TimeInterval = 0.01
+
+    /// How often main asks whether the pasteboard may be taken back. Coarser
+    /// than the wait because the quiet period is 200 ms and this runs on the
+    /// thread that owns the event tap.
+    private static let releasePollInterval: TimeInterval = 0.05
+
+    private let settings: Settings
+    private let log: (LogLevel, String) -> Void
+
+    /// The paste that has published and not yet released. **Main thread only.**
+    /// Held so the owner survives, and so `settleNow()` can take the pasteboard
+    /// back if the helper is asked to quit mid-transaction.
+    private var live: LivePaste?
+
+    init(settings: Settings, log: @escaping (LogLevel, String) -> Void) {
+        self.settings = settings
+        self.log = log
+    }
+
+    private static func now() -> TimeInterval { ProcessInfo.processInfo.systemUptime }
+
+    func paste(_ text: String, into app: FrontmostAppInfo) -> TierAttempt {
+        // The chord is ⌘V and the retry hotkey is ⌃⌘V. A chord that picks up a
+        // Control the user has not let go of yet is not paste — see
+        // `ModifierSettle`.
+        ModifierSettle.wait(timeout: settings.modifierSettleTimeout, log: log)
+
+        // The clock starts here rather than at `declareTypes` below, so the 8 s
+        // ceiling covers the hop to the main thread as well. Nothing else reads
+        // `publishedAt`: whether a receipt counts is decided against the chord.
+        let state = PasteState(PasteTransaction(publishedAt: Self.now()))
+        let owner = PromisedPasteboardOwner(
+            text: text,
+            onRequest: { request in
+                // A marker request is a clipboard manager reading our flags to
+                // decide whether to record the entry. Only the text means
+                // somebody is pasting.
+                guard request == .text else { return }
+                state.write { $0.recordTextReceipt(at: Self.now()) }
+            },
+            onOwnershipLost: { state.write { $0.recordOwnershipLost() } }
+        )
+
+        let live = onMain { () -> LivePaste in
+            let changeCount = owner.publish()
+            if PasteChord.post(route: Self.chordRoute) {
+                state.write { $0.recordChord(at: Self.now()) }
+            } else {
+                state.write { $0.recordChordFailure(at: Self.now()) }
+                self.log(.warn, "the ⌘V chord could not be posted — no events were created")
+            }
+            let live = LivePaste(owner: owner, changeCount: changeCount, state: state)
+            // A previous paste still waiting to release is dropped rather than
+            // cleared: its `changeCount` no longer matches, so clearing would
+            // take away the promise this one just published.
+            self.live = live
+            return live
+        }
+
+        var settlement: PasteTransaction.Settlement
+        while true {
+            if let resolved = state.read({ $0.outcome(now: Self.now()) }) {
+                settlement = resolved
+                break
+            }
+            Thread.sleep(forTimeInterval: Self.waitPollInterval)
+        }
+
+        let target = app.name ?? app.bundleId ?? "the frontmost application"
+
+        // Back on main for the verdict, because that is where the callbacks
+        // arrive: once we are running here, every receipt that was going to
+        // arrive has arrived, and one that landed while the worker was deciding
+        // to give up turns a fall-through into a landing.
+        let verdict = onMain { () -> PasteTransaction.Settlement in
+            let verdict = state.read { $0.verdict(after: settlement) }
+            if verdict == .landed {
+                self.scheduleRelease(live)
+            } else {
+                // **Take the pasteboard back before the ladder injects.** A
+                // target that reads after this point reads an empty pasteboard,
+                // which is what stops the transcript arriving twice.
+                self.release(live)
+            }
+            return verdict
+        }
+
+        switch verdict {
+        case .landed:
+            log(.info, "pasted \(text.utf16.count) UTF-16 units — \(receiptSummary(state, target))")
+            return .confirmed
+
+        case .ownershipLost:
+            return .failed(
+                reason: "something else took the pasteboard before \(target) read it")
+        case .chordFailed:
+            return .failed(reason: "the ⌘V chord could not be posted")
+        case .timedOut:
+            return .failed(
+                reason:
+                    "\(target) never read the pasteboard after ⌘V — it may not paste with that key"
+            )
+        }
+    }
+
+    /// What the receipts said, for the log.
+    ///
+    /// Counts and milliseconds only. **Never what a receipt returned** — that is
+    /// the transcript, and the log must not become the second keylogger the
+    /// history file already is.
+    private func receiptSummary(_ state: PasteState, _ target: String) -> String {
+        state.read { transaction in
+            let latency = transaction.chordAt.flatMap { chord in
+                transaction.lastReceiptAt.map { Int(($0 - chord) * 1000) }
+            }
+            let when = latency.map { " \($0) ms after the chord" } ?? ""
+            let reads =
+                transaction.receiptsAfterChord > 1 ? " (\(transaction.receiptsAfterChord) reads)" : ""
+            let early =
+                transaction.receiptsBeforeChord > 0
+                ? "; \(transaction.receiptsBeforeChord) earlier read(s) ignored — a clipboard "
+                    + "manager reacting to the change, not the paste"
+                : ""
+            return "\(target) read the pasteboard\(when)\(reads)\(early)"
+        }
+    }
+
+    /// Take the pasteboard back now, whatever the transaction thinks.
+    ///
+    /// Called from `HelperApp.shutdown`. A quit between the receipt and the
+    /// quiet period would otherwise leave the transcript on the clipboard for
+    /// good, which is one of the three ways this change can make things worse.
+    ///
+    /// A *crash* needs no equivalent: the transcript is never resident on the
+    /// pasteboard, only promised, and a promise whose owner process is gone
+    /// resolves to nothing. That is a property of the mechanism rather than
+    /// something we arranged, and it is worth knowing.
+    func settleNow() {
+        guard let live else { return }
+        release(live)
+    }
+
+    // MARK: - Releasing, main thread only
+
+    private func scheduleRelease(_ live: LivePaste) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.releasePollInterval) {
+            [weak self] in
+            guard let self, live.state.read({ !$0.settled }) else { return }
+            if live.state.read({ $0.mayRelease(now: Self.now()) }) {
+                self.release(live)
+            } else {
+                self.scheduleRelease(live)
+            }
+        }
+    }
+
+    private func release(_ live: LivePaste) {
+        // Marked settled *before* the clear, because `clearContents()` fires
+        // `pasteboardChangedOwner:` on the process that called it — our own
+        // release arrives looking exactly like the user copying something else.
+        guard live.state.write({ transaction -> Bool in
+            guard !transaction.settled else { return false }
+            transaction.markSettled()
+            return true
+        }) else { return }
+
+        let cleared = live.owner.clear(ifChangeCountIs: live.changeCount)
+        if self.live === live { self.live = nil }
+        log(
+            .info,
+            cleared
+                ? "took the transcript back off the pasteboard"
+                : "left the pasteboard alone — something else owns it now"
+        )
+    }
+
+    /// Run on the main thread and wait for the answer.
+    ///
+    /// Safe from the insertion queue: main is inside `CFRunLoopRun` and is never
+    /// blocked on this queue, so there is nothing to deadlock against. The
+    /// `isMainThread` check is there because `--probe-paste` calls the tier
+    /// directly from main.
+    private func onMain<T>(_ body: () -> T) -> T {
+        if Thread.isMainThread { return body() }
+        return DispatchQueue.main.sync(execute: body)
+    }
+}
+
 /// The ⌘V chord.
 enum PasteChord {
     /// The **physical** V key, `kVK_ANSI_V`.
