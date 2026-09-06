@@ -1,15 +1,13 @@
-/// The only file in this package that mentions `NSPasteboard`.
+/// The `copy` command's write to `NSPasteboard`.
 ///
-/// `ClipboardContainmentTests` asserts that by scanning the sources, so this
-/// comment is enforced rather than aspirational. : the clipboard
-/// tier was removed from the insertion ladder entirely at the user's request,
-/// and the pasteboard is written only on an explicit click of *Copy*. That
-/// arrives as the `copy` command, which `CommandRouter` is the sole caller of.
+/// Two files in this package mention `NSPasteboard`: this one, which is the
+/// *Copy* button's explicit write, and `PasteInserter`, which publishes a
+/// promised item for the paste insertion tier. `CommandRouter` is the sole
+/// caller of this type; the paste tier does not go through it.
 ///
 /// Note what is *not* here: no read, no save-and-restore, no multi-format
 /// handling. Contract §5 — "No clipboard read. Nothing in this protocol can
-/// read the pasteboard, by design." That also sidesteps every failure mode in
-///  (lossy restore, promised data, restore-timing races).
+/// read the pasteboard, by design."
 
 import AppKit
 import HelperCore

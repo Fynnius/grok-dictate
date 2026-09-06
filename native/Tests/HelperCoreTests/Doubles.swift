@@ -1,8 +1,8 @@
 /// Test doubles shared across the suite.
 ///
-/// `SpyPasteboard` is the important one: it is the instrument that turns
-///  hard product requirement — the clipboard is never written
-/// except on an explicit user click — into something a test can fail on.
+/// `SpyPasteboard` instruments the `copy` seam: `CommandRouter` writes through
+/// `PasteboardWriting` only on an explicit *Copy*. The paste insertion tier
+/// does not go through that protocol — `StubPasteInserter` stands in for it.
 
 import Foundation
 

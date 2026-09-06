@@ -251,8 +251,9 @@ function main(): void {
         orchestrator.dispatch({ type: 'INSERT_TEXT', text: message.text });
         return;
       case 'copy':
-        // : the ONLY route to the pasteboard, and it can only be
-        // reached from an explicit click in the HUD, history or the Scratchpad.
+        // The only renderer Copy path, and it can only be reached from an
+        // explicit click in the HUD, history or the Scratchpad. Insertion may
+        // also publish a promise; that does not come through this case.
         orchestrator.copyToClipboard(message.text);
         return;
       case 'set-language-mode':

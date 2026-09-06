@@ -53,7 +53,7 @@ First frame after start-up. `caps` lists the insertion tiers this build can actu
 
 `ts` is milliseconds since the Unix epoch from the helper's clock. Same machine as the app, so no skew correction; it exists to measure hold duration.
 
-**`retry_insert` is not a paste.** It re-invokes insertion against `lastTranscript` held in the app's memory. The clipboard is not read and not written.
+**`retry_insert` re-runs the ladder against `lastTranscript`.** `route` is the current `insertMethod`; it is not a clipboard *read*, but under `auto`/`paste` it may write a promise the same way a normal insert does.
 
 **Fn/Fn+Space disambiguation is the app's problem, not the helper's.** The helper reports both `ptt_down` and a subsequent `toggle` verbatim. : the mic opens immediately on `ptt_down` and the WebSocket handshake window doubles as the disambiguation window — a timer before opening the mic would clip the first word.
 
@@ -132,7 +132,7 @@ Answers exactly one `insert`, echoing its `id`.
 
 | `verified`      | Means                                                                                                                                                      |
 | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `true`          | The helper **confirmed** the text landed — `paste`: a consumer read the promise after our chord; `ax`: the caret moved; `unicode`: the target's text grew. |
+| `true`          | The helper **confirmed** the text landed — `paste`: a consumer read the promise after our chord; `ax`: the caret moved. Unicode never produces `true`: it always reports `verified: null`. |
 | `false`         | Verification ran and **proved nothing landed**. Always accompanied by `ok:false` and `reason:"verification_failed"`.                                       |
 | `null` / absent | Verification was not possible for this target, or the frame came from an older helper build.                                                               |
 

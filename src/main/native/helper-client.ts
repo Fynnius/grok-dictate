@@ -26,9 +26,10 @@ import type { Logger } from '@shared/logger.js';
 import type { HelperSupervisor } from '../bridge/helper-supervisor.js';
 
 /**
- * How long to wait for an `insert_result` before giving up. Generous: the
- * Unicode tier deliberately paces itself (~20 UTF-16 units per event), so a
- * long transcript legitimately takes a while.
+ * How long to wait for an `insert_result` before giving up. Covers a paste
+ * that waits for a receipt and then falls through to Unicode injection.
+ * Chunking is 200 UTF-16 units with no inter-chunk delay, so the old pacing
+ * budget is gone.
  */
 export const INSERT_TIMEOUT_MS = 15_000;
 export const FRONTMOST_TIMEOUT_MS = 2_000;
@@ -140,8 +141,9 @@ export class HelperClient implements NativeHelperPort {
   }
 
   copy(text: string): void {
-    // : the ONLY pasteboard write in the whole application, and
-    // only from an explicit user click. Phase 5 (§5b) audits every caller.
+    // The only *explicit user-click* copy path. Insertion may also publish a
+    // promised pasteboard item inside the helper; that does not come through
+    // this method. Phase 5 (§5b) audits every caller of *this* path.
     this.#log.info('clipboard write requested by explicit user action', { chars: text.length });
     this.#supervisor.send({ v: 1, type: 'copy', text });
   }

@@ -611,7 +611,7 @@ to the callers' own buffers.
 *What it changed:* `TextChunker.defaultMaxUTF16Units` goes 20 → 200, FluidVoice's value: 10×
 fewer events for the same text and 10× less exposure to whatever coalesces or intercepts them.
 It does **not** prove a target *accepts* a 200-unit event; that is a different question, and
-`--probe-insert` with `GROK_DICTATE_INJECT_CHUNK=200` is how it gets asked. The grapheme-safe
+changing `TextChunker.defaultMaxUTF16Units` and rebuilding is how it gets asked. The grapheme-safe
 splitting is untouched — only the ceiling moved.
 
 **Q4 — Does `AXWriteVerification` still catch Arc's discarded write? Not run, and kept anyway,

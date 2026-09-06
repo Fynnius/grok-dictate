@@ -86,7 +86,9 @@ public final class CommandRouter {
             return []
 
         case let .copy(text):
-            // The ONLY pasteboard write in the application.
+            // The only pasteboard write through the `copy` seam /
+            // `PasteboardWriting`. The paste insertion tier publishes a promise
+            // in `PasteInserter` and does not come through here.
             // Logged at info with a character count and never the text itself:
             // the transcript may be anything the user said, and this line goes
             // through the app's log sinks.

@@ -45,8 +45,10 @@ export const InsertTierSchema = z.enum(INSERT_TIERS);
 export type InsertTier = (typeof INSERT_TIERS)[number];
 
 /**
- * `retry_insert` is `Ctrl+Cmd+V` — an in-memory re-run of the insertion ladder
- * against `lastTranscript`, never a clipboard paste.
+ * `retry_insert` is `Ctrl+Cmd+V` — a re-run of the insertion ladder against
+ * `lastTranscript`. `route` is the current `insertMethod`; it is not a
+ * clipboard *read*, but under `auto`/`paste` it may write a promise the same
+ * way a normal insert does.
  */
 export const HOTKEY_ACTIONS = ['ptt_down', 'ptt_up', 'toggle', 'retry_insert'] as const;
 export const HotkeyActionSchema = z.enum(HOTKEY_ACTIONS);

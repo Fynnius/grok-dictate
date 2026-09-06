@@ -643,11 +643,12 @@ enum Probes {
 
     struct PasteOptions {
         var countdownSeconds = 5
-        /// `pid` | `hid` | `none`. `none` publishes the promise and posts no
-        /// chord, which is how the promise machinery is tested on its own — read
-        /// the pasteboard from another process (`pbpaste`) and watch for the
-        /// request line.
-        var route = "pid"
+        /// `pid` | `hid` | `none`. Defaults to `hid` because that is what
+        /// `PasteInserter.chordRoute` ships. `none` publishes the promise and
+        /// posts no chord, which is how the promise machinery is tested on its
+        /// own — read the pasteboard from another process (`pbpaste`) and watch
+        /// for the request line.
+        var route = "hid"
         var text = "GD-PASTE-PROBE"
         var watchSeconds: TimeInterval = 6
     }
@@ -692,6 +693,15 @@ enum Probes {
         )
         report("Secure Input:     \(IsSecureEventInputEnabled() ? "ACTIVE — the chord will be blocked" : "off")")
         report("Chord route:      \(options.route)")
+        report(
+            "Production chord: HID tap (PasteInserter.chordRoute). This probe defaults to that;"
+        )
+        report(
+            "                  --route pid and --route none exist to compare. Confirming paste"
+        )
+        report(
+            "                  on pid alone does not confirm the path that shipped."
+        )
         report(
             "Text:             \(options.text.count) characters, \(options.text.utf16.count) UTF-16 units"
         )
@@ -836,13 +846,14 @@ enum Probes {
 
     /// Answers §9.5 question 3, the half that does not need a target app.
     ///
-    /// The 20-UTF-16-unit chunk this repo uses comes from 2015-era reports
-    /// against Quicksilver and Qt that `CGEventKeyboardSetUnicodeString`
-    /// truncates. FluidVoice ships 200 with no inter-chunk delay. Setting a
-    /// string and reading it back off the same event says whether the *API*
-    /// still truncates on this OS; whether a target accepts a 200-unit event is
-    /// a different question, and `--probe-insert` with
-    /// `GROK_DICTATE_INJECT_CHUNK=200` is how that one gets asked.
+    /// The 20-UTF-16-unit chunk this repo used to ship came from 2015-era
+    /// reports against Quicksilver and Qt that `CGEventKeyboardSetUnicodeString`
+    /// truncates. FluidVoice ships 200 with no inter-chunk delay, and so do we.
+    /// Setting a string and reading it back off the same event says whether the
+    /// *API* still truncates on this OS; whether a target accepts a 200-unit
+    /// event is a different question. `--probe-insert` always uses
+    /// `TextChunker.defaultMaxUTF16Units` (200); changing that constant and
+    /// rebuilding is how a different size gets asked.
     static func runChunkProbe() -> Never {
         report("Grok Dictate helper \(helperVersion) — CGEventKeyboardSetUnicodeString capacity")
         report("")
@@ -884,7 +895,8 @@ enum Probes {
         } else {
             report("VERDICT: no truncation up to 2,000 units. The 20-unit constant is folklore")
             report("about the API. Whether a target app accepts a large event is separate —")
-            report("run --probe-insert with GROK_DICTATE_INJECT_CHUNK set.")
+            report("`--probe-insert` always uses TextChunker.defaultMaxUTF16Units (200).")
+            report("Change that constant and rebuild to try a different size.")
         }
         exit(0)
     }

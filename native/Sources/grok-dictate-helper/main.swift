@@ -68,10 +68,13 @@ let usage = """
     --probe-paste OPTIONS
       --delay <seconds>     countdown before publishing (default 5)
       --route <pid|hid|none>
-                            where to post the ⌘V chord. `none` publishes the
-                            promise and posts nothing, so the receipt mechanism
-                            can be tested on its own with `pbpaste` from another
-                            process (default pid)
+                            where to post the ⌘V chord. Defaults to hid, which
+                            is what production PasteInserter.chordRoute ships.
+                            Confirming paste on pid alone does not confirm the
+                            path that shipped. `none` publishes the promise and
+                            posts nothing, so the receipt mechanism can be
+                            tested on its own with `pbpaste` from another
+                            process
       --text <string>       publish this instead of a marker
       --watch <seconds>     how long to wait for receipts (default 6)
 

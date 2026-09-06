@@ -11,7 +11,7 @@ work, from `docs/handoff-insertion-2026-09-06.md` and the analysis in
 **Dictation now pastes.** A promised pasteboard item plus a synthetic ⌘V, with
 the operating system's read receipt as the proof it landed — and Unicode
 injection kept as the fallback for everything the paste route cannot reach. One
-user-visible setting replaced seven environment knobs. Two BUG-1 defences that
+user-visible setting replaced five environment knobs. Two BUG-1 defences that
 were written against the wrong diagnosis are gone.
 
 **Three things I could not verify, and two of them matter.** The ⌘V chord itself
@@ -137,9 +137,8 @@ macOS 26.6 the API does not truncate at any size tried, so the ceiling is now
 200 — FluidVoice's value, and 10× fewer events for the same text.
 
 **This measures the API, not any application.** Whether a given target _accepts_
-a 200-unit event is a different question, and with `GROK_DICTATE_INJECT_CHUNK`
-deleted, asking it now costs a rebuild. A known limit rather than an overlooked
-one.
+a 200-unit event is a different question; change `TextChunker.defaultMaxUTF16Units`
+and rebuild to ask it. A known limit rather than an overlooked one.
 
 ### 3.2 Promised pasteboard data is serviced without an `NSApplication`
 

@@ -95,42 +95,15 @@ struct Settings {
     /// failing to start. A helper that refuses to launch because of a typo in an
     /// environment variable is a dead hotkey with an obscure cause; the
     /// substitution is reported as a `log` frame instead.
-    private static func intValue(_ raw: String?, default fallback: Int, minimum: Int, maximum: Int)
-        -> Int
-    {
-        guard let raw, let value = Int(raw), value >= minimum, value <= maximum else {
-            return fallback
-        }
-        return value
-    }
-
     private static func msValue(
         _ raw: String?,
         default fallbackMs: Double,
         minimum: Double,
         maximum: Double
     ) -> TimeInterval {
-        msSetting(raw, default: fallbackMs, minimum: minimum, maximum: maximum).value
-    }
-
-    /// The same parse, plus whether the environment actually supplied the value.
-    ///
-    /// Only `GROK_DICTATE_INJECT_DELAY_MS` needs the second half, and it needs
-    /// it because it is now an *override* rather than a default: `isExplicit` is
-    /// false for an unset variable and equally false for `"fifteen"` or `"900"`,
-    /// so a mistyped escape hatch leaves the adaptive pacing in place instead of
-    /// silently reinstating the flat 5 ms burst BUG-1 is about. Same principle
-    /// as `isFalsy` above — an unrecognised value never turns a safe behaviour
-    /// off.
-    private static func msSetting(
-        _ raw: String?,
-        default fallbackMs: Double,
-        minimum: Double,
-        maximum: Double
-    ) -> (value: TimeInterval, isExplicit: Bool) {
         guard let raw, let value = Double(raw), value >= minimum, value <= maximum else {
-            return (fallbackMs / 1000, false)
+            return fallbackMs / 1000
         }
-        return (value / 1000, true)
+        return value / 1000
     }
 }

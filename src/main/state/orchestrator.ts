@@ -681,7 +681,7 @@ export class Orchestrator {
     }
   }
 
-  /** The renderer's *Copy* button — the only route to the pasteboard (§5.8). */
+  /** The renderer's *Copy* button — the only renderer Copy path. Insertion may also publish a promise; §5.8 was repealed. */
   copyToClipboard(text: string): void {
     this.#deps.native.copy(text);
   }

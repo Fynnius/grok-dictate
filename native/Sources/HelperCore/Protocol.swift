@@ -36,10 +36,10 @@ public enum HotkeyAction: String, Sendable, CaseIterable {
 
 /// Contract §2. `paste` reports success only when a consumer read the promised
 /// pasteboard item after our chord; `ax` only when the caret proved it;
-/// `unicode` posts synthetic key events and then checks the target's text
-/// length, which answers "landed", "did not land" or "cannot tell" — see
-/// `verified` below; `none` means nothing was attempted or everything failed,
-/// and any paste attempted along the way has already been settled.
+/// `unicode` posts synthetic key events and reports unconfirmed (shipping
+/// `UnicodeInserter` only returns `.succeeded`); `none` means nothing was
+/// attempted or everything failed, and any paste attempted along the way has
+/// already been settled.
 public enum InsertTier: String, Sendable {
     case paste
     case ax
@@ -59,14 +59,15 @@ public enum InsertTier: String, Sendable {
 /// (absent → `null`), because "this build cannot tell you" and "this target
 /// cannot be measured" are the same claim from the app's side.
 public enum InsertionVerification: Sendable, Equatable {
-    /// The helper confirmed the text landed: the caret moved (AX), or the
-    /// focused element's text grew by what was typed (Unicode).
+    /// The helper confirmed the text landed: a consumer read the pasteboard
+    /// after the chord (paste), or the caret moved (AX). Unicode never
+    /// produces this — shipping `UnicodeInserter` reports `.succeeded`.
     case confirmed
     /// Verification ran and proved nothing landed. Reported with `ok: false`
     /// and `reason: "verification_failed"`.
     case provenNotLanded
-    /// No verification was possible for this target — no readable length, no
-    /// resolvable focus, or verification switched off.
+    /// No verification was possible for this attempt — unicode never confirms,
+    /// or AX verification was switched off.
     case notPossible
 
     /// `true` / `false` / `null` on the wire, in that order.
@@ -91,10 +92,10 @@ public enum InsertDeclineReason: String, Sendable {
     case emptyText = "empty_text"
     /// AX declined and Unicode injection failed.
     case noTier = "no_tier"
-    /// The Unicode tier posted its events and the target's text did not change,
-    /// so the insertion is proven not to have landed. Added for BUG-1; it is
-    /// what turns the incident's green "Inserted" pill into the app's existing
-    /// not-inserted HUD, error cue and re-insert path.
+    /// On the wire for a Unicode insert posted and then proven not to have
+    /// landed. Shipping `UnicodeInserter` only returns `.succeeded`, so this
+    /// has no producer in the current helper; kept because the app still
+    /// branches on it.
     case verificationFailed = "verification_failed"
 }
 
