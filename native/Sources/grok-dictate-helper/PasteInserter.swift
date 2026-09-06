@@ -388,7 +388,7 @@ final class PasteInserter: PasteInserting {
             return .failed(
                 reason: "something else took the pasteboard before \(target) read it")
         case .abandoned:
-            return .failed(reason: "the helper was asked to quit before \(target) read it")
+            return .aborted(reason: "the helper was asked to quit before \(target) read it")
         case .chordFailed:
             return .failed(reason: "the ⌘V chord could not be posted")
         case .timedOut:

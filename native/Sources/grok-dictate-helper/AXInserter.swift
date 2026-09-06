@@ -145,7 +145,10 @@ final class AXInserter: AccessibilityInserting {
 
         return FocusSignature(
             selectedTextIsSettable: settableError == .success ? isSettable.boolValue : nil,
-            characterCount: countError == .success ? characters as? Int : nil
+            // AX returns a CFNumber. `as? Int` on the CFTypeRef often fails,
+            // `characterCount` was nil, `isTerminalTextView` was false, and
+            // short cmux dictations typed and got swallowed.
+            characterCount: countError == .success ? (characters as? NSNumber)?.intValue : nil
         )
     }
 

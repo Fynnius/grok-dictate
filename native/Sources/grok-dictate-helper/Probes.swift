@@ -621,7 +621,7 @@ enum Probes {
             // evidence Phase 5 stopped trusting.
             report("AX write: reported success, UNVERIFIED — the caret was not read back.")
             report("Re-run without GROK_DICTATE_AX_VERIFY=0 before recording this as an answer.")
-        case let .notLanded(reason), let .failed(reason):
+        case let .notLanded(reason), let .failed(reason), let .aborted(reason):
             report("AX write: FAILED — \(reason)")
             if settings.verifyAXWrites {
                 // Since Phase 5 this tier also declines when it cannot confirm

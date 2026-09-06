@@ -67,7 +67,7 @@ public struct FocusSignature: Sendable, Equatable {
         selectedTextIsSettable: nil, characterCount: nil)
 
     /// The xterm.js shape: an element that says its selected text cannot be set
-    /// **and** that it contains no characters at all.
+    /// **and** that it either contains no characters or will not say how many.
     ///
     /// A terminal emulator's AX text area is its *screen buffer*, not the
     /// shell's input line, and xterm.js does not expose the buffer at all — so
@@ -76,11 +76,13 @@ public struct FocusSignature: Sendable, Equatable {
     /// `settable: true`, and a real read-only field with content reports a
     /// non-zero count.
     ///
-    /// Both halves are required. `settable == false` alone is also true of
-    /// Terminal.app, which pastes and types equally well; the zero count is
-    /// what identifies the element that will silently swallow injected keys.
+    /// The SETTABLE half is still required: Terminal.app reports
+    /// `settable: false` and types perfectly well when the count is a real
+    /// nonzero. xterm.js reports 0 and pastes. `settable: false` with an
+    /// unreadable count is the swallow shape we could not confirm on this
+    /// machine — conservative for not losing text, not for the clipboard.
     public var isTerminalTextView: Bool {
-        selectedTextIsSettable == false && characterCount == 0
+        selectedTextIsSettable == false && (characterCount == nil || characterCount == 0)
     }
 }
 

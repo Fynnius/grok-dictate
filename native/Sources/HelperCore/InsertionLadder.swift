@@ -146,7 +146,7 @@ public enum AXSelectedTextGate {
 
 /// What one rung of the ladder has to say for itself.
 ///
-/// Four cases rather than two, and the distinction between the first two is the
+/// Five cases rather than two, and the distinction between the first two is the
 /// point: **`.succeeded` means "I did my work", `.confirmed` means "and I have
 /// evidence it arrived".** Before BUG-1 there was only `.succeeded`, and the
 /// Unicode tier returned it unconditionally the moment `CGEvent.post` had been
@@ -166,21 +166,26 @@ public enum TierAttempt: Sendable, Equatable {
     /// Carries real diagnostic text — for the AX tier, the actual `AXError`,
     /// which is what settles
     case failed(reason: String)
+    /// Stop the ladder. Do not try the next rung. The paste tier produces this
+    /// when the helper is shutting down mid-paste: falling through to injection
+    /// would type the transcript while quitting.
+    case aborted(reason: String)
 }
 
 public protocol PasteInserting: AnyObject {
     /// Publish the text as a promise, post ⌘V, and answer whether a consumer
     /// read it.
     ///
-    /// Only two answers are possible and that is the point. `.confirmed` means
-    /// the operating system reported that the target asked us for the text;
-    /// `.failed` means it did not, and the ladder falls through. There is no
-    /// `.succeeded` here — "I posted a chord" is a statement about this process
-    /// and it is precisely the claim BUG-1 was about.
+    /// Three answers, and that is the point. `.confirmed` means the operating
+    /// system reported that the target asked us for the text; `.failed` means
+    /// it did not, and the ladder falls through; `.aborted` means stop — do not
+    /// try the next rung. There is no `.succeeded` here — "I posted a chord" is
+    /// a statement about this process and it is precisely the claim BUG-1 was
+    /// about.
     ///
     /// **The implementation must have taken the pasteboard back before it
-    /// returns `.failed`**, so that a target reading late reads nothing. That is
-    /// what makes the fall-through safe from double-typing.
+    /// returns `.failed` or `.aborted`**, so that a target reading late reads
+    /// nothing. That is what makes the fall-through safe from double-typing.
     func paste(_ text: String, into app: FrontmostAppInfo) -> TierAttempt
 }
 
@@ -319,6 +324,15 @@ public final class InsertionLadder: InsertionPerforming {
                     error: nil,
                     frontmost: current
                 )
+            case let .aborted(reason):
+                // Shutdown mid-paste. Falling through would inject the
+                // transcript while the helper is quitting.
+                return InsertionOutcome(
+                    tier: .paste,
+                    ok: false,
+                    error: reason,
+                    frontmost: current
+                )
             case let .failed(reason):
                 // The paste tier has already taken the pasteboard back by the
                 // time it says this, so injecting below cannot produce the text
@@ -363,6 +377,15 @@ public final class InsertionLadder: InsertionPerforming {
                 // terminal would delete the recovery path the Arc fix relies on.
                 reasons.append("AX: \(reason)")
                 log(.info, "AX tier declined, falling through to Unicode injection — \(reason)")
+            case let .aborted(reason):
+                // Not producible by the AX tier; stop rather than invent a
+                // fall-through this rung has never had.
+                return InsertionOutcome(
+                    tier: .ax,
+                    ok: false,
+                    error: reason,
+                    frontmost: current
+                )
             }
         }
 
@@ -411,6 +434,15 @@ public final class InsertionLadder: InsertionPerforming {
             )
         case let .failed(reason):
             reasons.append("Unicode: \(reason)")
+        case let .aborted(reason):
+            // Not producible by the Unicode tier; stop rather than invent a
+            // fall-through this rung has never had.
+            return InsertionOutcome(
+                tier: .unicode,
+                ok: false,
+                error: reason,
+                frontmost: current
+            )
         }
 
         return InsertionOutcome(

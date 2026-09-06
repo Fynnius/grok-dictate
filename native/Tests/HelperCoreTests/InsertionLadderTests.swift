@@ -471,6 +471,23 @@ struct PasteRouteLadderTests {
         #expect(ax.signatureReads == 1)
     }
 
+    @Test("a paste aborted mid-flight does not fall through to injection")
+    func abortedStopsTheLadder() {
+        // `HelperApp.beginShutdown` settles a live transaction → `.abandoned`
+        // → `.aborted`. Injecting the transcript while quitting is the failure
+        // this case exists to prevent. `.failed` still falls through.
+        let (ladder, paste, _, unicode) = self.ladder(
+            paste: .aborted(reason: "the helper was asked to quit")
+        )
+        let outcome = ladder.run(text: "hallo", targetBundleId: nil, route: .paste)
+
+        #expect(paste.calls == ["hallo"])
+        #expect(unicode.calls.isEmpty)
+        #expect(outcome.tier == .paste)
+        #expect(outcome.ok == false)
+        #expect(outcome.error == "the helper was asked to quit")
+    }
+
     @Test("a declined insert never reaches any tier")
     func declinesBeforeRouting() {
         // Empty text and a moved target are decided before the route is, so a

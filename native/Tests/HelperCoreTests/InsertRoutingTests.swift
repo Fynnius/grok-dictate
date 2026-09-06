@@ -98,6 +98,17 @@ struct InsertRoutingTests {
         )
     }
 
+    @Test("settable false with an unreadable count pastes")
+    func unreadableCountPastes() {
+        // The swallow shape we could not confirm: AX returns CFNumber, the old
+        // `as? Int` often failed, characterCount was nil, isTerminalTextView
+        // was false, and short cmux dictations typed and got swallowed. Failing
+        // toward paste is conservative for not losing text.
+        let unreadable = FocusSignature(selectedTextIsSettable: false, characterCount: nil)
+        #expect(
+            InsertRouting.route(preference: .auto, utf16Count: 20, focus: { unreadable }) == .paste)
+    }
+
     @Test("an absent or unrecognised wire value reads as auto")
     func wireValues() {
         // An older app sends no route at all and must get the shipping default.
