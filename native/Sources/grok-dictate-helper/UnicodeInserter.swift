@@ -35,6 +35,9 @@
 ///    hardware state) rather than the flags on the event they were handed.
 ///    Waiting a few tens of milliseconds for the user's fingers to leave the
 ///    keys costs nothing perceptible and removes that whole class of misfire.
+///    It lives in `ModifierSettle` since the paste tier arrived, because the
+///    ⌘V chord needs exactly the same wait and for a sharper version of the
+///    same reason.
 
 import CoreGraphics
 import Foundation
@@ -54,7 +57,7 @@ final class UnicodeInserter: UnicodeInserting {
             return .failed(reason: "could not create a private CGEventSource")
         }
 
-        waitForModifiersToClear()
+        ModifierSettle.wait(timeout: settings.modifierSettleTimeout, log: log)
 
         let pacing = InjectionPacer.pacing(
             forUTF16Count: text.utf16.count,
@@ -179,41 +182,6 @@ final class UnicodeInserter: UnicodeInserting {
         }
     }
 
-    /// Poll until no chord modifier is physically held, or the timeout expires.
-    ///
-    /// Fn is deliberately not waited on: the state machine queues a `ptt_down`
-    /// that arrives while inserting rather than dropping it
-    /// (`contracts/state-machine.md` §5), so the user legitimately holds Fn
-    /// during an insert — and Fn alone triggers nothing in the target app.
-    private func waitForModifiersToClear() {
-        guard settings.modifierSettleTimeout > 0 else { return }
-        let step: TimeInterval = 0.01
-        var waited: TimeInterval = 0
-        while waited < settings.modifierSettleTimeout, heldChordModifiers().isEmpty == false {
-            Thread.sleep(forTimeInterval: step)
-            waited += step
-        }
-        let stillHeld = heldChordModifiers()
-        if !stillHeld.isEmpty {
-            log(
-                .warn,
-                "injecting while \(stillHeld.joined(separator: "+")) is still held — "
-                    + "if characters come out as shortcuts, let go of the keys sooner"
-            )
-        } else if waited > 0 {
-            log(.info, "waited \(Int(waited * 1000)) ms for held modifiers to clear before injecting")
-        }
-    }
-
-    private func heldChordModifiers() -> [String] {
-        let flags = CGEventSource.flagsState(.combinedSessionState)
-        var held: [String] = []
-        if flags.contains(.maskShift) { held.append("Shift") }
-        if flags.contains(.maskControl) { held.append("Control") }
-        if flags.contains(.maskAlternate) { held.append("Option") }
-        if flags.contains(.maskCommand) { held.append("Command") }
-        return held
-    }
 }
 
 /// Used when `GROK_DICTATE_HELPER_DRY_RUN` is set: the ladder runs, the frames

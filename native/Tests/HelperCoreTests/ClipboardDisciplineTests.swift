@@ -1,28 +1,34 @@
-/// The clipboard is never written except on an explicit user action.
+/// **The pasteboard is written, never read.**
 ///
-/// , user turn 7, verbatim: *"Is that the idea because I like
-/// that more instead of it automatically pasting into my clipboard? I don't
-/// want that."* IMPLEMENTATION-PLAN.md §3.2 requires Phase 2 to "add a test
-/// asserting no clipboard write occurs on any insertion path", and §5b has
-/// Phase 5 audit every path again.
+/// This file used to enforce the opposite rule — that the pasteboard is never
+/// written automatically at all — and `contracts/helper-protocol.md` §5 records
+/// why that changed. The short version: the original objection was to the
+/// transcript *lingering* on the clipboard, and a promised item handed out on
+/// read and cleared on settle answers that without a snapshot. The rule that
+/// replaced it is narrower and harder to keep: **no read, anywhere.**
 ///
-/// Two complementary checks, because either alone is weak:
+/// Reading is the operation macOS 15.4 previewed a permission prompt for and
+/// macOS 26 carries. Writing never prompts. A design that only writes is immune
+/// to that permanently — but only as long as nobody adds a "helpful" snapshot
+/// later in good faith, which is exactly the change someone would make.
 ///
-///   - **Behavioural** — every insertion path, including all the failing ones,
-///     driven through the real router with a spy pasteboard. This catches a
-///     helpful fallback added later ("if both tiers fail, at least put it on the
-///     clipboard"), which is exactly the change someone would make in good
-///     faith.
-///   - **Structural** — `NSPasteboard` appears in exactly one source file. This
-///     catches a write added somewhere the behavioural test does not reach.
+/// Two complementary checks, because either alone is weak. The shape is kept
+/// from the file this replaces; the invariants are what changed:
+///
+///   - **Structural** — no pasteboard *read* appears anywhere in
+///     `native/Sources`. This catches a snapshot added somewhere the
+///     behavioural test does not reach.
+///   - **Behavioural** — every insertion path driven through the real router
+///     with a spy pasteboard, including all the failing ones, asserting that
+///     what reaches the pasteboard is what the route promised and nothing else.
 
 import Foundation
 import Testing
 
 @testable import HelperCore
 
-@Suite("Clipboard containment")
-struct ClipboardContainmentTests {
+@Suite("Clipboard discipline")
+struct ClipboardDisciplineTests {
     private func router(
         ax: TierAttempt,
         unicode: TierAttempt,
@@ -112,17 +118,36 @@ struct ClipboardContainmentTests {
         #expect(logged.contains("hallo Welt") == false)
     }
 
-    @Test("NSPasteboard appears in exactly one source file")
-    func structuralContainment() throws {
+    /// Every way AppKit offers to get data *out* of a pasteboard.
+    ///
+    /// The write-side spellings deliberately do not collide with these:
+    /// `setString(_:forType:)` does not contain `string(forType:`, and
+    /// `setData(_:forType:)` does not contain `data(forType:`. That is what
+    /// makes a plain substring scan sufficient here, and it is worth stating,
+    /// because the scan silently stops working if somebody writes
+    /// `pasteboard . string(forType:)` with spaces.
+    static let readSpellings = [
+        "pasteboardItems",
+        "string(forType:",
+        "data(forType:",
+        "propertyList(forType:",
+        "readObjects(",
+        "canReadObject",
+        "readFileContents(",
+    ]
+
+    @Test("nothing in the sources reads the pasteboard")
+    func noPasteboardRead() throws {
         let sources = try Self.swiftSources()
         #expect(sources.count > 10, "source scan found suspiciously few files")
 
-        let offenders =
-            sources
-            .filter { Self.stripComments($0.contents).contains("NSPasteboard") }
-            .map(\.name)
-            .sorted()
-        #expect(offenders == ["SystemPasteboard.swift"])
+        let offenders = sources.flatMap { source -> [String] in
+            let code = Self.stripComments(source.contents)
+            return Self.readSpellings
+                .filter { code.contains($0) }
+                .map { "\(source.name) calls \($0))" }
+        }
+        #expect(offenders.isEmpty)
     }
 
     @Test("HelperCore never touches AppKit, CoreGraphics or the AX API")

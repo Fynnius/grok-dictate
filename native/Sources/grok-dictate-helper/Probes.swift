@@ -605,6 +605,256 @@ enum Probes {
         exit(0)
     }
 
+    // MARK: - The paste tier
+
+    struct PasteOptions {
+        var countdownSeconds = 5
+        /// `pid` | `hid` | `none`. `none` publishes the promise and posts no
+        /// chord, which is how the promise machinery is tested on its own — read
+        /// the pasteboard from another process (`pbpaste`) and watch for the
+        /// request line.
+        var route = "pid"
+        var text = "GD-PASTE-PROBE"
+        var watchSeconds: TimeInterval = 6
+    }
+
+    /// Everything one paste transaction did, in the order it happened.
+    ///
+    /// A class rather than captured `var`s because the callbacks are escaping
+    /// and arrive from AppKit; a boxed local would be the same thing with worse
+    /// diagnostics.
+    private final class PasteProbeRecord {
+        var publishedAt = Date()
+        var chordAt: Date?
+        var requests: [(label: String, at: Date)] = []
+        var textReceipts: [Date] = []
+        var ownershipLostAt: Date?
+    }
+
+    /// Answers §9.5 questions 1 and 2 of `docs/report-insertion-2026-09-06.md`,
+    /// and one the report did not think to ask.
+    ///
+    ///   1. Does ⌘V posted with `CGEvent.postToPid` actually paste into an
+    ///      Electron terminal? FluidVoice forces the *global* clipboard path for
+    ///      Ghostty, which suggests it does not always. `--route pid` versus
+    ///      `--route hid` settles it for this machine.
+    ///   2. Does macOS 26's Terminal paste protection fire for us? Point this at
+    ///      Terminal.app and look at the screen.
+    ///   3. **Does a promised pasteboard item work at all in a process with no
+    ///      `NSApplication`?** The helper is a command-line tool running a bare
+    ///      `CFRunLoop`. Every implementation of this technique that could be
+    ///      read is a full app bundle, so whether AppKit services
+    ///      `provideDataForType:` here is an assumption and not a fact.
+    ///      `--route none` plus `pbpaste` answers it without touching a target.
+    ///
+    /// Prints every request with its latency from both the publish and the
+    /// chord, because the difference between them is the entire correctness
+    /// argument: a request that arrives *before* the chord is a clipboard
+    /// manager reacting to the pasteboard change, not the paste target.
+    static func runPasteProbe(settings: Settings, options: PasteOptions) -> Never {
+        report("Grok Dictate helper \(helperVersion) — paste probe")
+        report(
+            "Accessibility:    \(isAccessibilityTrusted(prompt: settings.promptForAccessibility) ? "trusted" : "NOT TRUSTED")"
+        )
+        report("Secure Input:     \(IsSecureEventInputEnabled() ? "ACTIVE — the chord will be blocked" : "off")")
+        report("Chord route:      \(options.route)")
+        report(
+            "Text:             \(options.text.count) characters, \(options.text.utf16.count) UTF-16 units"
+        )
+        report("Watching for:     \(Int(options.watchSeconds)) s after the chord")
+
+        report("")
+        report("Switch to the target app and put the caret where a paste should land.")
+        for remaining in stride(from: options.countdownSeconds, through: 1, by: -1) {
+            report("  publishing in \(remaining)…")
+            Thread.sleep(forTimeInterval: 1)
+        }
+
+        let workspace = WorkspaceMonitor { _ in }
+        let target = workspace.frontmostApp
+        report("")
+        report(
+            "Frontmost: \(target.name ?? "?") (\(target.bundleId ?? "no bundle id")), "
+                + "pid \(target.processId.map(String.init) ?? "unknown")"
+        )
+        report("")
+
+        let record = PasteProbeRecord()
+        let owner = PromisedPasteboardOwner(
+            text: options.text,
+            onRequest: { request in
+                let now = Date()
+                let label: String
+                switch request {
+                case .text:
+                    record.textReceipts.append(now)
+                    label = "TEXT (a receipt)"
+                case let .marker(type):
+                    label = "marker \(type)"
+                }
+                record.requests.append((label, now))
+                let sincePublish = Int(now.timeIntervalSince(record.publishedAt) * 1000)
+                let relation =
+                    record.chordAt.map { "+\(Int(now.timeIntervalSince($0) * 1000)) ms after chord" }
+                    ?? "BEFORE the chord"
+                report(
+                    "  \(stamp())  request  \(label.padding(toLength: 40, withPad: " ", startingAt: 0))"
+                        + "  +\(sincePublish) ms since publish, \(relation)"
+                )
+            },
+            onOwnershipLost: {
+                record.ownershipLostAt = Date()
+                report("  \(stamp())  OWNERSHIP LOST — something else took the pasteboard")
+            }
+        )
+
+        record.publishedAt = Date()
+        let changeCount = owner.publish()
+        report("  \(stamp())  published a promise, changeCount \(changeCount)")
+
+        ModifierSettle.wait(
+            timeout: settings.modifierSettleTimeout,
+            log: { level, message in report("[\(level.rawValue)] \(message)") }
+        )
+
+        switch options.route {
+        case "none":
+            report("  \(stamp())  no chord posted — read the pasteboard from another process now")
+        case "hid":
+            record.chordAt = Date()
+            report("  \(stamp())  posting ⌘V on the HID tap: \(PasteChord.post(route: .hidTap))")
+        default:
+            if let pid = target.processId, pid > 0 {
+                record.chordAt = Date()
+                report(
+                    "  \(stamp())  posting ⌘V to pid \(pid): \(PasteChord.post(route: .pid(pid)))")
+            } else {
+                record.chordAt = Date()
+                report("  \(stamp())  no live pid — posting ⌘V on the HID tap instead")
+                _ = PasteChord.post(route: .hidTap)
+            }
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + options.watchSeconds) {
+            CFRunLoopStop(CFRunLoopGetMain())
+        }
+        CFRunLoopRun()
+
+        // With `--route none` there is no chord, so every receipt counts: the
+        // question that mode asks is whether AppKit services a promise in this
+        // process at all, not whether a paste target read it.
+        let textReceipts = record.chordAt.map { chord in
+            record.textReceipts.filter { $0 > chord }
+        } ?? record.textReceipts
+
+        report("")
+        report("requests total:       \(record.requests.count)")
+        if let chord = record.chordAt {
+            report("  before the chord:   \(record.requests.filter { $0.at <= chord }.count)")
+            report("  after the chord:    \(record.requests.filter { $0.at > chord }.count)")
+        }
+        report("  text receipts:      \(textReceipts.count)")
+        if let first = textReceipts.first, let chord = record.chordAt {
+            report(
+                "first text receipt:   +\(Int(first.timeIntervalSince(chord) * 1000)) ms after the chord"
+            )
+        }
+        if let last = textReceipts.last, let first = textReceipts.first, textReceipts.count > 1 {
+            report(
+                "receipt spread:       \(Int(last.timeIntervalSince(first) * 1000)) ms across \(textReceipts.count) reads"
+            )
+        }
+        report("ownership lost:       \(record.ownershipLostAt == nil ? "no" : "YES")")
+        report(
+            "changeCount:          \(changeCount) at publish, "
+                + "\(PromisedPasteboardOwner.currentChangeCount) now"
+        )
+
+        report("")
+        switch (record.chordAt == nil, textReceipts.isEmpty) {
+        case (true, true):
+            report("VERDICT: nothing read the promise. Either nobody asked, or AppKit does not")
+            report("service promised pasteboard data in a process with no NSApplication — which")
+            report("would sink the whole design. Run `pbpaste` from another shell while this is")
+            report("watching before concluding anything.")
+        case (true, false):
+            report("VERDICT: promised data IS serviced in this process. The receipt mechanism works")
+            report("without an NSApplication, which is the precondition for everything else.")
+        case (false, true):
+            report("VERDICT: NO RECEIPT. Either the chord never reached the target, or the target")
+            report("does not paste with ⌘V. Re-run with --route none and `pbpaste` to rule out the")
+            report("promise machinery itself.")
+        case (false, false):
+            report("VERDICT: the target read our text. This is the signal the paste tier settles on.")
+        }
+
+        let cleared = owner.clear(ifChangeCountIs: changeCount)
+        report("")
+        report(
+            cleared
+                ? "settled: the pasteboard was cleared."
+                : "settled: NOT cleared — the changeCount moved, so somebody else owns it now."
+        )
+        exit(textReceipts.isEmpty ? 1 : 0)
+    }
+
+    // MARK: - How much text one keyboard event can carry
+
+    /// Answers §9.5 question 3, the half that does not need a target app.
+    ///
+    /// The 20-UTF-16-unit chunk this repo uses comes from 2015-era reports
+    /// against Quicksilver and Qt that `CGEventKeyboardSetUnicodeString`
+    /// truncates. FluidVoice ships 200 with no inter-chunk delay. Setting a
+    /// string and reading it back off the same event says whether the *API*
+    /// still truncates on this OS; whether a target accepts a 200-unit event is
+    /// a different question, and `--probe-insert` with
+    /// `GROK_DICTATE_INJECT_CHUNK=200` is how that one gets asked.
+    static func runChunkProbe() -> Never {
+        report("Grok Dictate helper \(helperVersion) — CGEventKeyboardSetUnicodeString capacity")
+        report("")
+        report("Sets N UTF-16 units on a key event and reads them back off the same event.")
+        report("This measures the API, not any application.")
+        report("")
+        guard let source = CGEventSource(stateID: .privateState) else {
+            report("could not create a private CGEventSource")
+            exit(1)
+        }
+        var truncatedAt: Int?
+        for count in [20, 50, 100, 200, 500, 1_000, 2_000] {
+            guard let event = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true)
+            else {
+                report("  could not create a keyboard event")
+                exit(1)
+            }
+            var units = Array(String(repeating: "a", count: count).utf16)
+            event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: &units)
+
+            var actual = 0
+            var buffer = [UniChar](repeating: 0, count: count + 16)
+            event.keyboardGetUnicodeString(
+                maxStringLength: buffer.count,
+                actualStringLength: &actual,
+                unicodeString: &buffer
+            )
+            let ok = actual == count
+            if !ok, truncatedAt == nil { truncatedAt = count }
+            report(
+                "  set \(String(count).padding(toLength: 6, withPad: " ", startingAt: 0))"
+                    + "→ read back \(String(actual).padding(toLength: 6, withPad: " ", startingAt: 0))"
+                    + (ok ? "ok" : "TRUNCATED")
+            )
+        }
+        report("")
+        if let truncatedAt {
+            report("VERDICT: the API truncates at or below \(truncatedAt) units on this OS.")
+        } else {
+            report("VERDICT: no truncation up to 2,000 units. The 20-unit constant is folklore")
+            report("about the API. Whether a target app accepts a large event is separate —")
+            report("run --probe-insert with GROK_DICTATE_INJECT_CHUNK set.")
+        }
+        exit(0)
+    }
+
     // MARK: -
 
     private static func stamp() -> String {

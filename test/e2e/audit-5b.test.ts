@@ -73,9 +73,16 @@ const rel = (file: string): string => relative(ROOT, file);
  *        audit every path"
  * ------------------------------------------------------------------ */
 
-describe('§5b — the clipboard is written only on an explicit user action', () => {
+describe('§5b — the pasteboard is written deliberately and never read', () => {
   /**
-   * The chain, and the whole of it:
+   * §5b was written against a stronger rule than the one that now holds: "the
+   * clipboard is written **never**, not even transiently". The paste tier
+   * repealed it — see `contracts/helper-protocol.md` §5 — and replaced it with
+   * a rule that is narrower and harder to keep: **written, never read.**
+   *
+   * What survives unchanged is the containment of the *explicit* copy, which
+   * is still the only user-initiated write and still reaches the pasteboard by
+   * exactly one path:
    *
    *   a click in the HUD / History / Scratchpad
    *     → `{type:'copy'}` on RENDERER_TO_MAIN_CHANNEL
@@ -132,14 +139,51 @@ describe('§5b — the clipboard is written only on an explicit user action', ()
     expect(senders.map(rel)).toEqual(['src/main/native/helper-client.ts']);
   });
 
-  it('touches NSPasteboard in exactly one Swift file, wired to the `copy` command', () => {
-    // Also asserted inside the Swift package (`ClipboardContainmentTests`),
-    // and repeated here so the property is checked by `npm test` as well —
-    // a machine without Xcode still runs this one.
+  it('touches NSPasteboard in exactly two Swift files, one per sanctioned write', () => {
+    // Also asserted inside the Swift package (`ClipboardDisciplineTests`), and
+    // repeated here so the property is checked by `npm test` as well — a
+    // machine without Xcode still runs this one.
+    //
+    // This used to be one file. The paste tier added the second, and the two
+    // are the complete list of ways a pasteboard write can begin:
+    // `SystemPasteboard` for the user's explicit *Copy*, `PasteInserter` for
+    // the promised item behind an insertion. Nothing else may reach it.
     const swift = sourceFiles().filter((file) => file.endsWith('.swift'));
     expect(swift.length).toBeGreaterThan(10);
     const touching = swift.filter((file) => /NSPasteboard/.test(code(file))).map(rel);
-    expect(touching).toEqual(['native/Sources/grok-dictate-helper/SystemPasteboard.swift']);
+    expect(touching).toEqual([
+      'native/Sources/grok-dictate-helper/PasteInserter.swift',
+      'native/Sources/grok-dictate-helper/SystemPasteboard.swift',
+    ]);
+  });
+
+  it('reads the pasteboard nowhere', () => {
+    //  law 1, the rule that replaced "never written". Reading is
+    // the operation macOS 15.4 previewed a permission prompt for and macOS 26
+    // carries; writing never prompts. Every spelling AppKit offers for getting
+    // data *out* of a pasteboard is forbidden, so a "helpful" snapshot added
+    // later in good faith fails here rather than in the field.
+    //
+    // `setString(_:forType:)` does not contain `string(forType:` and
+    // `setData(_:forType:)` does not contain `data(forType:`, which is what
+    // makes plain substring matching enough.
+    const READS = [
+      'pasteboardItems',
+      'string(forType:',
+      'data(forType:',
+      'propertyList(forType:',
+      'readObjects(',
+      'canReadObject',
+      'readFileContents(',
+    ];
+    const offenders: string[] = [];
+    for (const file of sourceFiles().filter((f) => f.endsWith('.swift'))) {
+      const body = code(file);
+      for (const read of READS) {
+        if (body.includes(read)) offenders.push(`${rel(file)} calls ${read})`);
+      }
+    }
+    expect(offenders).toEqual([]);
   });
 
   it('offers no clipboard action anywhere in the tray menu', () => {

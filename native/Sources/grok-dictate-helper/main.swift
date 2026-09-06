@@ -45,6 +45,9 @@ let usage = """
                             landed — point this at any app that dictation goes
                             missing in
       --probe-secure-ax     attempt an AX write under Secure Input
+      --probe-paste         publish a promised pasteboard item, post ⌘V, and
+                            report every read receipt with its latency
+      --probe-chunk         how many UTF-16 units one keyboard event can carry
       --version             print the version
       --help                this text
 
@@ -61,6 +64,19 @@ let usage = """
                             believed; 1 if the ladder would fall through to
                             Unicode injection, whether because the attribute is
                             not settable or because the write was discarded.
+
+    --probe-paste OPTIONS
+      --delay <seconds>     countdown before publishing (default 5)
+      --route <pid|hid|none>
+                            where to post the ⌘V chord. `none` publishes the
+                            promise and posts nothing, so the receipt mechanism
+                            can be tested on its own with `pbpaste` from another
+                            process (default pid)
+      --text <string>       publish this instead of a marker
+      --watch <seconds>     how long to wait for receipts (default 6)
+
+                            Exits 0 only if something read the text type after
+                            the chord.
 
     --probe-insert OPTIONS
       --delay <seconds>     countdown before injecting (default 5)
@@ -120,6 +136,19 @@ if arguments.contains("--probe-ax") {
 
 if arguments.contains("--probe-secure-ax") {
     Probes.runSecureAXProbe(settings: settings, countdownSeconds: intOption("--delay", default: 5))
+}
+
+if arguments.contains("--probe-chunk") {
+    Probes.runChunkProbe()
+}
+
+if arguments.contains("--probe-paste") {
+    var options = Probes.PasteOptions()
+    options.countdownSeconds = intOption("--delay", default: options.countdownSeconds)
+    options.route = stringOption("--route", default: options.route)
+    options.text = stringOption("--text", default: options.text)
+    options.watchSeconds = TimeInterval(intOption("--watch", default: Int(options.watchSeconds)))
+    Probes.runPasteProbe(settings: settings, options: options)
 }
 
 if arguments.contains("--probe-insert") {

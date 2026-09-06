@@ -565,16 +565,81 @@ receipt is what makes that decision safe, and it is why a fixed delay would not 
 **9.4 The pasteboard-privacy clock.** Option (a) is immune. Option (b) is on a timer of
 unknown length. If we take (b), write the `accessBehavior` check in from day one.
 
-**9.5 Unmeasured, and cheap to measure.** Four things I would settle before writing code:
+**9.5 Measured, 2026-09-06, on Darwin 25.6 (macOS 26.6).** Four questions were open when this
+was written. One is answered by measurement, one by an argument that turns out not to need the
+measurement, and two are still open because they cannot be run from this machine's shell. Two
+facts the list did not think to ask for turned up; both are load-bearing.
 
-- Does ⌘V posted with `postToPid` actually paste into cmux? (FluidVoice forces the *global*
-  clipboard path for Ghostty, which suggests pid-posted ⌘V does not always work in Electron
-  terminals.)
-- Does the macOS 26.4 Terminal paste protection fire for us? One dictation into Terminal.app
-  answers it.
-- Is the 20-unit chunk limit still real on macOS 26, or can we go to 200 like FluidVoice?
-  This alone might materially improve the injection path if we keep it.
-- Does `AXWriteVerification` still catch Arc? One `--probe-ax` run.
+**Q1 — Does ⌘V posted with `postToPid` actually paste into cmux? OPEN.** Not measurable from
+here. `--probe-paste` reports `Accessibility: NOT TRUSTED`, because TCC attributes the grant to
+the *responsible process* — the terminal that launched the probe, cmux
+(`com.cmuxterm.app`) — and that terminal does not hold it. `CGEvent.post` from an untrusted
+process is dropped silently, so no chord can be posted and no route compared.
+*What it changed:* the chord goes on **`.cghidEventTap`**, chosen and not measured. That is
+where Espanso, cliclick and Karabiner put their events, and FluidVoice forcing the *global*
+clipboard path for Ghostty is evidence that pid-posted ⌘V is unreliable in exactly the
+Electron terminals that take 59 % of our traffic. The cost of guessing wrong is bounded and
+visible — no receipt, so the ladder falls through to injection and the user gets their text at
+today's speed. `PasteChord.Route` carries both cases, so flipping the default is one line once
+somebody can run, from a terminal that holds Accessibility and with cmux frontmost:
+
+```bash
+./native/build/grok-dictate-helper --probe-paste --route pid --delay 5
+./native/build/grok-dictate-helper --probe-paste --route hid --delay 5
+```
+
+**Q2 — Does the macOS 26.4 Terminal paste-protection dialog fire for us? OPEN**, for the same
+reason: it needs a chord, and a chord needs the grant. 27 % of dictations go into Terminal.app,
+so this is the one open question that could still be a product problem rather than a tuning
+problem. `--probe-paste --delay 5` with Terminal.app frontmost answers it in one run. If a
+dialog appears, `insertMethod: "type"` in Settings restores today's behaviour without a
+rebuild.
+
+**Q3 — Is the 20-UTF-16-unit chunk limit still real on macOS 26? NO.** `--probe-chunk` sets N
+units on a key event and reads them back off the same event:
+
+| units set | read back |
+| ---: | ---: |
+| 20 | 20 |
+| 200 | 200 |
+| 1,000 | 1,000 |
+| 2,000 | 2,000 |
+
+`CGEventKeyboardSetUnicodeString` does not truncate at any size tried. The 20-unit constant is
+folklore about an API limit that no longer exists — if it ever applied to this call rather than
+to the callers' own buffers.
+*What it changed:* `TextChunker.defaultMaxUTF16Units` goes 20 → 200, FluidVoice's value: 10×
+fewer events for the same text and 10× less exposure to whatever coalesces or intercepts them.
+It does **not** prove a target *accepts* a 200-unit event; that is a different question, and
+`--probe-insert` with `GROK_DICTATE_INJECT_CHUNK=200` is how it gets asked. The grapheme-safe
+splitting is untouched — only the ceiling moved.
+
+**Q4 — Does `AXWriteVerification` still catch Arc's discarded write? Not run, and kept anyway,
+on an argument that does not need the measurement.** §8 row 5 assumed the Arc case disappears
+because "20 sessions now go through paste". It does not. The routing rules send text to the
+paste tier on length, or on the xterm.js signature (`kAXSelectedText` not settable *and*
+`kAXNumberOfCharacters == 0`). Arc reports `settable: true`, so it never matches the signature —
+and our own median transcript is 109 characters, under the 120-unit length threshold. **Roughly
+half of Arc's dictations still take the AX tier**, and deleting the caret read-back would
+restore the 2026-08-09 silent data-loss bug for them. Keeping it costs 402 lines against a
+deletion target. Restoring silent data loss costs a dictation the user never learns was lost.
+That asymmetry decides it, the same way it decided `AXSelectedTextGate`.
+
+**New fact 1 — promised pasteboard data *is* serviced in a process with no `NSApplication`.**
+This was an unexamined assumption and the whole design rests on it: every implementation of the
+technique that could be read (Handy, VoiceInk, FluidVoice) is a full app bundle, while our
+helper is a command-line tool running a bare `CFRunLoop`. Measured with
+`--probe-paste --route none` and a `pbpaste` from another shell — the promise resolved to the
+right string and `pasteboard:provideDataForType:` fired on the main run loop 1,942 ms later,
+i.e. when the reader asked and not before. `changeCount` was unchanged by the read (107 → 107),
+which is what makes it usable as an ownership token.
+
+**New fact 2 — `clearContents()` fires `pasteboardChangedOwner:` on the process that calls
+it.** Our own settle looks exactly like the user copying something else. Anything that treats
+ownership-lost as "abandon the transaction" therefore has to ignore the event once it has
+settled, or the settle path runs twice on every successful paste. This is why
+`PasteTransaction` carries an explicit `settled` flag instead of deriving settlement from its
+inputs.
 
 **9.6 What I would not do.** Input Method Kit is the technically cleanest insertion channel
 on macOS — it bypasses key-event handling entirely and needs no Accessibility grant — but it
