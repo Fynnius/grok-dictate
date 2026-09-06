@@ -336,15 +336,13 @@ change's business.
   and an argument that overriding a user's explicit `type` is exactly what a
   setting exists to prevent. I left it following the setting and did not resolve
   the argument.
-- **Is 8 s the right fall-through ceiling?** It is Handy's number and the handoff
-  specified it, so it is what shipped — but Handy uses 8 s for the _restore_,
-  where overrunning costs nothing, and here it is also how long a user waits
-  before injection starts in an application that does not paste with ⌘V. The
-  cost of shortening it is close to zero, because the pasteboard is cleared
-  before the ladder injects and a late reader reads nothing. The two commonest
-  ways to hit the ceiling are gone (see §10), so nothing here forced the
-  question; if a real application turns out to stall the full eight seconds,
-  shorten `PasteTransaction.timeout` rather than reasoning about it further.
+- **Is 8 s the right fall-through ceiling?** It was Handy's restore number and
+  the handoff specified it, so it is what first shipped. A later review
+  shortened it to **0.5 s** (`PasteTransaction.timeout`): Handy used 8 s for a
+  restore, where overrunning costs nothing, and here it was how long a user
+  waited before injection started. The cost of shortening is near zero,
+  because the pasteboard is cleared before the ladder injects. Too short is an
+  empty paste then injection (loud); too long is a stuck HUD (silent).
 
 ---
 
@@ -384,3 +382,39 @@ carries the full source list. The mechanism is Handy's
 against this codebase's own architecture, with the attribution in
 `PasteInserter.swift`'s header. No source copied from any of Handy, VoiceInk or
 FluidVoice; the latter two are GPLv3 and this repository is MIT.
+
+---
+
+## 12. Review pass (same day, later session)
+
+The implementation above was reviewed against the handoff and the code. Five
+things that would have failed silently in the field were fixed on this branch
+before merge; the chord-into-cmux / Terminal-dialog measurements in §5 are
+still open.
+
+- **Do not fulfil the transcript until the chord.** A pre-chord `setString` let
+  a clipboard manager cache the bytes, so the real paste never generated a
+  receipt. Combined with posting the chord in the same `onMain` block as
+  `declareTypes`, every manager read counted as a landing. The promise now
+  provides text only after `recordChord`, and there is a 50 ms observer grace
+  between publish and ⌘V.
+- **`verdict` was asked before the runloop drained.** GCD `main.sync` is not
+  AppKit's pasteboard callback queue. A pending `provideDataForType:` could be
+  dropped by `markSettled` on the fail path. The fail path now drains
+  `CFRunLoopRunInMode` once, then verdicts, then releases.
+- **8 s was a restore budget used as a user wait.** `PasteTransaction.timeout`
+  is 0.5 s. The serial insertion queue no longer sits for eight seconds on a
+  target that does not paste with ⌘V.
+- **Shutdown mid-paste fell through to Unicode injection.** `.abandoned`
+  mapped to `.failed`, and every paste failure injects. It is now
+  `TierAttempt.aborted` and the ladder stops.
+- **`kAXNumberOfCharacters` was unpacked with `as? Int` on a `CFTypeRef`.**
+  AX returns `CFNumber`; that cast often fails, so rule 3 never fired and
+  short cmux dictations typed. Unpacked as `NSNumber`. `settable: false` with
+  an unreadable count now pastes.
+
+Still not done, and not fixable from this machine's shell: `--probe-paste`
+into cmux and Terminal.app from a process that holds Accessibility (§5 Q1,
+Q2), and a real 2,000-character dictation timed off `insert_end −
+insert_begin`. The default is `auto`; those two runs are what would tell you
+whether the default is wrong.

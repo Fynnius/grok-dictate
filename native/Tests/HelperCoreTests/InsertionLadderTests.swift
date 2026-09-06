@@ -488,6 +488,19 @@ struct PasteRouteLadderTests {
         #expect(outcome.error == "the helper was asked to quit")
     }
 
+    @Test("a paste that claims success without a receipt does not inject")
+    func pasteSucceededDoesNotFallThrough() {
+        // Not producible today. If a future impl returned `.succeeded` after a
+        // chord that did land, falling through would type the transcript twice.
+        let (ladder, _, _, unicode) = self.ladder(paste: .succeeded)
+        let outcome = ladder.run(text: "hallo", targetBundleId: nil, route: .paste)
+
+        #expect(unicode.calls.isEmpty)
+        #expect(outcome.tier == .paste)
+        #expect(outcome.ok)
+        #expect(outcome.verification == .notPossible)
+    }
+
     @Test("a declined insert never reaches any tier")
     func declinesBeforeRouting() {
         // Empty text and a moved target are decided before the route is, so a

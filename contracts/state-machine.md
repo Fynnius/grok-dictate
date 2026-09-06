@@ -273,7 +273,7 @@ Phase 1 wrote only the first row, so the second case lost everything: a network 
 
 Since §6 removed the target check, the app that was frontmost when a turn started is no longer the app that received the text. A history row built from the press-time value would therefore name the wrong one — and history is the recovery surface, so "which window did that go into?" is the question it most needs to answer correctly.
 
-`insert_result` carries `frontmostBundleId` / `frontmostName`: the application the helper's ladder actually acted on, resolved once inside `run()` alongside the AX skip list. The row prefers those and falls back to `ctx.targetBundleId` when the helper reported none — a decline before it resolved one, or an outcome the app synthesised for a helper that never answered.
+`insert_result` carries `frontmostBundleId` / `frontmostName`: the application the helper's ladder actually acted on, resolved once inside `run()`. The row prefers those and falls back to `ctx.targetBundleId` when the helper reported none — a decline before it resolved one, or an outcome the app synthesised for a helper that never answered.
 
 ---
 

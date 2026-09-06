@@ -155,8 +155,10 @@ public enum TierAttempt: Sendable, Equatable {
     /// The tier did its work; nothing here can tell whether the text landed.
     /// Reported to the app as `ok: true, verified: null` — "typed, unconfirmed".
     case succeeded
-    /// The tier did its work and verified the result against the target: the
-    /// caret moved (AX), or the focused element's text grew (Unicode).
+    /// The tier did its work and verified the result against the target: a
+    /// consumer read the pasteboard after the chord (paste), or the caret
+    /// moved (AX). Shipping Unicode insertion cannot produce this — it has
+    /// no return channel, and the length check that used to infer one is gone.
     case confirmed
     /// The tier did its work, verification ran, and it proved the text is not
     /// there. Only the Unicode tier can produce this — the AX tier reads back
@@ -226,10 +228,10 @@ public protocol FrontmostAppProviding: AnyObject {
 
 /// Kept behind a protocol so the executable can decorate it with "run off the
 /// main thread" without the ladder knowing. That decoration is not cosmetic:
-/// Unicode injection deliberately paces itself between chunks, and a ladder run
-/// on the main run loop would stall the CGEventTap callback long enough for
-/// macOS to disable the tap with `kCGEventTapDisabledByTimeout` — the exact
-/// silent failure  is about, triggered by our own success path.
+/// the paste tier waits for a read receipt, and a ladder run on the main run
+/// loop would stall the CGEventTap callback long enough for macOS to disable
+/// the tap with `kCGEventTapDisabledByTimeout` — the canonical dead-hotkey
+/// bug, triggered by our own success path.
 public protocol InsertionPerforming: AnyObject {
     func perform(
         text: String,
@@ -283,7 +285,7 @@ public final class InsertionLadder: InsertionPerforming {
             )
         }
 
-        // Resolved once: the target check and the AX skip list both need it,
+        // Resolved once: the target check and the AX tier both need it,
         // and two queries could disagree if focus moved between them.
         let current = frontmost.frontmostApp
 
@@ -339,11 +341,15 @@ public final class InsertionLadder: InsertionPerforming {
                 // twice. That ordering is the tier's contract, not a hope.
                 reasons.append("paste: \(reason)")
                 log(.info, "the paste tier declined, falling through to Unicode injection — \(reason)")
-            case .succeeded, .notLanded:
-                // Neither is producible by `PasteInserting`: a chord that was
-                // posted proves nothing, which is the claim BUG-1 was about, and
-                // this tier answers only "a consumer read it" or "it did not".
-                reasons.append("paste: the tier returned an outcome it cannot produce")
+            case .succeeded:
+                // Not producible by `PasteInserting`. Do not fall through: if a
+                // future impl posted a chord that did land, injecting would
+                // type the transcript twice.
+                return InsertionOutcome(tier: .paste, ok: true, error: nil, frontmost: current)
+            case let .notLanded(reason):
+                // Also not producible today. Falling through is safe only if
+                // the tier already cleared; treat it as a decline.
+                reasons.append("paste: \(reason)")
             }
 
             // The AX tier is skipped on this route. Either the text is long, in
