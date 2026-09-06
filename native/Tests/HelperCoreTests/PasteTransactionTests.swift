@@ -129,8 +129,25 @@ struct PasteTransactionTests {
         #expect(tx.ownershipLost == false)
         tx.recordTextReceipt(at: 0.25)
         #expect(tx.receiptsAfterChord == 1)
-        #expect(tx.outcome(now: 0.3) == nil)
         #expect(tx.mayRelease(now: 0.3) == false)
+    }
+
+    @Test("a transaction settled from outside still answers, rather than waiting forever")
+    func settlingFromOutsideResolvesTheWait() {
+        // `HelperApp.shutdown` takes the pasteboard back so that quitting cannot
+        // leave the transcript on it — and it can do that while the insertion
+        // queue is still inside its wait loop. `outcome` answering `nil` there
+        // spins that queue until the process dies.
+        var pending = chorded()
+        pending.markSettled()
+        #expect(pending.outcome(now: 0.1) == .abandoned)
+
+        // …and one that had already been read reports the truth, not the
+        // shutdown: the target has the text.
+        var landed = chorded()
+        landed.recordTextReceipt(at: 0.03)
+        landed.markSettled()
+        #expect(landed.outcome(now: 0.1) == .landed)
     }
 
     @Test("a receipt that slips in before the clear turns a give-up into a landing")

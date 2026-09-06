@@ -16,6 +16,7 @@
 /// it.*
 
 import AppKit
+import ApplicationServices
 import CoreGraphics
 import Foundation
 import HelperCore
@@ -259,6 +260,22 @@ final class PasteInserter: PasteInserting {
     private static func now() -> TimeInterval { ProcessInfo.processInfo.systemUptime }
 
     func paste(_ text: String, into app: FrontmostAppInfo) -> TierAttempt {
+        // **Checked here, before anything is published.** `CGEvent.post` from an
+        // untrusted process is dropped *silently* — no error, no return value,
+        // nothing. Without this the tier would publish a promise, post a chord
+        // nobody receives, wait out the full 8 s ceiling and only then fall
+        // through, on every single dictation, on a machine where the grant is
+        // simply missing. That is the state a packaged build starts in, and it
+        // recurs after some updates.
+        guard AXIsProcessTrusted() else {
+            return .failed(
+                reason:
+                    "Accessibility permission is not granted, so a synthetic ⌘V would be dropped "
+                    + "without an error — open System Settings → Privacy & Security → "
+                    + "Accessibility and enable Grok Dictate"
+            )
+        }
+
         // The chord is ⌘V and the retry hotkey is ⌃⌘V. A chord that picks up a
         // Control the user has not let go of yet is not paste — see
         // `ModifierSettle`.
@@ -332,6 +349,8 @@ final class PasteInserter: PasteInserting {
         case .ownershipLost:
             return .failed(
                 reason: "something else took the pasteboard before \(target) read it")
+        case .abandoned:
+            return .failed(reason: "the helper was asked to quit before \(target) read it")
         case .chordFailed:
             return .failed(reason: "the ⌘V chord could not be posted")
         case .timedOut:

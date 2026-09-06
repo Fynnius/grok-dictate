@@ -65,6 +65,15 @@ public struct PasteTransaction: Equatable {
         /// Nobody ever read it. The commonest real cause is an application that
         /// does not paste with ⌘V.
         case timedOut
+        /// The pasteboard was taken back from outside while the transaction was
+        /// still waiting — `HelperApp.shutdown` settling a paste that has not
+        /// resolved, so that quitting cannot leave the transcript behind.
+        ///
+        /// Reachable only on that path, and it exists because the alternative
+        /// was worse: without it `outcome(now:)` answered `nil` forever once
+        /// `settled` was set, and the insertion queue span until the process
+        /// died.
+        case abandoned
     }
 
     // MARK: - Constants
@@ -178,7 +187,10 @@ public struct PasteTransaction: Equatable {
     /// transcript a second time, which is the one outcome this whole design is
     /// built to avoid.
     public func outcome(now: TimeInterval) -> Settlement? {
-        if settled { return nil }
+        // A transaction settled from outside still has an answer, and `nil` is
+        // not it: the caller is a `while` loop, and answering "keep waiting"
+        // forever is how a shutdown mid-paste becomes a spinning queue.
+        if settled { return receiptsAfterChord > 0 ? .landed : .abandoned }
         if receiptsAfterChord > 0 { return .landed }
         if ownershipLost { return .ownershipLost }
         if let chordFailedAt, now - chordFailedAt >= Self.chordFailureGrace { return .chordFailed }

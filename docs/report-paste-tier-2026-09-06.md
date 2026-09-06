@@ -337,10 +337,47 @@ change's business.
   and an argument that overriding a user's explicit `type` is exactly what a
   setting exists to prevent. I left it following the setting and did not resolve
   the argument.
+- **Is 8 s the right fall-through ceiling?** It is Handy's number and the handoff
+  specified it, so it is what shipped — but Handy uses 8 s for the _restore_,
+  where overrunning costs nothing, and here it is also how long a user waits
+  before injection starts in an application that does not paste with ⌘V. The
+  cost of shortening it is close to zero, because the pasteboard is cleared
+  before the ladder injects and a late reader reads nothing. The two commonest
+  ways to hit the ceiling are gone (see §10), so nothing here forced the
+  question; if a real application turns out to stall the full eight seconds,
+  shorten `PasteTransaction.timeout` rather than reasoning about it further.
 
 ---
 
-## 9. Sources
+## 10. Two bugs found reviewing this, and fixed
+
+Both were in the paste tier as first written, both silent, and neither would have
+been caught by any test that existed at the time.
+
+**A missing Accessibility grant cost 8 seconds per dictation.** `CGEvent.post`
+from an untrusted process is dropped with no error and no return value, so the
+tier published a promise, posted a chord nobody received, waited out the full
+ceiling and only then fell through — on _every_ dictation, on a machine where the
+grant is simply absent. That is the state a freshly packaged build starts in, and
+it recurs after some macOS updates. `PasteInserter.paste` now checks
+`AXIsProcessTrusted()` before publishing anything and declines immediately with a
+reason naming the System Settings pane, which is the same guard `AXInserter` has
+had since Phase 2. Verified against the built binary: the tier declines, the
+ladder falls through to injection at once, and no promise is published.
+
+**Shutting down mid-paste span the insertion queue forever.**
+`HelperApp.shutdown` settles a live transaction so that quitting cannot leave the
+transcript on the clipboard — and it can do that while the insertion queue is
+still inside its wait loop. `PasteTransaction.outcome` answered `nil` once
+`settled` was set, which the loop reads as "keep waiting", so it span until the
+process died. Bounded by process death in practice and wrong regardless.
+`outcome` now answers `.abandoned` — or `.landed`, if a receipt had already
+arrived, because the truth there is that the target has the text and the shutdown
+is beside the point.
+
+---
+
+## 11. Sources
 
 The analysis this implements: `docs/report-insertion-2026-09-06.md`, whose §12
 carries the full source list. The mechanism is Handy's
