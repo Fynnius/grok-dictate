@@ -40,10 +40,11 @@ matrix, every malformed-input rule and both tap-recovery paths.
 
 **Threading.** Single-threaded apart from one serial queue. The main thread runs
 a `CFRunLoop` owning the event tap, both timers, and every stdout write.
-Insertion is pushed to a background queue — Unicode injection paces itself
-between chunks, and a paced loop on the main thread would stall the tap callback
-long enough for macOS to disable the tap, which is our own
-success path causing the canonical hotkey bug.
+Insertion is pushed to a background queue — a tier that waits would stall the tap
+callback long enough for macOS to disable the tap, which is our own success path
+causing the canonical hotkey bug. The paste tier hops back to main for two short
+moments, because promised pasteboard data is serviced by AppKit on the main run
+loop; `PasteInserter` documents that split and it is not optional.
 
 ## Probe modes
 
@@ -52,11 +53,28 @@ is one command instead of a session with the whole app.
 
 ```sh
 ./build/grok-dictate-helper --probe-tap            # hotkey events, live
-./build/grok-dictate-helper --probe-insert         # inject 300 known characters
+./build/grok-dictate-helper --probe-insert         # insert 300 known characters
+./build/grok-dictate-helper --probe-paste          # publish a promise, press ⌘V, report every read receipt
+./build/grok-dictate-helper --probe-chunk          # how many UTF-16 units one key event can carry
 ./build/grok-dictate-helper --probe-ax             # does the AX tier work here — and is it telling the truth?
 ./build/grok-dictate-helper --probe-secure-ax      # AX write under Secure Input (§9.5)
 ./build/grok-dictate-helper --help                 # options and environment
 ```
+
+### Does the paste tier work in this application?
+
+```sh
+./build/grok-dictate-helper --probe-paste --delay 5
+# …switch to the app, click where a paste should land, wait
+```
+
+It publishes a promised pasteboard item, posts ⌘V, and prints every request for
+the data with its latency measured from both the publish and the chord. The
+difference between those two is the entire correctness argument: a request that
+arrives _before_ the chord is a clipboard manager reacting to the pasteboard
+change, not the paste target. `--route pid|hid|none` compares where the chord
+enters the system; `none` posts no chord at all, so `pbpaste` from another shell
+is enough to check that the promise machinery itself works.
 
 ### When dictation goes missing in an application
 
@@ -91,19 +109,23 @@ Electron binary and survive rebuilds). Only the real app can.
 
 ## Environment variables
 
-The injection knobs are variables rather than constants because
-leaves chunk size and inter-chunk delay unmeasured, and measuring them is a
-human test. Tuning a constant means a rebuild between attempts.
+There used to be twelve. **Five went on 2026-09-06.**
+`GROK_DICTATE_INJECT_CHUNK`, `_INJECT_DELAY_MS`, `_INJECT_TAP` and
+`_INJECT_VERIFY` were scaffolding for a measurement session that concluded in
+August, and the pacing and length verification they steered are gone
+(`docs/report-insertion-2026-09-06.md` §3). `_AX_SKIP` was the escape hatch for
+an application that lies about AX writes; it was never used once, and
+`InsertRouting` rule 3 now does the same job from what an application _does_
+rather than from a list of the ones somebody tested.
+
+What replaced all five is one user-visible setting, **Insert text by**, which
+travels to the helper on the `insert` frame as `route`.
 
 | Variable                            | Default | Meaning                                     |
 | ----------------------------------- | ------- | ------------------------------------------- |
-| `GROK_DICTATE_INJECT_CHUNK`         | `20`    | UTF-16 units per event                      |
-| `GROK_DICTATE_INJECT_DELAY_MS`      | `5`     | pause between chunks                        |
-| `GROK_DICTATE_INJECT_TAP`           | `hid`   | `hid` or `session` — where injections enter |
-| `GROK_DICTATE_MODIFIER_SETTLE_MS`   | `500`   | wait for held modifiers before injecting    |
+| `GROK_DICTATE_MODIFIER_SETTLE_MS`   | `500`   | wait for held modifiers before inserting    |
 | `GROK_DICTATE_SECURE_INPUT_POLL_MS` | `1000`  | Secure Input and frontmost poll interval    |
 | `GROK_DICTATE_TAP_WATCHDOG_MS`      | `5000`  | how often to check the tap is still enabled |
-| `GROK_DICTATE_AX_SKIP`              | none    | bundle ids to skip the AX tier for          |
 | `GROK_DICTATE_AX_VERIFY`            | **on**  | read the caret back to confirm an AX write  |
 | `GROK_DICTATE_HELPER_DRY_RUN`       | off     | run the ladder but never insert anything    |
 | `GROK_DICTATE_HELPER_NO_TAP`        | off     | do not install the event tap                |
@@ -120,12 +142,12 @@ how a 13.8 s dictation disappeared into Arc behind a green "Inserted" pill. It
 exists so the check can be bisected against a real application in one session
 rather than one rebuild, and it warns on every start-up when set.
 
-`GROK_DICTATE_AX_SKIP` is still the last resort, for an application that lies in
-a way the verification cannot see — one that moves the caret and shows nothing.
-No application is on it by default, deliberately: a denylist protects only the
-apps someone has already lost text in, which is the argument
-`docs/phase-2-report.md` §3.2 made against listing terminal bundle ids and which
-applies to Arc for the same reason. Chromium is not one browser.
+The chunk size is now a constant, `TextChunker.defaultMaxUTF16Units` — 200
+UTF-16 units, from a `--probe-chunk` run on macOS 26.6 showing that
+`CGEventKeyboardSetUnicodeString` does not truncate at 20, 200, 1,000 or 2,000.
+That measures the API and not any application; sweeping it against a real target
+means editing the constant and rebuilding. A known limit rather than an
+overlooked one.
 
 ## Permissions
 

@@ -241,37 +241,17 @@ public final class InsertionLadder: InsertionPerforming {
     private let frontmost: FrontmostAppProviding
     private let log: (LogLevel, String) -> Void
 
-    /// Bundle identifiers whose AX tier is skipped outright, straight to
-    /// Unicode injection.
-    ///
-    /// This exists for one specific failure that the ladder cannot otherwise
-    /// detect.  expects the AX tier to *fail* in Electron apps
-    /// and terminals, and a failure is fine — the ladder falls through. The
-    /// dangerous case is an app that returns `kAXErrorSuccess` and then inserts
-    /// nothing: the ladder stops at a tier the contract says is trustworthy,
-    /// reports `ok: true`, and the text silently never appears. Nothing in the
-    /// AX API can distinguish that from a real success.
-    ///
-    /// Whether any app behaves that way is unmeasured — it is part of what the
-    /// Phase 2 insertion matrix finds out. So the escape hatch is a runtime
-    /// list (`GROK_DICTATE_AX_SKIP`) rather than a code change: if an app turns
-    /// out to lie, it can be excluded during the test session instead of after
-    /// a rebuild. Whatever the session finds becomes the documented default.
-    private let axSkipBundleIds: Set<String>
-
     public init(
         paste: PasteInserting,
         accessibility: AccessibilityInserting,
         unicode: UnicodeInserting,
         frontmost: FrontmostAppProviding,
-        axSkipBundleIds: Set<String> = [],
         log: @escaping (LogLevel, String) -> Void = { _, _ in }
     ) {
         self.paste = paste
         self.accessibility = accessibility
         self.unicode = unicode
         self.frontmost = frontmost
-        self.axSkipBundleIds = axSkipBundleIds
         self.log = log
     }
 
@@ -358,9 +338,6 @@ public final class InsertionLadder: InsertionPerforming {
             // focused element already reported the terminal signature — and a
             // terminal declines the AX tier at `IsAttributeSettable` anyway, for
             // the cost of one more round trip.
-        } else if let bundleId = current.bundleId, axSkipBundleIds.contains(bundleId) {
-            reasons.append("AX: skipped for \(bundleId) by GROK_DICTATE_AX_SKIP")
-            log(.info, "AX tier skipped for \(bundleId) by configuration")
         } else {
             switch accessibility.insertSelectedText(text, into: current) {
             case .confirmed:

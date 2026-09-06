@@ -10,15 +10,31 @@
 /// `CGEvent.post` reports "posted", never "landed": a fast app can drop
 /// characters mid-injection with no error anywhere. That is why the contract
 /// marks this tier's `ok` as untrustworthy and why the HUD shows the full
-/// transcript — and, since BUG-1 turned that theoretical warning into 60.3 s of
-/// lost dictation in `cmux`, why the tier no longer stops at "posted":
+/// transcript. **This tier reports `.succeeded`, never `.confirmed`** — "typed,
+/// unconfirmed" is the strongest honest thing it can say about itself.
 ///
-///   - it **paces itself by length** (`InjectionPacer`), because the burst that
-///     was dropped was 38 events in 245 ms and the three that landed the same
-///     day were 3–4 events each;
-///   - it **measures the target's text length** around the injection
-///     (`InjectionVerifier`, `UnicodeWriteVerification`) and reports landed, did
-///     not land, or cannot tell.
+/// **Two BUG-1 defences were removed on 2026-09-06, and it is worth knowing
+/// why**, because both were written against real incidents and neither was
+/// wrong to try:
+///
+///   - **the pacing rule** slowed long text down, reasoning from the 2026-08-09
+///     `cmux` drop that "the variable is how many events arrive back to back".
+///     That was a defensible inference and it appears to be the wrong
+///     diagnosis. xterm.js with the kitty keyboard protocol calls
+///     `preventDefault()` on the synthetic keydown, cancelling Chromium's
+///     native `insertText` before the glyph reaches the PTY — protocol-level
+///     interception that no spacing addresses. The rule taxed 39 % of
+///     dictations at ~0.9 ms per character and fixed nothing.
+///   - **the length check** read the focused element's `kAXNumberOfCharacters`
+///     around the injection. It shipped *off*, because in the very application
+///     the incident happened in that attribute is permanently `0` — so it
+///     produced 7 false "not inserted" alarms over text that was on screen, and
+///     0 true positives.
+///
+/// What replaced both is the paste tier: it bypasses the keydown path entirely
+/// and comes with a read receipt from the operating system. Long text and
+/// terminals route there now, and this tier is the fallback for everything
+/// else. `docs/report-insertion-2026-09-06.md` §3 has the evidence.
 ///
 /// **Two details here are load-bearing and easy to get wrong.**
 ///
@@ -59,11 +75,7 @@ final class UnicodeInserter: UnicodeInserting {
 
         ModifierSettle.wait(timeout: settings.modifierSettleTimeout, log: log)
 
-        let pacing = InjectionPacer.pacing(
-            forUTF16Count: text.utf16.count,
-            baseline: settings.injectionBaseline
-        )
-        let chunks = TextChunker.chunks(of: text, maxUTF16Units: pacing.chunkUnits)
+        let chunks = TextChunker.chunks(of: text)
         let route = UnicodePostRouting.route(processId: app.processId)
         let targetPid: pid_t?
         switch route {
@@ -77,14 +89,6 @@ final class UnicodeInserter: UnicodeInserting {
             targetPid = nil
             log(.info, "posting Unicode events on the global tap — no live target pid")
         }
-
-        // Measured after the modifier wait and immediately before the first
-        // event, so the "before" length is the state the injection is about to
-        // act on. Half a second of waiting for the user's fingers to leave ⌃⌘V
-        // is long enough for a terminal to print something on its own.
-        let preparation = settings.verifyUnicodeWrites
-            ? InjectionVerifier.prepare(for: app)
-            : .notPossible("GROK_DICTATE_INJECT_VERIFY is off")
 
         for (index, chunk) in chunks.enumerated() {
             var units = Array(chunk.utf16)
@@ -111,77 +115,25 @@ final class UnicodeInserter: UnicodeInserting {
                 keyDown.postToPid(pid)
                 keyUp.postToPid(pid)
             } else {
-                keyDown.post(tap: settings.injectTap)
-                keyUp.post(tap: settings.injectTap)
-            }
-
-            if index < chunks.count - 1, pacing.interChunkDelay > 0 {
-                Thread.sleep(forTimeInterval: pacing.interChunkDelay)
+                // The HID level, where Espanso, cliclick and Karabiner put
+                // their events and what reaches the widest set of apps. The
+                // session-tap alternative was an environment knob for one
+                // measurement session in August and was never needed.
+                keyDown.post(tap: .cghidEventTap)
+                keyUp.post(tap: .cghidEventTap)
             }
         }
 
         log(
             .info,
-            "posted \(chunks.count) Unicode chunk(s) totalling \(text.utf16.count) UTF-16 units "
-                + "at \(pacing.summary)"
-                + (pacing.isPacedForLength ? " — slowed down because the text is long" : "")
+            "posted \(chunks.count) Unicode chunk(s) totalling \(text.utf16.count) UTF-16 units"
         )
 
-        return verdict(for: preparation, typedUTF16Units: text.utf16.count, into: app)
+        // "Posted", which is all this tier can ever honestly claim. The app
+        // presents it as "typed, unconfirmed" and keeps the full transcript, so
+        // a partial injection stays recoverable with ⌃⌘V.
+        return .succeeded
     }
-
-    /// Turn what the target's text length did into what the tier reports.
-    ///
-    /// Three outcomes, and the middle one is the honest new state the whole
-    /// contract change exists for: `ok: true` with `verified: null` — "typed,
-    /// unconfirmed". It is what every target that exposes no readable length
-    /// gets, and it is strictly more truthful than the green pill BUG-1 shipped.
-    private func verdict(
-        for preparation: InjectionVerifier.Preparation,
-        typedUTF16Units typed: Int,
-        into app: FrontmostAppInfo
-    ) -> TierAttempt {
-        let measurement: InjectionVerifier.Measurement
-        switch preparation {
-        case let .ready(prepared):
-            measurement = prepared
-        case let .notPossible(reason):
-            // Said out loud on every insert, not once at start-up: whether a
-            // target can be measured is a fact about *that* target, and "why is
-            // this app never verified?" is otherwise unanswerable from a log.
-            log(.info, "the injection could not be verified — \(reason)")
-            return .succeeded
-        }
-
-        let target = app.name ?? app.bundleId ?? "the frontmost application"
-        switch InjectionVerifier.confirm(measurement, typedUTF16Units: typed) {
-        case let .landed(growth):
-            log(
-                .info,
-                "confirmed the injection landed in \(target) — \(measurement.source.description) "
-                    + "grew by \(growth)"
-            )
-            return .confirmed
-
-        case let .unverifiable(evidence):
-            log(.info, "the injection into \(target) could not be confirmed — \(evidence)")
-            return .succeeded
-
-        case let .didNotLand(evidence):
-            // A warning, not an info line, for the same reason the AX tier's
-            // discarded-write log is one: this is a diagnosis of the other
-            // application, and it is the line somebody will be looking for when
-            // they ask why the pill went red. The incident it comes from left
-            // no trace at all in any log.
-            log(
-                .warn,
-                "\(target) dropped the injected text — \(evidence). It was typed as synthetic key "
-                    + "events, which report no error when an app discards them"
-            )
-            return .notLanded(reason: evidence)
-        }
-    }
-
 }
 
 /// Used when `GROK_DICTATE_HELPER_DRY_RUN` is set: the ladder runs, the frames

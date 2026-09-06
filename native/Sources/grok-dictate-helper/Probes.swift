@@ -157,19 +157,10 @@ enum Probes {
                 + "\(options.text.utf16.count) UTF-16 units, "
                 + "\(options.text.utf8.count) UTF-8 bytes"
         )
-        // What the ladder will *actually* use, not the baseline: since BUG-1 the
-        // delay depends on the length printed above, and a probe that reported
-        // the baseline would misdescribe the very run it is measuring.
-        let pacing = InjectionPacer.pacing(
-            forUTF16Count: options.text.utf16.count,
-            baseline: settings.injectionBaseline
-        )
         report(
-            "Chunking:         \(pacing.summary)"
-                + (pacing.isPacedForLength ? " (paced for length)" : "")
-                + ", tap=\(settings.injectTap == .cghidEventTap ? "hid" : "session")"
+            "Chunking:         \(TextChunker.defaultMaxUTF16Units) UTF-16 units per event, "
+                + "no inter-chunk delay, tap=hid"
         )
-        report("Verification:     \(settings.verifyUnicodeWrites ? "on" : "off (GROK_DICTATE_INJECT_VERIFY)")")
 
         switch writeExpectedFile(text: options.text, path: options.outputPath) {
         case let .success(path):
@@ -210,7 +201,6 @@ enum Probes {
                 accessibility: AXInserter(verifyWrites: settings.verifyAXWrites, log: log),
                 unicode: disabled,
                 frontmost: workspace,
-                axSkipBundleIds: settings.axSkipBundleIds,
                 log: log
             )
             route = .type
@@ -231,7 +221,6 @@ enum Probes {
                 accessibility: AXInserter(verifyWrites: settings.verifyAXWrites, log: log),
                 unicode: unicodeInserter,
                 frontmost: workspace,
-                axSkipBundleIds: settings.axSkipBundleIds,
                 log: log
             )
             route = .auto

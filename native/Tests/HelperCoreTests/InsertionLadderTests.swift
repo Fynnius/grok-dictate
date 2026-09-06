@@ -298,53 +298,18 @@ struct InsertionLadderTests {
         #expect(ax.targets[0].processId == 5012)
     }
 
-    @Test("a bundle id on the AX skip list goes straight to Unicode")
-    func axSkipList() {
-        // The escape hatch for an app that reports a successful AX write and
-        // inserts nothing — see the note on `axSkipBundleIds`. Note the stub
-        // here *succeeds*: if the skip did not happen, the tier would be `ax`.
-        let ax = StubAccessibilityInserter(result: .succeeded)
-        let unicode = StubUnicodeInserter(result: .succeeded)
+    @Test("both tiers failing on the type route explains both")
+    func bothTiersFailOnTypeRoute() {
         let ladder = InsertionLadder(
             paste: StubPasteInserter(),
-            accessibility: ax,
-            unicode: unicode,
-            frontmost: StubFrontmost(bundleId: "com.microsoft.VSCode", name: "Code"),
-            axSkipBundleIds: ["com.microsoft.VSCode"]
-        )
-        let outcome = ladder.run(text: "hallo", targetBundleId: nil)
-        #expect(outcome.tier == .unicode)
-        #expect(ax.calls.isEmpty)
-        #expect(unicode.calls == ["hallo"])
-    }
-
-    @Test("the skip list only affects the apps on it")
-    func axSkipListIsScoped() {
-        let ax = StubAccessibilityInserter(result: .succeeded)
-        let ladder = InsertionLadder(
-            paste: StubPasteInserter(),
-            accessibility: ax,
-            unicode: StubUnicodeInserter(result: .succeeded),
-            frontmost: StubFrontmost(bundleId: "com.apple.Notes", name: "Notes"),
-            axSkipBundleIds: ["com.microsoft.VSCode"]
-        )
-        #expect(ladder.run(text: "hallo", targetBundleId: nil).tier == .ax)
-        #expect(ax.calls == ["hallo"])
-    }
-
-    @Test("a skipped AX tier that then fails Unicode still explains both")
-    func axSkipListBothFail() {
-        let ladder = InsertionLadder(
-            paste: StubPasteInserter(),
-            accessibility: StubAccessibilityInserter(result: .succeeded),
+            accessibility: StubAccessibilityInserter(result: .failed(reason: "not settable")),
             unicode: StubUnicodeInserter(result: .failed(reason: "no event source")),
-            frontmost: StubFrontmost(bundleId: "com.microsoft.VSCode", name: "Code"),
-            axSkipBundleIds: ["com.microsoft.VSCode"]
+            frontmost: StubFrontmost(bundleId: "com.microsoft.VSCode", name: "Code")
         )
-        let outcome = ladder.run(text: "hallo", targetBundleId: nil)
+        let outcome = ladder.run(text: "hallo", targetBundleId: nil, route: .type)
         #expect(outcome.tier == .none)
-        #expect(outcome.error?.contains("GROK_DICTATE_AX_SKIP") == true)
-        #expect(outcome.error?.contains("no event source") == true)
+        #expect(outcome.error?.contains("AX: not settable") == true)
+        #expect(outcome.error?.contains("Unicode: no event source") == true)
         #expect(outcome.reason == .noTier)
     }
 

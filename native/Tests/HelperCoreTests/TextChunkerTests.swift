@@ -81,10 +81,14 @@ struct TextChunkerTests {
         #expect(TextChunker.chunks(of: "abc", maxUTF16Units: -5) == ["a", "b", "c"])
     }
 
-    @Test("the default is the 20 units  cites")
+    @Test("the default is 200 units, measured on macOS 26.6")
     func defaultLimit() {
-        #expect(TextChunker.defaultMaxUTF16Units == 20)
+        // Was 20 until 2026-09-06, from 2015-era reports that
+        // `CGEventKeyboardSetUnicodeString` truncates at about twenty.
+        // `--probe-chunk` round-trips 20, 200, 1,000 and 2,000 intact.
+        #expect(TextChunker.defaultMaxUTF16Units == 200)
         // Kept in step with UNICODE_CHUNK_UTF16_UNITS in src/shared/constants.ts.
-        #expect(TextChunker.chunks(of: String(repeating: "a", count: 100)).count == 5)
+        #expect(TextChunker.chunks(of: String(repeating: "a", count: 100)).count == 1)
+        #expect(TextChunker.chunks(of: String(repeating: "a", count: 500)).count == 3)
     }
 }

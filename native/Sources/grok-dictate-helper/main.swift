@@ -87,21 +87,7 @@ let usage = """
                             (default probe-out/expected.txt)
 
     ENVIRONMENT
-      GROK_DICTATE_INJECT_CHUNK       UTF-16 units per event (default 20)
-      GROK_DICTATE_INJECT_DELAY_MS    pause between chunks. Overrides the
-                                      length-based pacing, which otherwise types
-                                      at 5 ms up to 200 UTF-16 units and 15 ms
-                                      above it — a flat 5 ms burst of 38 events
-                                      is what a terminal dropped in full.
-      GROK_DICTATE_INJECT_TAP         hid | session (default hid)
-      GROK_DICTATE_INJECT_VERIFY      1 = measure whether the target's text
-                                      grew after typing. Off by default: a
-                                      false "not inserted" over text that
-                                      landed is worse than noticing a drop
-                                      yourself.
       GROK_DICTATE_MODIFIER_SETTLE_MS wait for held modifiers (default 500)
-      GROK_DICTATE_AX_SKIP            comma-separated bundle ids to skip the
-                                      AX tier for (default none)
       GROK_DICTATE_AX_VERIFY          0 = trust an AX write's return code
                                       instead of reading the caret back. On by
                                       default; off is how dictation silently

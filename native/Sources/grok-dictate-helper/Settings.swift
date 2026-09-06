@@ -1,40 +1,27 @@
 /// Runtime knobs, read from the environment.
 ///
-/// These are environment variables rather than constants for one specific
-/// reason:  leaves the injection chunk size and inter-chunk delay
-/// *unmeasured* — "real behaviour in VS Code, Cursor, iTerm, Slack is
-/// unverified" — and IMPLEMENTATION-PLAN.md §3.2 makes measuring them a
-/// human-in-the-loop test. Tuning a constant means a rebuild between every
-/// attempt; tuning an environment variable means the person at the keyboard can
-/// sweep the value in one sitting. Whatever the measurement lands on becomes
-/// the default here, and `docs/phase-2-report.md` records the evidence.
+/// These were environment variables rather than constants because Phase 2 left
+/// the injection chunk size and inter-chunk delay *unmeasured*, and tuning a
+/// constant means a rebuild between every attempt while tuning a variable means
+/// the person at the keyboard can sweep a value in one sitting.
+///
+/// **Four of them were removed on 2026-09-06** — `GROK_DICTATE_INJECT_CHUNK`,
+/// `_INJECT_DELAY_MS`, `_INJECT_TAP` and `_INJECT_VERIFY`. The measurement
+/// session they existed for concluded in August, the pacing and verification
+/// they steered are gone, and what is left is a constant in `TextChunker` and
+/// the HID tap. `GROK_DICTATE_AX_SKIP` went with them: it was the escape hatch
+/// for an application that lies about AX writes, it was never used once, and
+/// `InsertRouting` rule 3 now does the same job from what an application *does*
+/// rather than from a list of the ones somebody tested.
+///
+/// What replaced all five is one user-visible setting, `insertMethod`, which
+/// travels on the `insert` frame.
 
 import CoreGraphics
 import Foundation
 import HelperCore
 
 struct Settings {
-    /// UTF-16 units per `CGEventKeyboardSetUnicodeString` call.
-    let injectChunkUnits: Int
-    /// Pause between chunks, for text short enough not to need pacing. Zero is
-    /// legal and fastest; raise it if a target app drops characters.
-    ///
-    /// Since BUG-1 this is a *baseline*, not the delay: above
-    /// `InjectionPacer.longTextThresholdUTF16Units` the tier slows itself down,
-    /// because a flat 5 ms burst of 38 events is what cmux dropped.
-    let injectDelay: TimeInterval
-    /// `GROK_DICTATE_INJECT_DELAY_MS` was set and parsed. Only then does the
-    /// value above override the length rule — a typo must not silently restore
-    /// the timing that lost a minute of dictation. See `InjectionPacer`.
-    let injectDelayIsExplicit: Bool
-    /// Where injected events enter the system.
-    ///
-    /// `.cghidEventTap` puts them in at the HID level, which is what the
-    /// battle-tested tools (Espanso, cliclick, Karabiner) use and what reaches
-    /// the widest set of apps. `.cgAnnotatedSessionEventTap` enters later, past
-    /// the HID taps. Overridable because "which one works in Cursor" is an
-    /// empirical question this phase answers.
-    let injectTap: CGEventTapLocation
     /// How long to wait for physically-held modifiers to be released before
     /// injecting. See `UnicodeInserter` for why this exists at all.
     let modifierSettleTimeout: TimeInterval
@@ -48,10 +35,6 @@ struct Settings {
     /// **Off by default** — an automated test must never be able to pop a
     /// system dialog.
     let promptForAccessibility: Bool
-    /// Bundle identifiers to skip the AX tier for. See the note on
-    /// `InsertionLadder.axSkipBundleIds` — it is an escape hatch for an app
-    /// that reports a successful AX write and inserts nothing.
-    let axSkipBundleIds: Set<String>
     /// Read the caret back after an AX write and only report success if it
     /// moved (`AXWriteVerification`). **On by default**, and the only knob here
     /// whose default is on, because switching it off restores a silent
@@ -59,50 +42,16 @@ struct Settings {
     /// be bisected against a real application in one session — "is this app
     /// broken, or is my verification wrong?" is otherwise a rebuild away.
     let verifyAXWrites: Bool
-    /// Measure the focused element's text length around a Unicode injection and
-    /// report whether the text actually arrived (`UnicodeWriteVerification`).
-    /// **Off by default.** A false "not inserted" over text that is on screen
-    /// (cmux reporting AX length `0 → 0` while taking every character) is worse
-    /// than a silent drop the user will retry themselves. `GROK_DICTATE_INJECT_VERIFY=1`
-    /// turns the check back on for a session.
-    let verifyUnicodeWrites: Bool
     /// Skip installing the event tap. Used by the TypeScript conformance test
     /// for the same reason as `promptForAccessibility`: attempting to create a
     /// tap without Input Monitoring can raise a TCC prompt, and a test run that
     /// can put a modal on screen is a test run that can hang.
     let installTap: Bool
 
-    /// What the injection loop is handed before length is taken into account.
-    /// See `InjectionPacer.pacing(forUTF16Count:baseline:)`.
-    var injectionBaseline: InjectionPacer.Baseline {
-        InjectionPacer.Baseline(
-            chunkUnits: injectChunkUnits,
-            interChunkDelay: injectDelay,
-            delayIsExplicit: injectDelayIsExplicit
-        )
-    }
-
     static func fromEnvironment(_ environment: [String: String] = ProcessInfo.processInfo.environment)
         -> Settings
     {
-        let injectDelay = msSetting(
-            environment["GROK_DICTATE_INJECT_DELAY_MS"],
-            default: 5,
-            minimum: 0,
-            maximum: 250
-        )
-        return Settings(
-            injectChunkUnits: intValue(
-                environment["GROK_DICTATE_INJECT_CHUNK"],
-                default: TextChunker.defaultMaxUTF16Units,
-                minimum: 1,
-                maximum: 4096
-            ),
-            injectDelay: injectDelay.value,
-            injectDelayIsExplicit: injectDelay.isExplicit,
-            injectTap: environment["GROK_DICTATE_INJECT_TAP"]?.lowercased() == "session"
-                ? .cgAnnotatedSessionEventTap
-                : .cghidEventTap,
+        Settings(
             modifierSettleTimeout: msValue(
                 environment["GROK_DICTATE_MODIFIER_SETTLE_MS"],
                 default: 500,
@@ -123,14 +72,7 @@ struct Settings {
             ),
             dryRun: isTruthy(environment["GROK_DICTATE_HELPER_DRY_RUN"]),
             promptForAccessibility: isTruthy(environment["GROK_DICTATE_HELPER_PROMPT"]),
-            axSkipBundleIds: Set(
-                (environment["GROK_DICTATE_AX_SKIP"] ?? "")
-                    .split(separator: ",")
-                    .map { $0.trimmingCharacters(in: .whitespaces) }
-                    .filter { !$0.isEmpty }
-            ),
             verifyAXWrites: !isFalsy(environment["GROK_DICTATE_AX_VERIFY"]),
-            verifyUnicodeWrites: isTruthy(environment["GROK_DICTATE_INJECT_VERIFY"]),
             installTap: !isTruthy(environment["GROK_DICTATE_HELPER_NO_TAP"])
         )
     }

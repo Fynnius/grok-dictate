@@ -1,9 +1,7 @@
 /// Splits text into the units posted by a single `CGEventKeyboardSetUnicodeString`.
 ///
-/// : "some apps drop characters if you go too fast", with ~20
-/// UTF-16 units per event as the commonly-cited safe chunk. That number is a
-/// *ceiling*, and the interesting part of this file is the one place it is
-/// allowed to be exceeded.
+/// The ceiling is a *ceiling*, and the interesting part of this file is the one
+/// place it is allowed to be exceeded.
 ///
 /// **Chunks never split a grapheme cluster.** `CGEventKeyboardSetUnicodeString`
 /// takes UTF-16, and the naive implementation slices the UTF-16 array every 20
@@ -21,9 +19,28 @@
 import Foundation
 
 public enum TextChunker {
-    /// , and `UNICODE_CHUNK_UTF16_UNITS` in
-    /// `src/shared/constants.ts`, which carries the same citation.
-    public static let defaultMaxUTF16Units = 20
+    /// UTF-16 units per `CGEventKeyboardSetUnicodeString` call.
+    ///
+    /// **Was 20 until 2026-09-06, on folklore.** The number came from 2015-era
+    /// reports against Quicksilver and Qt that the call truncates at about
+    /// twenty. `--probe-chunk` sets N units on a real event and reads them back
+    /// off the same event: 20, 200, 1,000 and 2,000 all round-trip intact on
+    /// macOS 26.6. Whatever those reports hit, it is not the API on this OS.
+    ///
+    /// 200 is FluidVoice's shipping value and gives 10× fewer events for the
+    /// same text, which is 10× less exposure to whatever coalesces or
+    /// intercepts them.
+    ///
+    /// **Measured for the API, not for any target.** Whether a given
+    /// application *accepts* a 200-unit event is a different question and this
+    /// says nothing about it. If one turns out not to, the fix is this constant
+    /// and a rebuild — the environment knob that used to allow sweeping it
+    /// without one was removed with the rest of the August measurement
+    /// scaffolding. A known limit rather than an overlooked one.
+    ///
+    /// Kept in step with `UNICODE_CHUNK_UTF16_UNITS` in
+    /// `src/shared/constants.ts`.
+    public static let defaultMaxUTF16Units = 200
 
     public static func chunks(of text: String, maxUTF16Units: Int = defaultMaxUTF16Units) -> [String] {
         let limit = max(1, maxUTF16Units)

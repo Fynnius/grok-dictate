@@ -88,7 +88,6 @@ final class HelperApp {
             accessibility: accessibility,
             unicode: unicode,
             frontmost: workspace,
-            axSkipBundleIds: settings.axSkipBundleIds,
             log: { [weak self] level, message in
                 self?.emit(.log(level: level, message: message))
             }
@@ -140,17 +139,6 @@ final class HelperApp {
                     message:
                         "GROK_DICTATE_AX_VERIFY is off — an AX write will be trusted on its return "
                         + "code alone, so an app that discards it silently loses the dictation"
-                )
-            )
-        }
-
-        if settings.verifyUnicodeWrites {
-            emit(
-                .log(
-                    level: .info,
-                    message:
-                        "GROK_DICTATE_INJECT_VERIFY is on — injected text will be measured against "
-                        + "the target's AX length after typing"
                 )
             )
         }

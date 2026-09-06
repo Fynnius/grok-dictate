@@ -98,10 +98,17 @@ export const MAX_RECORDING_MS = 6 * 60 * 1000;
 export const MAX_UTTERANCE_BUFFER_BYTES = (MAX_RECORDING_MS / 1000) * BYTES_PER_SECOND;
 
 /**
- * Unicode injection chunking. : "~20 UTF-16 units per event as
- * the commonly-cited safe chunk". Phase 2 tunes the delay empirically.
+ * Unicode injection chunking, and the mirror of
+ * `TextChunker.defaultMaxUTF16Units` in the helper — that file carries the
+ * reasoning.
+ *
+ * Was 20 until 2026-09-06, from 2015-era reports that
+ * `CGEventKeyboardSetUnicodeString` truncates at about twenty units. Measured
+ * on macOS 26.6 with `--probe-chunk`, it does not truncate at 20, 200, 1,000 or
+ * 2,000. 200 is FluidVoice's value and means 10× fewer events for the same
+ * text.
  */
-export const UNICODE_CHUNK_UTF16_UNITS = 20;
+export const UNICODE_CHUNK_UTF16_UNITS = 200;
 
 /**
  * Margin before `expires_at` at which the token is treated as already expired,

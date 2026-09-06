@@ -314,6 +314,6 @@ The drain is bounded by a short timer in `CaptureCoordinator` (`DRAIN_TIMEOUT_MS
 | `ok`, otherwise        | `inserted` — the same green check     | `inserted: true, verified: null` | none    |
 | `!ok`                  | `not_inserted` — wordless red capsule | `inserted: false`                | `error` |
 
-**`ok: true` with `verified` not `true` means "typed, unconfirmed" on the wire and in history.** The HUD does not overlay a paragraph for it — a false "not inserted" / "typed, unconfirmed" pill over text that landed was worse than a silent drop the user will retry with ⌃⌘V. Unicode length-checking is off unless `GROK_DICTATE_INJECT_VERIFY=1`.
+**`ok: true` with `verified` not `true` means "typed, unconfirmed" on the wire and in history.** The HUD does not overlay a paragraph for it — a false "not inserted" / "typed, unconfirmed" pill over text that landed was worse than a silent drop the user will retry with ⌃⌘V. Since 2026-09-06 the Unicode tier never reports anything but `null`; the paste tier is the one that can say `true`, on a read receipt from the OS.
 
 Two deliberate trades. The unconfirmed pill plays **no error cue**: verification is impossible for a whole class of ordinary targets, so a cue there would fire on good dictations and train the user to ignore the one sound that means something. And `verification_failed` — posted, and proven not to have landed — arrives with `tier: 'unicode'`, because the tier that _ran_ is what a history row should name; nothing may read `tier === 'none'` as "it failed".
