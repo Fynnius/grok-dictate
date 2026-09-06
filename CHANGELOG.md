@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-09-06
+
 Dictation now pastes instead of typing, where pasting is better — and it costs you your clipboard.
 
 ### Changed
@@ -20,6 +22,14 @@ Dictation now pastes instead of typing, where pasting is better — and it costs
 - **The app can now say the text arrived and mean it.** Every earlier "verified" was the app measuring a side effect and inferring from it — and in the application where most dictations land there was no side effect to measure, so it could say nothing at all. A paste comes with a read receipt from the operating system: the target asked us for the text. History shows `inserted · paste`.
 
 - **Typing sends 10× fewer events.** The 20-UTF-16-unit ceiling per keystroke event was folklore from a 2015-era bug report; measured on macOS 26.6, the API does not truncate at 20, 200, 1,000 or 2,000. It is now 200.
+
+- **A brush of `Fn` shorter than 200 ms no longer opens the microphone.** It used to start a turn, show the spinner, then report that the microphone sent no sound. The hold now cancels from recording: no processing, no STT, no error. Distinct from the silence gate in 0.2.0, which still talked to the server.
+
+- **Click the error pill, or press `Fn`, to dismiss it** without starting a new turn.
+
+- **The pill can be dragged.** It still sits at the bottom-centre the next time the app launches.
+
+- **Start and stop are struck glass, not a sine sweep.** The stop cue does not play over the error cue.
 
 ### Removed
 
