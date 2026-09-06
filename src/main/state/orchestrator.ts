@@ -65,15 +65,14 @@ export interface OrchestratorDeps {
   /**
    * How long to wait after the start cue before muting output.
    * Production: start-cue duration + 15 ms pad. Tests pass 0 so they stay
-   * synchronous. **Chosen, not measured:** the cue is 55 ms by spec; 15 ms
-   * covers executeJavaScript scheduling without delaying first PCM (capture
-   * already started).
+   * synchronous. **Chosen, not measured:** 15 ms covers executeJavaScript
+   * scheduling without delaying first PCM (capture already started).
    */
   readonly muteAfterCueMs?: number;
   /**
-   * How long to wait after unmute before playing the stop cue, so a device
-   * mute does not swallow it. **Chosen, not measured:** CoreAudio property
-   * sets are typically <10 ms; 25 ms is well under the 55 ms cue. Tests pass 0.
+   * How long to wait after unmute before playing a cue, so a device mute
+   * does not swallow it. **Chosen, not measured:** CoreAudio property sets
+   * are typically <10 ms; 25 ms is well under the start/stop cue. Tests pass 0.
    */
   readonly unmuteBeforeCueMs?: number;
 }
@@ -642,18 +641,27 @@ export class Orchestrator {
   }
 
   #playCue(cue: AudioCue): void {
+    // One cue in flight. A dead microphone does PTT_UP (schedules `stop` after
+    // unmute) and then TURN_ENDED (`error`) a few milliseconds later. Playing
+    // both is a chord; the later cue wins.
+    if (this.#cueTimer !== null) {
+      clearTimeout(this.#cueTimer);
+      this.#cueTimer = null;
+    }
+
     const play = (): void => {
+      this.#cueTimer = null;
+      this.#awaitingUnmuteCue = false;
       if (this.#deps.config.get().audioCues) this.#deps.sound.play(cue);
     };
-    if (cue === 'stop' && this.#awaitingUnmuteCue) {
-      this.#awaitingUnmuteCue = false;
+
+    // `start` is played *before* mute; a leftover flag from Esc must not
+    // delay it. `stop` and `error` follow unmute and have to wait or the
+    // device-level mute swallows them.
+    if (this.#awaitingUnmuteCue && cue !== 'start') {
       const gap = this.#deps.unmuteBeforeCueMs ?? 25;
       if (gap > 0) {
-        if (this.#cueTimer !== null) clearTimeout(this.#cueTimer);
-        this.#cueTimer = setTimeout(() => {
-          this.#cueTimer = null;
-          play();
-        }, gap);
+        this.#cueTimer = setTimeout(play, gap);
         this.#cueTimer.unref?.();
         return;
       }

@@ -12,7 +12,7 @@
  * events in and observable calls out.
  */
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryConfig, MemoryHistory, MemoryHud, MemorySound, MemoryTray } from '@mocks/mock-ui.js';
 import type { AppConfig, HotkeyBindings } from '@contracts/config.js';
 import type {
@@ -163,6 +163,7 @@ interface Harness {
   helper: StubHelper;
   hud: MemoryHud;
   history: MemoryHistory;
+  sound: MemorySound;
 }
 
 const live: Orchestrator[] = [];
@@ -172,28 +173,35 @@ afterEach(() => {
   clearLogSinks();
 });
 
-function harness(options: { eagerDrain?: boolean; config?: Partial<AppConfig> } = {}): Harness {
+function harness(
+  options: {
+    eagerDrain?: boolean;
+    config?: Partial<AppConfig>;
+    unmuteBeforeCueMs?: number;
+  } = {},
+): Harness {
   const audio = new ScriptedAudio(options.eagerDrain ?? false);
   const stt = new ScriptedStt();
   const helper = new StubHelper();
   const hud = new MemoryHud();
   const history = new MemoryHistory();
+  const sound = new MemorySound();
   const orchestrator = new Orchestrator({
     native: helper,
     audio,
     stt,
     hud,
     tray: new MemoryTray(),
-    sound: new MemorySound(),
+    sound,
     history,
     config: new MemoryConfig(options.config),
     logger: createLogger('orchestrator-test'),
     tickIntervalMs: 0,
     muteAfterCueMs: 0,
-    unmuteBeforeCueMs: 0,
+    unmuteBeforeCueMs: options.unmuteBeforeCueMs ?? 0,
   });
   live.push(orchestrator);
-  return { orchestrator, audio, stt, helper, hud, history };
+  return { orchestrator, audio, stt, helper, hud, history, sound };
 }
 
 const pcm = (fill: number): Uint8Array => new Uint8Array(8).fill(fill);
@@ -398,6 +406,44 @@ describe('mute around recording (2026-08-22)', () => {
     orchestrator.dispatch({ type: 'PTT_DOWN', ts: 1 });
     orchestrator.dispatch({ type: 'CANCEL' });
     expect(helper.mutes.at(-1)).toBe('unmute');
+  });
+
+  it('does not let a delayed stop land on top of an error', () => {
+    // A dead microphone: PTT_UP schedules `stop` 25 ms after unmute, then
+    // TURN_ENDED with no words fires `error`. Playing both is the chord.
+    vi.useFakeTimers();
+    const { orchestrator, sound } = harness({ unmuteBeforeCueMs: 30 });
+    try {
+      orchestrator.dispatch({ type: 'PTT_DOWN', ts: 1 });
+      const sessionId = orchestrator.snapshot.ctx.sessionId ?? '';
+      orchestrator.dispatch({ type: 'PTT_UP', ts: 2 });
+      expect(sound.cues).toEqual(['start']);
+
+      orchestrator.dispatch({ type: 'TURN_ENDED', sessionId, durationSec: 0 });
+      expect(sound.cues).toEqual(['start']);
+
+      vi.advanceTimersByTime(30);
+      expect(sound.cues).toEqual(['start', 'error']);
+
+      vi.advanceTimersByTime(30);
+      expect(sound.cues).toEqual(['start', 'error']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still plays stop after unmute when the turn did not fail', () => {
+    vi.useFakeTimers();
+    const { orchestrator, sound } = harness({ unmuteBeforeCueMs: 30 });
+    try {
+      orchestrator.dispatch({ type: 'PTT_DOWN', ts: 1 });
+      orchestrator.dispatch({ type: 'PTT_UP', ts: 2 });
+      expect(sound.cues).toEqual(['start']);
+      vi.advanceTimersByTime(30);
+      expect(sound.cues).toEqual(['start', 'stop']);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
