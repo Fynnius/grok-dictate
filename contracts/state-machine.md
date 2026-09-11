@@ -6,7 +6,7 @@
 
 **Reopened 2026-08-22 (latency/honesty pass).** Three additive effects, none of which change the state diagram:
 
-1. `mute_output` / `unmute_output` — system output mutes after the start cue and restores before the stop cue, on every path that leaves `recording` (release, Esc, error, cap, blocked, server-ended turn, quit). Capture still starts first; mute must not delay first PCM.
+1. `mute_output` / `unmute_output` — system output mutes after the start cue and restores before the stop cue, on every path that leaves `recording` (release, Esc, error, cap, blocked, server-ended turn, quit). Capture still starts first; the start cue (and therefore mute) waits for the device to actually open so the cue is not a lie. Mute must not delay first PCM.
 2. `SILENCE_GATED` — an orchestrator-injected event after drain, when the utterance was short _and_ silent _and_ no partial text arrived. `processing` → `idle` with `abort_stt` and `hud(hidden)`, not an error. Distinct from `NO_SPEECH_TIMEOUT_MS`.
 3. `liveHudText` is snapshotted per turn like `repairSeams`. Off blanks `HudView.interim` on the way out; the context still keeps the real preview for salvage and the silence gate.
 

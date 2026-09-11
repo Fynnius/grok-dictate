@@ -12,6 +12,12 @@ final class CaptureApp {
 
     init(dryRun: Bool) {
         self.dryRun = dryRun
+        // Warm the graph before the first hold so Fn-down is "start hardware",
+        // not "construct an engine". Does not open the device; skipped when
+        // microphone permission is not yet granted (see CaptureEngine).
+        if !dryRun {
+            engine.prepareIdle(sampleRate: 16_000)
+        }
     }
 
     func startReadingStdin() {
@@ -45,6 +51,7 @@ final class CaptureApp {
         } else {
             finishStop(dropTail: true)
         }
+        engine.dispose()
     }
 
     private func consume(_ line: LineReader.Line) {

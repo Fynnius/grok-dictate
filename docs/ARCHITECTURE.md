@@ -91,12 +91,15 @@ show live interim text. Hold-mode stays click-through.
 
 ## Audio graph
 
-Native capture is primary: `grok-dictate-capture` opens the default input at
-press, converts to 16 kHz mono PCM16, and emits 100 ms / 3200-byte chunks.
-The microphone is never pre-warmed — the process may be running idle, but the
-device opens only on `start`, which is what lights the orange indicator.
-Capture is raw (no echo cancellation, noise suppression, or AGC). The
-`micProcessing` setting is Chromium-only.
+Native capture is primary: `grok-dictate-capture` prepares the AVAudioEngine
+graph at process launch (`prepare()`, no IO) and **pauses** it between holds
+so those allocations survive. `start` only installs the tap and starts
+hardware — that is what lights the orange indicator. `AVAudioEngine.stop()`
+would release `prepare()` and make every press a cold HAL open, which clipped
+the first word of a hold. Capture is raw 16 kHz mono PCM16 in 100 ms /
+3200-byte chunks (no echo cancellation, noise suppression, or AGC). The
+`micProcessing` setting is Chromium-only. The start cue waits for the device
+to actually be open.
 
 When the native binary is missing, the hidden capture renderer is the
 fallback. That path keeps one `AudioContext` and worklet across dictations

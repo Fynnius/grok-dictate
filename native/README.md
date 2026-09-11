@@ -32,7 +32,7 @@ lint with its own `.json` and `.yaml` files. `.prettierignore` belongs to Phase
 | `HelperCore`           | Pure logic — protocol, framing, hotkey recognition, chunking, the insertion ladder and the two AX policies. No CoreGraphics, no AppKit, no AX. |
 | `grok-dictate-helper`  | The thin shell binding that logic to `CGEventTap`, the AX API, `NSWorkspace`, `NSPasteboard` and `IsSecureEventInputEnabled`.                  |
 | `CaptureCore`          | Pure PCM chunking, RMS, and the capture JSON protocol. No CoreAudio.                                                                           |
-| `grok-dictate-capture` | AVAudioEngine + HAL input tap. Opens the microphone only on `start`.                                                                           |
+| `grok-dictate-capture` | AVAudioEngine + HAL input tap. Graph is prepared at launch; the microphone opens only on `start`.                                              |
 
 The split is what makes the interesting parts testable: `swift test` runs
 headless, with no windowserver and no TCC grants, and covers the whole hotkey

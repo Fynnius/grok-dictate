@@ -44,11 +44,18 @@ class ScriptedAudio implements AudioSourcePort {
   readonly cancelled: string[] = [];
 
   /** `true` mimics `MockAudioSource`, which drains inside `stop()`. */
-  constructor(private readonly eagerDrain = false) {}
+  constructor(
+    private readonly eagerDrain = false,
+    readonly announceStart = true,
+  ) {}
 
   start(sessionId: string, handlers: AudioHandlers): void {
     this.sessionId = sessionId;
     this.handlers = handlers;
+    // Mirrors a capture adapter that opens synchronously (tests that do not
+    // care about device-open latency). Pass `announceStart: false` to drive
+    // `onStarted` by hand.
+    if (this.announceStart) handlers.onStarted(16_000);
   }
   /** Deliberately does NOT drain unless asked: the test decides when the tail is in. */
   stop(sessionId: string): void {
@@ -190,12 +197,13 @@ afterEach(() => {
 function harness(
   options: {
     eagerDrain?: boolean;
+    announceStart?: boolean;
     config?: Partial<AppConfig>;
     unmuteBeforeCueMs?: number;
     env?: MachineEnv;
   } = {},
 ): Harness {
-  const audio = new ScriptedAudio(options.eagerDrain ?? false);
+  const audio = new ScriptedAudio(options.eagerDrain ?? false, options.announceStart ?? true);
   const stt = new ScriptedStt();
   const helper = new StubHelper();
   const hud = new MemoryHud();
@@ -470,6 +478,24 @@ describe('mute around recording (2026-08-22)', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('plays the start cue when the device opens, not when capture is requested', () => {
+    const { orchestrator, audio, sound, helper } = harness({ announceStart: false });
+    orchestrator.dispatch({ type: 'PTT_DOWN', ts: 1 });
+    expect(sound.cues).toEqual([]);
+    expect(helper.mutes).toEqual([]);
+    audio.handlers?.onStarted(16_000);
+    expect(sound.cues).toEqual(['start']);
+    expect(helper.mutes).toEqual(['mute']);
+  });
+
+  it('does not play a late start cue after cancel', () => {
+    const { orchestrator, audio, sound } = harness({ announceStart: false });
+    orchestrator.dispatch({ type: 'PTT_DOWN', ts: 1 });
+    orchestrator.dispatch({ type: 'CANCEL' });
+    audio.handlers?.onStarted(16_000);
+    expect(sound.cues).toEqual([]);
   });
 });
 

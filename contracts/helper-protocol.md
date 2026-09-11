@@ -271,7 +271,7 @@ Remove the event tap, restore output if this process muted it, flush stdout, exi
 
 Mute the default output device. **Added 2026-08-22.** Fire-and-forget, no reply — the same shape as `copy`. Prefer the device's hardware mute over volume-to-zero. Snapshot what changed (device UID, mute-vs-volume, previous value) so restore can refuse to clobber a user who unmuted or moved the volume themselves.
 
-Must not delay capture: the app sends this _after_ the microphone is opening and _after_ the start cue has been asked to play.
+Must not delay capture: the app sends this _after_ the microphone is open and _after_ the start cue has been asked to play.
 
 ### `unmute_output`
 

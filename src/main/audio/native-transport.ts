@@ -7,7 +7,8 @@
  * synthesise renderer-shaped messages the coordinator already handles.
  *
  * The process may be running while idle — spawning is not opening the
- * microphone. The binary opens the device only when it receives `start`.
+ * microphone. The binary prepares the capture graph at launch and opens
+ * the device only when it receives `start`.
  */
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
@@ -180,7 +181,10 @@ export class NativeCaptureTransport implements CaptureTransport {
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', (chunk: string) => {
       const text = chunk.trimEnd();
-      if (text.length > 0) this.#log.warn('capture stderr', { text });
+      if (text.length === 0) return;
+      // `engine start N ms (warm|cold)` is a successful diagnostic, not a fault.
+      if (/engine start \d+ ms/.test(text)) this.#log.info('capture', { text });
+      else this.#log.warn('capture stderr', { text });
     });
 
     let settled = false;

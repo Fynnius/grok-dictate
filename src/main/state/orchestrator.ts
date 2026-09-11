@@ -130,6 +130,15 @@ export class Orchestrator {
   #muteTimer: NodeJS.Timeout | null = null;
   #cueTimer: NodeJS.Timeout | null = null;
   #awaitingUnmuteCue = false;
+  /**
+   * The start cue means "we are listening". Playing it at `PTT_DOWN` trained
+   * people to talk into a device that was still opening — the first word of
+   * every hold. It is held until `onStarted` (hardware actually capturing).
+   * Mute is scheduled from the same moment so it cannot swallow the cue.
+   */
+  #pendingStartCue = false;
+  #muteAfterStartCue = false;
+  #captureOpen = false;
 
   constructor(deps: OrchestratorDeps) {
     this.#deps = deps;
@@ -264,10 +273,16 @@ export class Orchestrator {
           onError: (error) => this.dispatch({ type: 'SESSION_ERROR', sessionId, error }),
           onDrained: () => this.#onDrained(sessionId),
           onStarted: (actualSampleRate) => {
+            // A late `capture-started` after cancel or release must not play
+            // the start cue into a session that is already over.
+            if (this.#snapshot.ctx.sessionId !== sessionId) return;
+            if (this.#snapshot.state !== 'recording') return;
+            this.#captureOpen = true;
             // Assumption 10.4: verify the context really runs at 16 kHz rather
             // than resampling twice (device → 48 k → 16 k).
             this.#log.info('capture started', { actualSampleRate });
             this.#mark('device_open');
+            this.#flushStartCue();
           },
         });
         this.#beginTiming(sessionId);
@@ -282,11 +297,16 @@ export class Orchestrator {
         // with nothing recorded and the later `finish_stt` would wait for a
         // drain that had already happened.
         this.#draining.set(effect.sessionId, { finishRequested: false });
+        this.#pendingStartCue = false;
+        this.#captureOpen = false;
         audio.stop(effect.sessionId);
         this.#clearTimers();
         return;
 
       case 'cancel_capture':
+        this.#pendingStartCue = false;
+        this.#muteAfterStartCue = false;
+        this.#captureOpen = false;
         audio.cancel(effect.sessionId);
         // Esc and a failed session both discard the audio, so there is nothing
         // to drain for and no turn left to finish.
@@ -410,11 +430,18 @@ export class Orchestrator {
       }
 
       case 'mute_output': {
-        this.#scheduleMute();
+        this.#muteAfterStartCue = true;
+        // If the start cue has already played (device was open before this
+        // effect, the ScriptedAudio/sync case), schedule from here. If the
+        // cue is still waiting on `onStarted`, `#flushStartCue` schedules.
+        if (this.#captureOpen && !this.#pendingStartCue) this.#scheduleMute();
         return;
       }
 
       case 'unmute_output': {
+        this.#muteAfterStartCue = false;
+        this.#pendingStartCue = false;
+        this.#captureOpen = false;
         this.#unmuteNow();
         return;
       }
@@ -441,6 +468,12 @@ export class Orchestrator {
         return;
 
       case 'cue':
+        if (effect.cue === 'start') {
+          this.#pendingStartCue = true;
+          if (this.#captureOpen) this.#flushStartCue();
+          return;
+        }
+        this.#pendingStartCue = false;
         this.#playCue(effect.cue);
         return;
 
@@ -619,6 +652,13 @@ export class Orchestrator {
     const elapsedMs = timing.elapsed(now);
     this.#emitMark('summary', elapsedMs, timing.summaryFields(now));
     this.#timing = null;
+  }
+
+  #flushStartCue(): void {
+    if (!this.#pendingStartCue) return;
+    this.#pendingStartCue = false;
+    this.#playCue('start');
+    if (this.#muteAfterStartCue) this.#scheduleMute();
   }
 
   #scheduleMute(): void {

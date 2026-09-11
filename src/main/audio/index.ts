@@ -6,9 +6,11 @@
  * full-utterance buffer — is assembled here so the composition root never
  * learns which adapter is in use.
  *
- * Native `grok-dictate-capture` is the primary adapter. The Chromium capture
- * window is created only when that binary is missing, so a machine with the
- * native path never opens an AudioContext or a getUserMedia stream.
+ * Native `grok-dictate-capture` is the primary adapter. The process is spawned
+ * at app start and prepares its AVAudioEngine graph while idle; the device
+ * still opens only on `start`. The Chromium capture window is created only
+ * when that binary is missing, so a machine with the native path never opens
+ * an AudioContext or a getUserMedia stream.
  *
  * ## How the capture messages get here
  *
@@ -155,8 +157,9 @@ function createChromiumAudioSource(
   // Created eagerly at startup — not lazily on the first hold — so the first
   // dictation of the session does not pay for window creation and worklet
   // compilation. The microphone is still opened only when recording starts:
-  // an existing window holds no device. This path is the fallback; the native
-  // adapter never constructs this window.
+  // an existing window holds no device. Native capture prepares its graph
+  // the same way (see CaptureEngine.prepareIdle). This path is the fallback;
+  // the native adapter never constructs this window.
   void app.whenReady().then(async () => {
     try {
       await window.create();

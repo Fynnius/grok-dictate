@@ -424,8 +424,9 @@ function startSession(ctx: SessionContext, mode: SessionMode, env: MachineEnv): 
     { type: 'hud', view: recordingView(next) },
     { type: 'tray', state: 'recording', secureInput: next.secureInput },
     { type: 'cue', cue: 'start' },
-    // After the start cue, never before capture. The orchestrator delays the
-    // helper command until the cue has been asked to play so a device-level
+    // The orchestrator holds the start cue until the device is actually open
+    // (`onStarted`). Playing it at press trained people to talk into a closed
+    // microphone. Mute is scheduled from that same moment so a device-level
     // mute cannot swallow the only eyes-free confirmation that the mic opened.
     ...muteEffect(next),
   ]);

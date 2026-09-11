@@ -18,8 +18,9 @@
 //                             no STT.
 //   CaptureCore             — pure PCM chunking, RMS and the capture JSON
 //                             protocol. No CoreAudio, no AVFoundation.
-//   grok-dictate-capture    — AVAudioEngine + the HAL input tap. Opens the
-//                             microphone only on `start`.
+//   grok-dictate-capture    — AVAudioEngine + the HAL input tap. Prepares the
+//                             graph at launch; opens the microphone only on
+//                             `start`.
 //
 // LANGUAGE MODE — deliberate, and the one non-obvious choice in this file.
 // The package builds in Swift 5 language mode rather than Swift 6. The helper

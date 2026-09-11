@@ -135,6 +135,33 @@ describe.skipIf(!lookup.found)('the built capture binary', () => {
     });
   });
 
+  it('answers a second start after stop (the graph-reuse path)', async () => {
+    proc = new CaptureUnderTest();
+    proc.sendRaw(
+      JSON.stringify({ type: 'start', sessionId: 's1', sampleRate: 16_000, chunkBytes: 3200 }),
+    );
+    await proc.waitForLine(
+      (l) => l.includes('"sessionId":"s1"') && l.includes('"started"'),
+      's1 started',
+    );
+    proc.sendRaw(JSON.stringify({ type: 'stop', sessionId: 's1' }));
+    await proc.waitForLine(
+      (l) => l.includes('"sessionId":"s1"') && l.includes('"drained"'),
+      's1 drained',
+    );
+    proc.sendRaw(
+      JSON.stringify({ type: 'start', sessionId: 's2', sampleRate: 16_000, chunkBytes: 3200 }),
+    );
+    const started = await proc.waitForLine(
+      (l) => l.includes('"sessionId":"s2"') && l.includes('"started"'),
+      's2 started',
+    );
+    expect(parseCaptureFrame(started)).toEqual({
+      ok: true,
+      value: { type: 'started', sessionId: 's2', actualSampleRate: 16_000 },
+    });
+  });
+
   it('exits 0 when the app closes stdin', async () => {
     proc = new CaptureUnderTest();
     proc.sendRaw(

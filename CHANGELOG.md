@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Dictation captures through a native Core Audio process** (`grok-dictate-capture`) instead of Chromium `getUserMedia`, when that binary is present. Same 16 kHz mono PCM16, same 100 ms chunks, microphone still opens only when you press. The hidden capture window is created only as a fallback if the binary is missing.
 - **Settings → Dictation → Speech model.** _Standard_ (the default) still uses the xAI API with the stored API key / Grok CLI login. _STT 2 Fast_ is `grok-stt-2-fast`, the model grok.com composer dictate uses; it needs the grok.com sign-in above, not the public `api.x.ai` socket.
 
+### Fixed
+
+- **The first word of a hold is no longer cut off waiting for the microphone.** Every Fn press used to construct a new `AVAudioEngine`, `prepare()` it, and `stop()` it at release — and `stop()` throws away the prepare, so the next press paid a cold HAL open (a few hundred milliseconds of speech that never became a sample). The graph is now prepared at launch and **paused** between holds; the orange indicator still only lights while hardware is running. The start cue waits until the device is actually open, so it means "we are listening" rather than "we saw the key".
+
 ## [0.3.0] — 2026-09-06
 
 Dictation now pastes instead of typing, where pasting is better — and it costs you your clipboard.

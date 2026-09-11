@@ -21,7 +21,8 @@
 ///
 /// Unknown stdin lines: log to stderr, do not die.
 /// A close of stdin or SIGTERM: stop the device if open, drain, exit 0.
-/// The microphone is opened only on `start`, never at process launch.
+/// The capture graph is prepared at process launch (no IO, no orange
+/// indicator). The microphone is opened only on `start`.
 
 import Foundation
 
@@ -36,8 +37,9 @@ let usage = """
 
     Native microphone capture for Grok Dictate. With no arguments it speaks the
     JSON-lines protocol documented at the top of main.swift over stdin/stdout.
-    The device is opened only on start, and capture is raw — no echo
-    cancellation, noise suppression, or automatic gain.
+    The capture graph is prepared at launch; the device is opened only on
+    start. Capture is raw — no echo cancellation, noise suppression, or
+    automatic gain.
 
     MODES
       (no arguments)        protocol mode
