@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Microphone processing is off by default.** Chromium echo cancellation, noise suppression and auto-gain were always requested, which is what a phone call wants and not what a recogniser wants. The Grok CLI captures raw, and this app mutes other audio while you talk, so there is usually nothing to cancel. Settings → Dictation → Microphone processing turns the three flags back on together. Native capture ignores the setting — it is already raw.
+- **Dictation captures through a native Core Audio process** (`grok-dictate-capture`) instead of Chromium `getUserMedia`, when that binary is present. Same 16 kHz mono PCM16, same 100 ms chunks, microphone still opens only when you press. The hidden capture window is created only as a fallback if the binary is missing.
 - **Settings → Dictation → Speech model.** _Standard_ (the default) still uses the xAI API with the stored API key / Grok CLI login. _STT 2 Fast_ is `grok-stt-2-fast`, the model grok.com composer dictate uses; it needs the grok.com sign-in above, not the public `api.x.ai` socket.
 
 ## [0.3.0] — 2026-09-06

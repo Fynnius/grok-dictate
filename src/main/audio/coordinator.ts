@@ -45,6 +45,12 @@ export interface CoordinatorOptions {
    * which needs Electron.
    */
   readonly checkPermission?: () => AppError | null;
+  /**
+   * Chromium telephony DSP (echo cancellation, noise suppression, auto-gain).
+   * Consulted at `start()`, so a settings change takes effect on the next hold.
+   * Missing or false → all three off. A native adapter ignores this.
+   */
+  readonly micProcessing?: () => boolean;
 }
 
 interface Utterance {
@@ -98,6 +104,7 @@ export class CaptureCoordinator implements AudioSourcePort {
   readonly #maxBufferBytes: number;
   readonly #checkPermission: () => AppError | null;
   readonly #drainTimeoutMs: number;
+  readonly #micProcessing: () => boolean;
 
   readonly #buffers = new Map<string, Utterance>();
   #active: ActiveSession | null = null;
@@ -108,6 +115,7 @@ export class CaptureCoordinator implements AudioSourcePort {
     this.#maxBufferBytes = options.maxBufferBytes ?? MAX_UTTERANCE_BUFFER_BYTES;
     this.#checkPermission = options.checkPermission ?? (() => null);
     this.#drainTimeoutMs = options.drainTimeoutMs ?? DRAIN_TIMEOUT_MS;
+    this.#micProcessing = options.micProcessing ?? (() => false);
   }
 
   /* ---------------- AudioSourcePort ---------------- */
@@ -150,6 +158,7 @@ export class CaptureCoordinator implements AudioSourcePort {
       sessionId,
       sampleRate: SAMPLE_RATE_HZ,
       chunkBytes: CHUNK_BYTES,
+      micProcessing: this.#micProcessing(),
     });
   }
 
@@ -333,11 +342,10 @@ export class CaptureCoordinator implements AudioSourcePort {
     const session = this.#forSession(sessionId);
     if (session === null) return;
 
-    // What Chromium's audio processing actually applied, as opposed to what the
-    // renderer asked for. It is tuned for telephony rather than for a
-    // recogniser, and whether it helps accuracy here has never been measured —
-    // which is impossible without these values sitting in the log beside the
-    // transcript they produced. See `AUDIO_CONSTRAINTS` in the capture renderer.
+    // What Chromium's audio processing actually applied, as opposed to what
+    // `capture-start.micProcessing` asked for. The request is all-on or
+    // all-off together; Chromium may still apply something else. Logging the
+    // applied values is what makes a transcript comparison possible.
     if (trackSettings !== undefined) {
       this.#log.info('microphone processing as applied by the device', {
         sessionId,

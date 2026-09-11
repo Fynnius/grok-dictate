@@ -112,8 +112,8 @@ The token is never logged, never written to history, and never sent to the Swift
 └──────────────────────────────┬───────────────────────────┘
                                │
    ┌──────────────┬────────────┴───┬──────────────┬────────┐
-   │ native/      │ audio/ + stt/  │ hud/ tray/   │ history│
-   │ Swift helper │ mic + xAI ws   │ windows      │ config │
+   │ native/                │ stt/          │ hud/ tray/   │ history│
+   │ helper + capture       │ xAI websocket │ windows      │ config │
    └──────────────┴────────────────┴──────────────┴────────┘
 ```
 

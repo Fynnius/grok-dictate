@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
-# Builds the native helper and leaves it at native/build/grok-dictate-helper.
+# Builds the native binaries and leaves them at native/build/.
 #
-# That path is deliberate: `helperSpawnSpec()` in src/main/native/index.ts looks
-# there in development, and a packaged build copies the same file into the app
-# bundle's Resources. One well-known location, so nothing has to be threaded
-# through a config.
+# Those paths are deliberate: `helperSpawnSpec()` and `resolveCaptureBinary()`
+# look there in development, and a packaged build copies the same files into
+# the app bundle's Resources. One well-known location, so nothing has to be
+# threaded through a config.
 #
 # arm64 only. Assumption 10.7 in the braindump — "single user, single machine,
 # macOS aarch64" — and building a universal binary would double the build for a
@@ -15,7 +15,8 @@ cd "$(dirname "$0")"
 
 CONFIGURATION="${CONFIGURATION:-release}"
 OUTPUT_DIR="build"
-OUTPUT="$OUTPUT_DIR/grok-dictate-helper"
+HELPER_OUTPUT="$OUTPUT_DIR/grok-dictate-helper"
+CAPTURE_OUTPUT="$OUTPUT_DIR/grok-dictate-capture"
 
 # SwiftPM's scratch directory goes to out/ rather than native/.build.
 #
@@ -35,7 +36,8 @@ echo "building ($CONFIGURATION)…"
 swift build -c "$CONFIGURATION" --scratch-path "$SCRATCH" -Xswiftc -warnings-as-errors
 
 mkdir -p "$OUTPUT_DIR"
-cp -f "$SCRATCH/$CONFIGURATION/grok-dictate-helper" "$OUTPUT"
+cp -f "$SCRATCH/$CONFIGURATION/grok-dictate-helper" "$HELPER_OUTPUT"
+cp -f "$SCRATCH/$CONFIGURATION/grok-dictate-capture" "$CAPTURE_OUTPUT"
 
 # The AX API requires a signed binary (braindump §4.6). Ad-hoc is enough in
 # development. Note that an ad-hoc signature is a hash of the binary, so it
@@ -43,9 +45,14 @@ cp -f "$SCRATCH/$CONFIGURATION/grok-dictate-helper" "$OUTPUT"
 # rather than to the Electron process that spawns it, permissions would need
 # re-granting after every build. Which of those two is true is assumption 10.5,
 # and it is the first thing the Phase 2 human tests check.
-codesign --force --sign - --identifier com.grokdictate.helper "$OUTPUT"
+codesign --force --sign - --identifier com.grokdictate.helper "$HELPER_OUTPUT"
+codesign --force --sign - --identifier com.grokdictate.capture "$CAPTURE_OUTPUT"
 
 echo
-echo "built  $(cd "$(dirname "$OUTPUT")" && pwd)/$(basename "$OUTPUT")"
-"$OUTPUT" --version | sed 's/^/version /'
-codesign -dv "$OUTPUT" 2>&1 | sed 's/^/sign   /'
+echo "built  $(cd "$(dirname "$HELPER_OUTPUT")" && pwd)/$(basename "$HELPER_OUTPUT")"
+"$HELPER_OUTPUT" --version | sed 's/^/helper  /'
+codesign -dv "$HELPER_OUTPUT" 2>&1 | sed 's/^/sign    /'
+echo
+echo "built  $(cd "$(dirname "$CAPTURE_OUTPUT")" && pwd)/$(basename "$CAPTURE_OUTPUT")"
+"$CAPTURE_OUTPUT" --version | sed 's/^/capture /'
+codesign -dv "$CAPTURE_OUTPUT" 2>&1 | sed 's/^/sign    /'

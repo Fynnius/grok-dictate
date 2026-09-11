@@ -47,9 +47,17 @@ SIGN_APP="${TMPDIR:-/tmp}/Grok Dictate.app"
 APP="/Applications/Grok Dictate.app"
 
 echo "──────────────────────────────────────────────────────────"
-echo " 1/4  Swift helper"
+echo " 1/4  Swift helper and capture"
 echo "──────────────────────────────────────────────────────────"
 ./native/build.sh
+if [[ ! -x native/build/grok-dictate-helper ]]; then
+  echo "native/build/grok-dictate-helper was not produced" >&2
+  exit 1
+fi
+if [[ ! -x native/build/grok-dictate-capture ]]; then
+  echo "native/build/grok-dictate-capture was not produced" >&2
+  exit 1
+fi
 
 echo
 echo "──────────────────────────────────────────────────────────"
@@ -87,6 +95,10 @@ npx electron-builder --dir
 
 if [[ ! -x "$STAGED/Contents/Resources/grok-dictate-helper" ]]; then
   echo "the helper did not reach the bundle — check extraResources in electron-builder.yml" >&2
+  exit 1
+fi
+if [[ ! -x "$STAGED/Contents/Resources/grok-dictate-capture" ]]; then
+  echo "the capture binary did not reach the bundle — check extraResources in electron-builder.yml" >&2
   exit 1
 fi
 

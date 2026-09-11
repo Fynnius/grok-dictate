@@ -1,18 +1,16 @@
 # `grok-dictate-helper`
 
-The native half of Grok Dictate. It does the two things Electron cannot: watch the `Fn` key, and put text into another application.
+The native half of Grok Dictate. Two binaries:
 
-Everything else — audio, STT, history, the HUD — lives in the Electron app. This
-binary has no network access, no credentials, and no idea what a transcript is.
-Contract §5: _"No token, ever. The helper has no need for the bearer and must
-never be sent it."_
+- `grok-dictate-helper` — watch the `Fn` key, and put text into another application. No network, no credentials, no microphone, no idea what a transcript is. Contract §5: _"No token, ever."_
+- `grok-dictate-capture` — default-input capture as raw 16 kHz mono PCM16. No event tap, no pasteboard, no token, no STT. Chromium `getUserMedia` is the fallback when this binary is missing.
 
 ---
 
 ## Build and test
 
 ```sh
-./build.sh          # → build/grok-dictate-helper, ad-hoc signed
+./build.sh          # → build/grok-dictate-helper and grok-dictate-capture, ad-hoc signed
 ./test.sh           # Swift unit tests, warnings as errors
 ```
 
@@ -29,10 +27,12 @@ lint with its own `.json` and `.yaml` files. `.prettierignore` belongs to Phase
 
 ## Architecture
 
-| Target                | Contents                                                                                                                                       |
-| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `HelperCore`          | Pure logic — protocol, framing, hotkey recognition, chunking, the insertion ladder and the two AX policies. No CoreGraphics, no AppKit, no AX. |
-| `grok-dictate-helper` | The thin shell binding that logic to `CGEventTap`, the AX API, `NSWorkspace`, `NSPasteboard` and `IsSecureEventInputEnabled`.                  |
+| Target                 | Contents                                                                                                                                       |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `HelperCore`           | Pure logic — protocol, framing, hotkey recognition, chunking, the insertion ladder and the two AX policies. No CoreGraphics, no AppKit, no AX. |
+| `grok-dictate-helper`  | The thin shell binding that logic to `CGEventTap`, the AX API, `NSWorkspace`, `NSPasteboard` and `IsSecureEventInputEnabled`.                  |
+| `CaptureCore`          | Pure PCM chunking, RMS, and the capture JSON protocol. No CoreAudio.                                                                           |
+| `grok-dictate-capture` | AVAudioEngine + HAL input tap. Opens the microphone only on `start`.                                                                           |
 
 The split is what makes the interesting parts testable: `swift test` runs
 headless, with no windowserver and no TCC grants, and covers the whole hotkey

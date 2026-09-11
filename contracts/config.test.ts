@@ -55,16 +55,22 @@ describe('config defaults', () => {
     expect(DEFAULT_CONFIG.muteWhileRecording).toBe(true);
   });
 
+  it('leaves Chromium microphone processing off by default', () => {
+    expect(DEFAULT_CONFIG.micProcessing).toBe(false);
+  });
+
   it('persists the new flags when they leave the default, so old behaviour is restorable', () => {
     const { config, issues } = parseConfig({
       liveHudText: true,
       silenceGate: false,
       muteWhileRecording: false,
+      micProcessing: true,
     });
     expect(issues).toEqual([]);
     expect(config.liveHudText).toBe(true);
     expect(config.silenceGate).toBe(false);
     expect(config.muteWhileRecording).toBe(false);
+    expect(config.micProcessing).toBe(true);
   });
 
   it('lets the helper choose the insertion route by default', () => {
@@ -94,6 +100,14 @@ describe('config defaults', () => {
     expect(issues).toEqual([]);
     expect(config.insertMethod).toBe('auto');
     expect(config.sttModel).toBe('grok-stt');
+    expect(config.micProcessing).toBe(false);
+  });
+
+  it('ignores unknown extra fields rather than rejecting the file', () => {
+    const { config, issues } = parseConfig({ languageMode: 'de', someFutureFlag: true });
+    expect(issues).toEqual([]);
+    expect(config.languageMode).toBe('de');
+    expect(config.micProcessing).toBe(false);
   });
 });
 

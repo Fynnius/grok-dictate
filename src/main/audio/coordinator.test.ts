@@ -44,6 +44,7 @@ function coordinator(
     checkPermission?: () => AppError | null;
     maxBufferBytes?: number;
     drainTimeoutMs?: number;
+    micProcessing?: () => boolean;
   } = {},
 ) {
   return new CaptureCoordinator({
@@ -86,6 +87,20 @@ describe('starting and stopping', () => {
         sessionId: 's1',
         sampleRate: SAMPLE_RATE_HZ,
         chunkBytes: CHUNK_BYTES,
+        micProcessing: false,
+      },
+    ]);
+  });
+
+  it('asks the renderer for telephony DSP when the setting is on', () => {
+    coordinator({ micProcessing: () => true }).start('s1', new Recorder());
+    expect(sent).toEqual([
+      {
+        type: 'capture-start',
+        sessionId: 's1',
+        sampleRate: SAMPLE_RATE_HZ,
+        chunkBytes: CHUNK_BYTES,
+        micProcessing: true,
       },
     ]);
   });
@@ -102,6 +117,7 @@ describe('starting and stopping', () => {
         sessionId: 's2',
         sampleRate: SAMPLE_RATE_HZ,
         chunkBytes: CHUNK_BYTES,
+        micProcessing: false,
       },
     ]);
   });

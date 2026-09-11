@@ -1,13 +1,16 @@
 # Architecture
 
-Grok Dictate is an Electron menu-bar app plus a small Swift helper.
+Grok Dictate is an Electron menu-bar app plus two small Swift binaries: a
+helper (hotkey + insertion) and a capture process (microphone).
 
 ## Why two processes
 
 macOS will not let a sandboxed Chromium process install a `CGEventTap` or write
 to another app via the Accessibility API in a way that survives focus changes.
-The helper (`native/`) owns the hotkey and the insertion ladder. Electron owns
-the microphone, the xAI WebSocket, the HUD, and settings.
+The helper (`grok-dictate-helper`) owns the hotkey and the insertion ladder —
+no network, no token, no transcript, no microphone. Capture is a second
+binary (`grok-dictate-capture`) so that split stays intact. Electron owns
+the xAI WebSocket, the HUD, and settings.
 
 They talk JSON-lines on stdin/stdout. The contract is `contracts/helper-protocol.ts`.
 
@@ -88,11 +91,18 @@ show live interim text. Hold-mode stays click-through.
 
 ## Audio graph
 
-The capture renderer keeps one `AudioContext` and worklet across dictations
+Native capture is primary: `grok-dictate-capture` opens the default input at
+press, converts to 16 kHz mono PCM16, and emits 100 ms / 3200-byte chunks.
+The microphone is never pre-warmed — the process may be running idle, but the
+device opens only on `start`, which is what lights the orange indicator.
+Capture is raw (no echo cancellation, noise suppression, or AGC). The
+`micProcessing` setting is Chromium-only.
+
+When the native binary is missing, the hidden capture renderer is the
+fallback. That path keeps one `AudioContext` and worklet across dictations
 (`suspended` while idle so a running context cannot pin Bluetooth in HFP).
-`getUserMedia` still happens only at press — that is what lights the orange
-indicator. A fresh PCM encoder is created per session so a reused graph cannot
-carry samples from one turn into the next.
+`getUserMedia` still happens only at press. The native path does not create
+this window.
 
 ## Mute while recording
 

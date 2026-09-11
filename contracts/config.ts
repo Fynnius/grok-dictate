@@ -203,6 +203,17 @@ export const AppConfigSchema = z.object({
    */
   muteWhileRecording: z.boolean().default(true),
 
+  /**
+   * Chromium echo cancellation, noise suppression, auto-gain — telephony, not
+   * dictation.
+   *
+   * Off by default because the CLI captures raw and this app mutes output
+   * while recording, so there is usually nothing to cancel. A setting because
+   * it changes what the recogniser hears. Does nothing when capture is not
+   * going through Chromium `getUserMedia` (a native adapter ignores it).
+   */
+  micProcessing: z.boolean().default(false),
+
   launchAtLogin: z.boolean().default(false),
 
   /**

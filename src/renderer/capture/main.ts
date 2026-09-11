@@ -35,31 +35,11 @@
 import type { AppError } from '@shared/result.js';
 import { appError } from '@shared/result.js';
 import type { CaptureTrackSettings, MainToRenderer } from '@contracts/events.js';
+import { audioConstraints } from './constraints.js';
 import { PcmEncoder, rmsOf } from './pcm.js';
 import { PCM_WORKLET_NAME, resetWorkletPort, pcmWorkletUrl } from './pcm-worklet.js';
 
 const api = window.grokDictate;
-
-/**
- * Chromium's default input processing. Kept on deliberately rather than
- * requesting raw audio: noise suppression and gain control help a laptop
- * microphone at conversational distance, and echo cancellation stops the app's
- * own start/stop cues being transcribed.
- *
- * **Still a tuning knob, and still unmeasured.** Chromium's WebRTC processing
- * is tuned for telephony intelligibility, not for a recogniser, and the Rust
- * CLI this app is modelled on takes raw `cpal` capture with none of it — so
- * "the CLI sounds better" has a plausible cause here as well as in the
- * segmentation. What settles it is a transcript comparison, not an opinion, and
- * that needs the *applied* values on the record: they now travel with
- * `capture-started` and are logged next to every dictation.
- */
-const AUDIO_CONSTRAINTS: MediaTrackConstraints = {
-  channelCount: { ideal: 1 },
-  echoCancellation: true,
-  noiseSuppression: true,
-  autoGainControl: true,
-};
 
 /** Guard against a device that flaps; three attempts, then report (§11.1.8). */
 const MAX_DEVICE_RESTARTS = 3;
@@ -78,6 +58,8 @@ interface ActiveCapture {
   stream: MediaStream;
   source: MediaStreamAudioSourceNode;
   restarts: number;
+  /** Session flag from `capture-start`; honoured on device-restart too. */
+  readonly micProcessing: boolean;
 }
 
 let graph: WarmGraph | null = null;
@@ -153,7 +135,12 @@ async function ensureGraph(sampleRate: number, chunkBytes: number): Promise<Warm
 api.on((message: MainToRenderer) => {
   if (message.type === 'capture-start') {
     requested = message.sessionId;
-    void startCapture(message.sessionId, message.sampleRate, message.chunkBytes);
+    void startCapture(
+      message.sessionId,
+      message.sampleRate,
+      message.chunkBytes,
+      message.micProcessing,
+    );
     return;
   }
   if (message.type === 'capture-stop') {
@@ -166,6 +153,7 @@ async function startCapture(
   sessionId: string,
   sampleRate: number,
   chunkBytes: number,
+  micProcessing: boolean,
 ): Promise<void> {
   // Press supersedes press (`pipeline.rs:50-63`): tear the old one down first so
   // two sessions can never hold the device at once.
@@ -193,7 +181,9 @@ async function startCapture(
   try {
     // **The only call that lights the orange indicator.** The graph is warm;
     // the microphone is not. getUserMedia happens at press, never earlier.
-    stream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS });
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: audioConstraints(micProcessing),
+    });
   } catch (cause) {
     api.send({ type: 'capture-error', sessionId, error: describeMediaError(cause) });
     return;
@@ -261,6 +251,7 @@ async function startCapture(
       chunkBytes,
     }),
     restarts: 0,
+    micProcessing,
   };
   active = capture;
 
@@ -373,7 +364,9 @@ async function restartDevice(capture: ActiveCapture): Promise<void> {
 
   let stream: MediaStream;
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS });
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: audioConstraints(capture.micProcessing),
+    });
   } catch (cause) {
     if (active !== capture) return;
     api.send({
@@ -422,7 +415,7 @@ function stopTracks(stream: MediaStream): void {
 }
 
 /**
- * What the device actually agreed to, as opposed to what `AUDIO_CONSTRAINTS`
+ * What the device actually agreed to, as opposed to what `audioConstraints`
  * asked for. Absent keys are omitted rather than sent as `undefined`, so the
  * log distinguishes "the device says echo cancellation is off" from "the device
  * does not report echo cancellation at all".

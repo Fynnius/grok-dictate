@@ -325,6 +325,17 @@ export function SettingsView(): React.JSX.Element {
           </div>
           <div className="card-row">
             <span className="row-label">
+              Microphone processing
+              <InfoTip text="Chromium echo cancellation, noise suppression and auto-gain. Tuned for phone calls, not dictation. Off by default. Has no effect when the app is using native capture." />
+            </span>
+            <Switch
+              checked={config.micProcessing}
+              onChange={(next) => save({ micProcessing: next })}
+              ariaLabel="Microphone echo cancellation and noise suppression"
+            />
+          </div>
+          <div className="card-row">
+            <span className="row-label">
               Insert text by
               <InfoTip text="Pasting is fast whatever the length, and it is the only thing that reliably works in a terminal — but it replaces whatever is on your clipboard, every time, and does not put it back. Typing leaves your clipboard alone and is instant for a short reply, but it types one character at a time, so a long dictation visibly streams in and some apps drop it. Automatic pastes long text and terminals, types everything else." />
             </span>

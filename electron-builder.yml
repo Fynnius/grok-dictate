@@ -5,7 +5,7 @@
 #
 # A packaged .app is its own TCC identity. Microphone, Accessibility and
 # Input Monitoring start from nothing and must be granted once. The helper
-# binary must already exist at native/build/grok-dictate-helper
+# and capture binaries must already exist at native/build/
 # (`./native/build.sh`); extraResources copies whatever is on disk.
 
 appId: com.fynnius.grokdictate
@@ -23,12 +23,14 @@ files:
   - '!out/native-build'
   - package.json
 
-# The Swift helper. `resolveHelperBinary()` checks `process.resourcesPath`
-# second, after the `GROK_DICTATE_HELPER` override and before the development
-# tree, so this is the path a packaged build resolves.
+# The Swift binaries. Lookup checks `process.resourcesPath` second, after the
+# `GROK_DICTATE_HELPER` / `GROK_DICTATE_CAPTURE` override and before the
+# development tree, so this is the path a packaged build resolves.
 extraResources:
   - from: native/build/grok-dictate-helper
     to: grok-dictate-helper
+  - from: native/build/grok-dictate-capture
+    to: grok-dictate-capture
 
 mac:
   category: public.app-category.productivity

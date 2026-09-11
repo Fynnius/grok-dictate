@@ -6,8 +6,9 @@
 # Xcode toolchain, and a fresh clone with no Xcode would fail a test run for
 # reasons that have nothing to do with the change under test. The TypeScript
 # side instead spawns the *built binary* and checks protocol conformance
-# (src/main/native/helper-binary.test.ts), skipping itself when the binary is
-# absent.
+# (src/main/native/helper-binary.test.ts, src/main/audio/capture-process.test.ts),
+# skipping itself when the binary is absent. HelperCore and CaptureCore tests
+# both run here; neither needs a microphone.
 set -euo pipefail
 cd "$(dirname "$0")"
 # --scratch-path for the same reason as build.sh: Prettier reads only the root

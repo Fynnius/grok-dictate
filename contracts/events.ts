@@ -191,10 +191,22 @@ export type MainToRenderer =
   | { type: 'history-updated'; count: number }
   | { type: 'config-updated'; config: AppConfig }
   | { type: 'secure-input'; enabled: boolean }
-  /** Main asks the hidden capture renderer to start/stop the microphone.
-   *  §11.2.4: the mic is never pre-warmed — the orange indicator must appear
-   *  only while actually recording. */
-  | { type: 'capture-start'; sessionId: string; sampleRate: number; chunkBytes: number }
+  /**
+   * Main asks the hidden capture renderer to start/stop the microphone.
+   * §11.2.4: the mic is never pre-warmed — the orange indicator must appear
+   * only while actually recording.
+   *
+   * `micProcessing` is required: the only producer is the coordinator, which
+   * defaults the getter to false. The renderer asks Chromium for echo
+   * cancellation, noise suppression and auto-gain all-on or all-off together.
+   */
+  | {
+      type: 'capture-start';
+      sessionId: string;
+      sampleRate: number;
+      chunkBytes: number;
+      micProcessing: boolean;
+    }
   | { type: 'capture-stop'; sessionId: string }
   /** The stored API key, Grok CLI file, or environment token changed. */
   | { type: 'auth-updated'; status: AuthStatus }
