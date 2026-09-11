@@ -10,7 +10,7 @@
  * **Never log cookie values.** Names only.
  */
 
-import { session } from 'electron';
+import { app, session } from 'electron';
 import type { GrokComSessionPort } from '@contracts/ports.js';
 import { GROK_COM_ORIGIN, GROK_COM_PARTITION } from '@shared/constants.js';
 import type { Logger } from '@shared/logger.js';
@@ -102,36 +102,58 @@ export class GrokComSession implements GrokComSessionPort {
 }
 
 /**
- * Electron cookie store for `persist:grok-com`. `session.fromPartition` runs on
- * first use, not at construction — constructing this during module load is safe
- * before `app.whenReady()`.
+ * Electron cookie store for `persist:grok-com`.
+ *
+ * `session.fromPartition` throws "Session can only be received when app is
+ * ready". `GrokComSession` is constructed in `main()` before `app.whenReady()`,
+ * so get/clear/onChanged must wait. Listeners are queued until then.
  */
 export function electronGrokComCookieStore(
   partition: string = GROK_COM_PARTITION,
 ): GrokComCookieStore {
   type ElectronSession = ReturnType<typeof session.fromPartition>;
   let ses: ElectronSession | undefined;
+  const listeners = new Set<() => void>();
+  let attached = false;
+
+  const whenAppReady = (): Promise<void> => (app.isReady() ? Promise.resolve() : app.whenReady());
 
   const resolveSession = (): ElectronSession => {
     ses ??= session.fromPartition(partition);
     return ses;
   };
 
+  const attachCookieListener = (): void => {
+    if (attached) return;
+    attached = true;
+    resolveSession().cookies.on('changed', () => {
+      for (const listener of listeners) listener();
+    });
+  };
+
+  const sessionWhenReady = async (): Promise<ElectronSession> => {
+    await whenAppReady();
+    attachCookieListener();
+    return resolveSession();
+  };
+
+  void whenAppReady().then(() => {
+    attachCookieListener();
+  });
+
   return {
-    get(url) {
-      return resolveSession().cookies.get({ url });
+    async get(url) {
+      const ready = await sessionWhenReady();
+      return ready.cookies.get({ url });
     },
-    clear() {
-      return resolveSession().clearStorageData();
+    async clear() {
+      const ready = await sessionWhenReady();
+      await ready.clearStorageData();
     },
     onChanged(listener) {
-      const cookies = resolveSession().cookies;
-      const handler = (): void => {
-        listener();
-      };
-      cookies.on('changed', handler);
+      listeners.add(listener);
       return () => {
-        cookies.off('changed', handler);
+        listeners.delete(listener);
       };
     },
   };

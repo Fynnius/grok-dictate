@@ -3,6 +3,10 @@ import { addLogSink, clearLogSinks, createLogger, setLogLevel } from '@shared/lo
 import { GrokComSession, GROK_COM_SESSION_COOKIES, type GrokComCookieStore } from './grok-com.js';
 
 vi.mock('electron', () => ({
+  app: {
+    isReady: (): boolean => false,
+    whenReady: (): Promise<void> => Promise.resolve(),
+  },
   session: {
     fromPartition: (): never => {
       throw new Error('unit tests must not touch Electron session');
