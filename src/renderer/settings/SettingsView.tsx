@@ -198,7 +198,7 @@ export function SettingsView(): React.JSX.Element {
           <div className="card-row">
             <span className="row-label">
               Speech model
-              <InfoTip text="Standard is the public default this app has always used. STT 2 Fast is the model grok.com's composer dictate button uses. Switching takes effect on the next dictation." />
+              <InfoTip text="Standard is the public API default and is what works today. STT 2 Fast is the model grok.com's dictate button uses internally; the public API currently rejects it (HTTP 404), so a hold will fail until xAI ships that model. Switching takes effect on the next dictation." />
             </span>
             <span className="control">
               <Segmented

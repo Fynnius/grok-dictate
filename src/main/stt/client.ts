@@ -62,6 +62,7 @@ import { backoffDelayMs } from '@shared/backoff.js';
 import type { Logger } from '@shared/logger.js';
 import { appError, type AppError } from '@shared/result.js';
 import { TranscriptAccumulator, parseServerFrame } from './frames.js';
+import { errorFromSttHandshake } from './handshake.js';
 import { buildSttUrl, checkTransportSecurity, selectKeyterms, sttUrlOptions } from './url.js';
 
 /* ------------------------------------------------------------------ *
@@ -452,12 +453,11 @@ class SttTurnImpl implements SttTurn {
     const status = response.statusCode ?? 0;
     const headers = response.headers;
 
-    // We own the cleanup now that `ws` has deferred to us.
-    response.resume();
-    request.destroy();
-    this.#socket = null;
-
     if (status === 429) {
+      // We own the cleanup now that `ws` has deferred to us.
+      response.resume();
+      request.destroy();
+      this.#socket = null;
       // §9.1: "log every rate-limit response with its headers". This is the only
       // instrumentation that can ever answer what the subscription's limits are.
       this.#log.warn('rate limited by the xAI speech service (HTTP 429)', {
@@ -469,6 +469,9 @@ class SttTurnImpl implements SttTurn {
     }
 
     if (status === 401 || status === 403) {
+      response.resume();
+      request.destroy();
+      this.#socket = null;
       this.#log.warn('the xAI speech service rejected the token', { status });
       this.#fail(
         appError(
@@ -480,14 +483,30 @@ class SttTurnImpl implements SttTurn {
       return;
     }
 
-    this.#log.warn('unexpected handshake response', { status, headers: { ...headers } });
-    this.#fail(
-      appError(
-        'stt_connect',
-        `The xAI speech service refused the connection (HTTP ${String(status)}).`,
-        'Try again in a moment. The audio just recorded is still in memory.',
-      ),
-    );
+    void this.#failUnknownHandshake(request, response, status, headers);
+  }
+
+  /**
+   * Drain the JSON body (the 404 for `grok-stt-2-fast` is 94 bytes) so the HUD
+   * can say the model is missing instead of a generic refused-connection.
+   */
+  async #failUnknownHandshake(
+    request: ClientRequest,
+    response: IncomingMessage,
+    status: number,
+    headers: IncomingHttpHeaders,
+  ): Promise<void> {
+    const body = await readHttpBody(response);
+    request.destroy();
+    this.#socket = null;
+    if (this.#terminal) return;
+
+    this.#log.warn('unexpected handshake response', {
+      status,
+      headers: { ...headers },
+      body,
+    });
+    this.#fail(errorFromSttHandshake(status, body));
   }
 
   #retryAfterRateLimit(bearer: Bearer, headers: IncomingHttpHeaders): void {
@@ -887,6 +906,33 @@ function rawToString(data: RawData): string {
   if (Buffer.isBuffer(data)) return data.toString('utf8');
   if (Array.isArray(data)) return Buffer.concat(data).toString('utf8');
   return Buffer.from(data).toString('utf8');
+}
+
+const HANDSHAKE_BODY_MAX_BYTES = 4_096;
+const HANDSHAKE_BODY_TIMEOUT_MS = 500;
+
+function readHttpBody(response: IncomingMessage): Promise<string> {
+  return new Promise((resolve) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let settled = false;
+    const finish = (): void => {
+      if (settled) return;
+      settled = true;
+      resolve(Buffer.concat(chunks).toString('utf8'));
+    };
+    const timer = setTimeout(finish, HANDSHAKE_BODY_TIMEOUT_MS);
+    timer.unref?.();
+    response.on('data', (chunk: Buffer) => {
+      if (size >= HANDSHAKE_BODY_MAX_BYTES) return;
+      const take = chunk.subarray(0, HANDSHAKE_BODY_MAX_BYTES - size);
+      chunks.push(take);
+      size += take.length;
+    });
+    response.on('end', finish);
+    response.on('error', finish);
+    response.resume();
+  });
 }
 
 /** `Retry-After` is either delta-seconds or an HTTP-date (RFC 9110 §10.2.3). */

@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Settings → Dictation → Speech model.** _Standard_ (the default) is unchanged. _STT 2 Fast_ is `grok-stt-2-fast`, the model grok.com composer dictate uses, sent as `model=` on the existing `api.x.ai` socket.
+- **Settings → Dictation → Speech model.** _Standard_ (the default) is unchanged. _STT 2 Fast_ is `grok-stt-2-fast`, the model grok.com composer dictate uses. The public `api.x.ai` socket currently answers that id with HTTP 404 (`model does not exist or your team does not have access`); the HUD now says so instead of a generic refused-connection. Switch back to Standard until xAI ships it.
 
 ## [0.3.0] — 2026-09-06
 
