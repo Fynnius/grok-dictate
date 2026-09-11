@@ -67,36 +67,58 @@ describe('buildSttUrl', () => {
   });
 
   it('omits `model` when it is missing (public default, bit-identical URL)', () => {
-    const q = query(
-      buildSttUrl({ apiBase: base, language: null, endpointingMs: 400, keyterms: [] }),
-    );
+    const url = buildSttUrl({ apiBase: base, language: null, endpointingMs: 400, keyterms: [] });
+    expect(url.startsWith('wss://api.x.ai/v1/stt?')).toBe(true);
+    const q = query(url);
     expect(q.has('model')).toBe(false);
+    expect(q.has('vad_threshold')).toBe(false);
   });
 
   it('omits `model` for `grok-stt`', () => {
-    const q = query(
-      buildSttUrl({
-        apiBase: base,
-        language: null,
-        endpointingMs: 400,
-        keyterms: [],
-        model: 'grok-stt',
-      }),
-    );
+    const url = buildSttUrl({
+      apiBase: base,
+      language: null,
+      endpointingMs: 400,
+      keyterms: [],
+      model: 'grok-stt',
+    });
+    expect(url.startsWith('wss://api.x.ai/v1/stt?')).toBe(true);
+    const q = query(url);
     expect(q.has('model')).toBe(false);
+    expect(q.has('vad_threshold')).toBe(false);
   });
 
-  it('sends `model=grok-stt-2-fast` (grok.com composer dictate)', () => {
-    const q = query(
-      buildSttUrl({
-        apiBase: base,
-        language: null,
-        endpointingMs: 400,
-        keyterms: [],
-        model: 'grok-stt-2-fast',
-      }),
-    );
+  it('routes grok-stt-2-fast to grok.com /ws/v1/stt with vad_threshold, not endpointing=20', () => {
+    const url = buildSttUrl({
+      apiBase: base,
+      language: null,
+      endpointingMs: 2000,
+      keyterms: [],
+      model: 'grok-stt-2-fast',
+    });
+    expect(url.startsWith('wss://grok.com/ws/v1/stt?')).toBe(true);
+    const q = query(url);
+    expect(q.get('sample_rate')).toBe('16000');
+    expect(q.get('encoding')).toBe('pcm');
+    expect(q.get('interim_results')).toBe('true');
+    expect(q.get('endpointing')).toBe('2000');
     expect(q.get('model')).toBe('grok-stt-2-fast');
+    expect(q.get('vad_threshold')).toBe('0.3');
+  });
+
+  it('keeps a loopback apiBase for grok-stt-2-fast so tests can still mock the socket', () => {
+    const url = buildSttUrl({
+      apiBase: 'http://127.0.0.1:5555',
+      language: null,
+      endpointingMs: 2000,
+      keyterms: [],
+      model: 'grok-stt-2-fast',
+    });
+    expect(url.startsWith('ws://127.0.0.1:5555/ws/v1/stt?')).toBe(true);
+    const q = query(url);
+    expect(q.get('model')).toBe('grok-stt-2-fast');
+    expect(q.get('vad_threshold')).toBe('0.3');
+    expect(q.get('endpointing')).toBe('2000');
   });
 });
 

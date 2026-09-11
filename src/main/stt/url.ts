@@ -1,5 +1,6 @@
 /**
- * The `wss://api.x.ai/v1/stt` query contract.
+ * The STT WebSocket query contract (`wss://api.x.ai/v1/stt`, or
+ * `wss://grok.com/ws/v1/stt` for `grok-stt-2-fast`).
  *
  * Pure, so every decision the spikes settled is a unit test rather than a thing
  * you have to run a socket to check.
@@ -15,6 +16,7 @@
  * | `language`         | omitted for `auto` | spike 1 + 3, docs/spike-results.md    |
  * | `keyterm`          | repeated       | spike 5                                   |
  * | `model`            | omitted by default | grok.com `web_streaming_dictation_config` |
+ * | `vad_threshold`    | 0.3, 2-fast only | website `web_streaming_dictation_config` |
  *
  * Two of those are the direct output of the Phase 1 spikes and would otherwise
  * be guesses:
@@ -35,12 +37,16 @@
  *     `model=grok-stt-2-fast` from `web_streaming_dictation_config.model` on the
  *     same protocol. The public default is `grok-stt`; omitting it keeps existing
  *     sessions bit-identical. We do not copy grok.com's `endpointing=20` — that
- *     would wreck hold-to-talk.
+ *     would wreck hold-to-talk. `grok-stt-2-fast` also switches host/path to
+ *     `wss://grok.com/ws/v1/stt` (loopback `apiBase` stays, for tests).
  */
 
 import { resolveWireSttModel, type SttModel } from '@contracts/config.js';
 import type { SttTurnOptions } from '@contracts/ports.js';
 import {
+  GROK_COM_STT_API_BASE,
+  GROK_COM_STT_WS_PATH,
+  GROK_COM_VAD_THRESHOLD,
   KEYTERM_MAX_COUNT,
   KEYTERM_MAX_LENGTH,
   SAMPLE_RATE_HZ,
@@ -112,7 +118,15 @@ export function sttUrlOptions(apiBase: string, options: SttTurnOptions): SttUrlO
 }
 
 export function buildSttUrl(options: SttUrlOptions): string {
-  const url = new URL(STT_WS_PATH, options.apiBase);
+  const model = resolveWireSttModel(options.model ?? 'grok-stt');
+  const grokComFast = model === 'grok-stt-2-fast';
+  // Public `api.x.ai` 404s this model; grok.com composer dictate uses a
+  // cookie-auth socket at `/ws/v1/stt`. Loopback `apiBase` is the test server.
+  const origin =
+    grokComFast && !isLoopbackHost(new URL(options.apiBase).hostname)
+      ? GROK_COM_STT_API_BASE
+      : options.apiBase;
+  const url = new URL(grokComFast ? GROK_COM_STT_WS_PATH : STT_WS_PATH, origin);
   // `http(s)` → `ws(s)`; the caller supplies an https base because that is what
   // `config.rs` stores, and the plaintext guard below keys off the same value.
   url.protocol = url.protocol === 'http:' ? 'ws:' : 'wss:';
@@ -126,8 +140,8 @@ export function buildSttUrl(options: SttUrlOptions): string {
   if (options.language !== null) url.searchParams.set('language', options.language);
   // Missing / `grok-stt` omit `model` so the default URL stays bit-identical.
   // `grok-stt-2-fast` is grok.com `web_streaming_dictation_config.model`.
-  const model = resolveWireSttModel(options.model ?? 'grok-stt');
   if (model !== null) url.searchParams.set('model', model);
+  if (grokComFast) url.searchParams.set('vad_threshold', String(GROK_COM_VAD_THRESHOLD));
 
   for (const term of selectKeyterms(options.keyterms).accepted) {
     url.searchParams.append('keyterm', term);

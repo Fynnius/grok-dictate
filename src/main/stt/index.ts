@@ -11,13 +11,19 @@
  * yields many finals, and §5 covers keyterms.
  */
 
-import type { AuthPort, SttClientPort } from '@contracts/ports.js';
+import type { AuthPort, GrokComSessionPort, SttClientPort } from '@contracts/ports.js';
 import type { Logger } from '@shared/logger.js';
 import { XaiSttClient } from './client.js';
 
 export { XaiSttClient } from './client.js';
 export type { SttClientOptions } from './client.js';
 
-export function createSttClient(logger: Logger, auth: AuthPort): SttClientPort {
-  return new XaiSttClient({ auth, logger });
+export function createSttClient(
+  logger: Logger,
+  auth: AuthPort,
+  grokCom?: GrokComSessionPort,
+): SttClientPort {
+  return new XaiSttClient(
+    grokCom === undefined ? { auth, logger } : { auth, logger, grokCom },
+  );
 }

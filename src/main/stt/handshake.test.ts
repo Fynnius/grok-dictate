@@ -33,4 +33,18 @@ describe('errorFromSttHandshake', () => {
     expect(error.message).toContain('HTTP 500');
     expect(error.hint).toContain('Try again');
   });
+
+  it('points at grok.com sign-in on 401 when the socket used cookies', () => {
+    const error = errorFromSttHandshake(401, '', 'grok-com');
+    expect(error.code).toBe('auth_expired');
+    expect(error.message).toContain('HTTP 401');
+    expect(error.hint).toMatch(/grok\.com/);
+    expect(error.hint).not.toMatch(/`grok`/);
+  });
+
+  it('points at grok.com sign-in on 403 the same way', () => {
+    const error = errorFromSttHandshake(403, '', 'grok-com');
+    expect(error.code).toBe('auth_expired');
+    expect(error.hint).toMatch(/grok\.com/);
+  });
 });

@@ -27,9 +27,23 @@ export function handshakeErrorText(body: string): string | null {
   return null;
 }
 
-export function errorFromSttHandshake(status: number, body: string): AppError {
+export type SttHandshakeAuth = 'bearer' | 'grok-com';
+
+export function errorFromSttHandshake(
+  status: number,
+  body: string,
+  auth: SttHandshakeAuth = 'bearer',
+): AppError {
   const text = handshakeErrorText(body);
   const haystack = text ?? body;
+
+  if (auth === 'grok-com' && (status === 401 || status === 403)) {
+    return appError(
+      'auth_expired',
+      `grok.com rejected the login (HTTP ${String(status)}).`,
+      'Sign in to grok.com again. Settings → Speech model → Sign in to grok.com.',
+    );
+  }
 
   if (status === 404 && UNKNOWN_MODEL.test(haystack)) {
     const model = /model '([^']+)'/i.exec(haystack)?.[1];

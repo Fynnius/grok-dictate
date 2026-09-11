@@ -7,9 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **In-app grok.com sign-in** (Settings → Dictation → grok.com). STT 2 Fast talks to grok.com's website STT socket using a session that lives in its own Electron partition (`persist:grok-com`), not the system browser's cookies and not the xAI API key. Signing out in Settings clears that partition only.
+
 ### Changed
 
-- **Settings → Dictation → Speech model.** _Standard_ (the default) is unchanged. _STT 2 Fast_ is `grok-stt-2-fast`, the model grok.com composer dictate uses. The public `api.x.ai` socket currently answers that id with HTTP 404 (`model does not exist or your team does not have access`); the HUD now says so instead of a generic refused-connection. Switch back to Standard until xAI ships it.
+- **Settings → Dictation → Speech model.** _Standard_ (the default) still uses the xAI API with the stored API key / Grok CLI login. _STT 2 Fast_ is `grok-stt-2-fast`, the model grok.com composer dictate uses; it needs the grok.com sign-in above, not the public `api.x.ai` socket.
 
 ## [0.3.0] — 2026-09-06
 

@@ -187,6 +187,21 @@ export interface AuthPort {
   getBearer(): Promise<Result<Bearer>>;
 }
 
+/**
+ * grok.com website session for STT 2 Fast.
+ * Cookies never go on SttTurnOptions or in logs.
+ */
+export interface GrokComSessionPort {
+  hasSession(): Promise<boolean>;
+  /**
+   * `Cookie` header value for `https://grok.com`, or null if unsigned-in.
+   * Callers must not log the return value.
+   */
+  getCookieHeader(): Promise<string | null>;
+  clearSession(): Promise<void>;
+  onChange(listener: (signedIn: boolean) => void): () => void;
+}
+
 /* ------------------------------------------------------------------ *
  * Audio capture — Phase 3
  * ------------------------------------------------------------------ */

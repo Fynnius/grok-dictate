@@ -15,6 +15,17 @@ export const STT_API_BASE = 'https://api.x.ai';
 export const STT_WS_PATH = '/v1/stt';
 
 /**
+ * grok.com composer dictate (STT 2 Fast). Public `api.x.ai` 404s that model;
+ * the website socket is cookie-auth and a different path.
+ */
+export const GROK_COM_ORIGIN = 'https://grok.com';
+export const GROK_COM_STT_API_BASE = 'https://grok.com';
+export const GROK_COM_STT_WS_PATH = '/ws/v1/stt';
+export const GROK_COM_PARTITION = 'persist:grok-com';
+/** Website `web_streaming_dictation_config.vad_threshold`. */
+export const GROK_COM_VAD_THRESHOLD = 0.3;
+
+/**
  * 16 kHz mono PCM16. `config.rs:36-48` (`sample_rate = 16000`).
  */
 export const SAMPLE_RATE_HZ = 16_000;

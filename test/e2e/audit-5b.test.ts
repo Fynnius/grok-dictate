@@ -305,7 +305,12 @@ describe('§5b — the bearer token cannot leave the auth module except as a hea
     const ports = read(resolve(ROOT, 'contracts/ports.ts'));
     const options = /export interface SttTurnOptions \{([\s\S]*?)\n\}/.exec(ports)?.[1] ?? '';
     expect(options.length).toBeGreaterThan(0);
-    expect(options).not.toMatch(/token|bearer|authorization|secret/i);
+    expect(options).not.toMatch(/token|bearer|authorization|secret|cookie/i);
+  });
+
+  it('interpolates grok.com cookies only into the Cookie header', () => {
+    const client = code(resolve(ROOT, 'src/main/stt/client.ts'));
+    expect(client.match(/Cookie: `\$\{cookieHeader\}`/g) ?? []).toHaveLength(1);
   });
 
   it('has no field on a history row that could carry a credential', () => {

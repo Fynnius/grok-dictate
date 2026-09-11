@@ -58,6 +58,7 @@ const INSERT_METHOD_OPTIONS: readonly (readonly [AppConfig['insertMethod'], stri
 export function SettingsView(): React.JSX.Element {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [auth, setAuth] = useState<AuthStatus | null>(null);
+  const [grokComSignedIn, setGrokComSignedIn] = useState<boolean | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [keytermText, setKeytermText] = useState('');
   const [issues, setIssues] = useState<readonly string[]>([]);
@@ -75,10 +76,14 @@ export function SettingsView(): React.JSX.Element {
     void request({ type: 'get-auth-status' }, 'auth-status').then((outcome) => {
       if (outcome.ok) setAuth(outcome.value.status);
     });
+    void request({ type: 'get-grok-com-status' }, 'grok-com-status').then((outcome) => {
+      if (outcome.ok) setGrokComSignedIn(outcome.value.signedIn);
+    });
     // The tray can change language and audio cues behind this window's back.
     return api.on((message) => {
       if (message.type === 'config-updated') setConfig(message.config);
       if (message.type === 'auth-updated') setAuth(message.status);
+      if (message.type === 'grok-com-updated') setGrokComSignedIn(message.signedIn);
     });
   }, []);
 
@@ -198,7 +203,7 @@ export function SettingsView(): React.JSX.Element {
           <div className="card-row">
             <span className="row-label">
               Speech model
-              <InfoTip text="Standard is the public API default and is what works today. STT 2 Fast is the model grok.com's dictate button uses internally; the public API currently rejects it (HTTP 404), so a hold will fail until xAI ships that model. Switching takes effect on the next dictation." />
+              <InfoTip text="Standard uses the xAI API. STT 2 Fast uses grok.com after you sign in here." />
             </span>
             <span className="control">
               <Segmented
@@ -207,6 +212,43 @@ export function SettingsView(): React.JSX.Element {
                 onChange={(model) => save({ sttModel: model })}
                 ariaLabel="Speech recognition model"
               />
+            </span>
+          </div>
+          <div className="card-row">
+            <span className="row-label">
+              grok.com
+              <InfoTip text="STT 2 Fast talks to grok.com with this login, not the xAI API key. The session stays inside Grok Dictate (partition persist:grok-com). Signing out here does not log you out of the browser." />
+            </span>
+            <span className="control">
+              {grokComSignedIn === null ? (
+                <span className="unit">Checking…</span>
+              ) : grokComSignedIn ? (
+                <>
+                  <span className="chip ok">Signed in</span>
+                  <button
+                    type="button"
+                    className="ghost destructive"
+                    onClick={() => {
+                      void request({ type: 'grok-com-sign-out' }, 'grok-com-status').then(
+                        (outcome) => {
+                          if (outcome.ok) setGrokComSignedIn(outcome.value.signedIn);
+                        },
+                      );
+                    }}
+                  >
+                    Sign out
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    api.send({ type: 'open-window', window: 'grok-com-signin' });
+                  }}
+                >
+                  Sign in to grok.com…
+                </button>
+              )}
             </span>
           </div>
           <div className="card-row">

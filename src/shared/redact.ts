@@ -33,6 +33,15 @@ const JWT_PATTERN = /\beyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]+/g
 /** `Authorization: Bearer <anything>` in any casing, header or prose. */
 const BEARER_PATTERN = /\bbearer\s+\S+/gi;
 
+/** `Cookie: <anything to end of line>` — header dumps, Set-Cookie included. */
+const COOKIE_HEADER_PATTERN = /\bCookie:\s*.*/gi;
+
+/**
+ * grok.com session cookie assignments (`sso-rw=<token>`, `sso=<token>`), so a
+ * short cookie that misses JWT / opaque patterns still cannot leak.
+ */
+const SSO_COOKIE_PATTERN = /\b(sso(?:-rw)?)=[^;\s]*/gi;
+
 /**
  * Long opaque credentials that are not JWTs — notably the 86-character
  * `refresh_token` in `auth.json`.
@@ -71,13 +80,16 @@ export function isSensitiveKey(key: string): boolean {
 
 /**
  * Scrub secrets out of a single string. Total: never throws, always returns a
- * string. Order matters — `Bearer eyJ…` must be caught by the bearer rule
- * first so the result reads `Bearer [REDACTED]` rather than `Bearer
- * [REDACTED:jwt]`.
+ * string. Order matters — a `Cookie:` line is wiped wholesale so a short
+ * session cookie cannot leak; `Bearer eyJ…` must be caught by the bearer rule
+ * before the JWT rule so the result reads `Bearer [REDACTED]` rather than
+ * `Bearer [REDACTED:jwt]`.
  */
 export function redactString(input: string): string {
   return input
+    .replace(COOKIE_HEADER_PATTERN, `Cookie: ${REDACTED_FIELD}`)
     .replace(BEARER_PATTERN, REDACTED_BEARER)
+    .replace(SSO_COOKIE_PATTERN, `$1=${REDACTED_FIELD}`)
     .replace(JWT_PATTERN, REDACTED_JWT)
     .replace(OPAQUE_PATTERN, (run) => (looksLikeOpaqueSecret(run) ? REDACTED_OPAQUE : run));
 }

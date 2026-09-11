@@ -36,6 +36,12 @@
  *   stamped in main on **receive** (see `src/shared/timing.ts`).
  * - Panel `'stats'` and `get-stats` invoke: aggregates only, no transcripts.
  * - `open-window` accepts `'stats'`.
+ *
+ * ## grok.com session (STT 2 Fast)
+ *
+ * - `open-window` accepts `'grok-com-signin'`.
+ * - `grok-com-updated` / `get-grok-com-status` / `grok-com-sign-out` carry
+ *   `signedIn` only. Cookies never cross this boundary.
  */
 
 import type { InsertTier } from './helper-protocol.js';
@@ -191,7 +197,9 @@ export type MainToRenderer =
   | { type: 'capture-start'; sessionId: string; sampleRate: number; chunkBytes: number }
   | { type: 'capture-stop'; sessionId: string }
   /** The stored API key, Grok CLI file, or environment token changed. */
-  | { type: 'auth-updated'; status: AuthStatus };
+  | { type: 'auth-updated'; status: AuthStatus }
+  /** grok.com website session used by STT 2 Fast. Never includes cookies. */
+  | { type: 'grok-com-updated'; signedIn: boolean };
 
 export const MAIN_TO_RENDERER_CHANNEL = 'grok-dictate:main-to-renderer';
 
@@ -234,7 +242,10 @@ export type RendererToMain =
   | { type: 'hud-drag-move'; screenX: number; screenY: number }
   | { type: 'hud-drag-end' }
   | { type: 'set-language-mode'; mode: LanguageMode }
-  | { type: 'open-window'; window: 'settings' | 'history' | 'scratchpad' | 'signin' | 'stats' }
+  | {
+      type: 'open-window';
+      window: 'settings' | 'history' | 'scratchpad' | 'signin' | 'stats' | 'grok-com-signin';
+    }
   /** PCM16 mono @16 kHz, 100 ms / 3200-byte chunks. */
   | { type: 'capture-chunk'; sessionId: string; pcm: ArrayBuffer; sentAtMs?: number }
   /**
@@ -318,6 +329,8 @@ export type InvokeRequest =
   | { type: 'get-auth-status' }
   | { type: 'set-api-key'; key: string }
   | { type: 'clear-api-key' }
+  | { type: 'get-grok-com-status' }
+  | { type: 'grok-com-sign-out' }
   | { type: 'open-external'; url: string };
 
 export interface AppSnapshot {
@@ -335,6 +348,7 @@ export type InvokeResponse =
   | { type: 'stats'; stats: StatsViewModel }
   | { type: 'snapshot'; snapshot: AppSnapshot }
   | { type: 'auth-status'; status: AuthStatus }
+  | { type: 'grok-com-status'; signedIn: boolean }
   | { type: 'ok' }
   | { type: 'error'; error: AppError };
 

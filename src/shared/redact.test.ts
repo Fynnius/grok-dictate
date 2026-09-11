@@ -68,6 +68,26 @@ describe('redactString', () => {
     const id = 'f078bb34-98f0-4104-b521-205955787fa6';
     expect(redactString(id)).toBe(id);
   });
+
+  it('redacts a Cookie header to end of line, including a short value JWT would miss', () => {
+    const out = redactString('Cookie: sid=abc\nnext line stays');
+    expect(out).toBe('Cookie: [REDACTED]\nnext line stays');
+  });
+
+  it('redacts a grok.com Cookie header carrying a JWT so the raw token is gone', () => {
+    const header = `Cookie: sso-rw=${FAKE_JWT}; sso=short`;
+    const out = redactString(header);
+    expect(out).toBe('Cookie: [REDACTED]');
+    expect(out).not.toContain(FAKE_JWT);
+    expect(out).not.toContain('sso-rw=');
+  });
+
+  it('redacts sso-rw and sso cookie assignments without a Cookie: prefix', () => {
+    const out = redactString(`sso-rw=${FAKE_JWT}; sso=shortid`);
+    expect(out).toBe('sso-rw=[REDACTED]; sso=[REDACTED]');
+    expect(out).not.toContain(FAKE_JWT);
+    expect(out).not.toContain('shortid');
+  });
 });
 
 describe('isSensitiveKey', () => {
@@ -75,6 +95,7 @@ describe('isSensitiveKey', () => {
     expect(isSensitiveKey('key')).toBe(true);
     expect(isSensitiveKey('refresh_token')).toBe(true);
     expect(isSensitiveKey('Authorization')).toBe(true);
+    expect(isSensitiveKey('cookie')).toBe(true);
   });
 
   it('does not match the harmless auth.json fields', () => {

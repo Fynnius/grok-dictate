@@ -45,6 +45,7 @@ import { resolveWireSttModel } from '@contracts/config.js';
 import type {
   AuthPort,
   Bearer,
+  GrokComSessionPort,
   SttClientPort,
   SttHandlers,
   SttTurn,
@@ -53,6 +54,7 @@ import type {
 import {
   BACKLOG_MAX_CHUNKS,
   BYTES_PER_SECOND,
+  GROK_COM_ORIGIN,
   NO_SPEECH_TIMEOUT_MS,
   STT_API_BASE,
   STT_CONNECT_TIMEOUT_MS,
@@ -80,6 +82,13 @@ import { buildSttUrl, checkTransportSecurity, selectKeyterms, sttUrlOptions } fr
 const RATE_LIMIT_BASE_MS = 500;
 const RATE_LIMIT_MAX_MS = 8_000;
 const RATE_LIMIT_MAX_RETRIES = 3;
+
+/**
+ * grok.com's Cloudflare edge 401s `grok-dictate/0.1`. Chromium/Electron-like
+ * is what composer dictate sends.
+ */
+const GROK_COM_USER_AGENT =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
 /**
  * How long to wait after ending the turn before giving up on `transcript.done`.
@@ -182,6 +191,8 @@ export const DEFAULT_TIMEOUTS: SttTimeouts = {
 export interface SttClientOptions {
   readonly auth: AuthPort;
   readonly logger: Logger;
+  /** Cookie session for `grok-stt-2-fast`. Unused on the bearer path. */
+  readonly grokCom?: GrokComSessionPort;
   /** `https://api.x.ai` in production; a loopback server under test. */
   readonly apiBase?: string;
   readonly now?: () => number;
@@ -215,12 +226,17 @@ export class XaiSttClient implements SttClientPort {
 
 interface TurnDeps {
   readonly auth: AuthPort;
+  readonly grokCom?: GrokComSessionPort;
   readonly logger: Logger;
   readonly apiBase: string;
   readonly now: () => number;
   readonly random: () => number;
   readonly timeouts: SttTimeouts;
 }
+
+type SttConnectAuth =
+  | { readonly kind: 'bearer'; readonly bearer: Bearer }
+  | { readonly kind: 'grok-com'; readonly cookieHeader: string };
 
 class SttTurnImpl implements SttTurn {
   readonly #options: SttTurnOptions;
@@ -339,16 +355,34 @@ class SttTurnImpl implements SttTurn {
   /* ---------------- connect ---------------- */
 
   async #begin(): Promise<void> {
+    const wireModel = resolveWireSttModel(this.#options.model ?? 'grok-stt');
+    if (wireModel === 'grok-stt-2-fast') {
+      const cookieHeader = await this.#deps.grokCom?.getCookieHeader();
+      if (this.#terminal) return;
+      if (cookieHeader === undefined || cookieHeader === null || cookieHeader.length === 0) {
+        this.#fail(
+          appError(
+            'auth_missing',
+            'Sign in to grok.com to use STT 2 Fast.',
+            'Settings → Speech model → Sign in to grok.com.',
+          ),
+        );
+        return;
+      }
+      this.#connect({ kind: 'grok-com', cookieHeader });
+      return;
+    }
+
     const bearer = await this.#deps.auth.getBearer();
     if (this.#terminal) return;
     if (!bearer.ok) {
       this.#fail(bearer.error);
       return;
     }
-    this.#connect(bearer.value);
+    this.#connect({ kind: 'bearer', bearer: bearer.value });
   }
 
-  #connect(bearer: Bearer): void {
+  #connect(auth: SttConnectAuth): void {
     if (this.#terminal) return;
 
     const url = buildSttUrl(sttUrlOptions(this.#deps.apiBase, this.#options));
@@ -380,21 +414,21 @@ class SttTurnImpl implements SttTurn {
 
     this.#log.info('connecting', {
       sessionId: this.#options.sessionId,
-      // No token: the bearer travels in a header, and the URL carries only
-      // tuning parameters and keyterms.
+      // No token, no cookie: credentials travel in headers. The URL carries
+      // only tuning parameters and keyterms.
       url,
       attempt: this.#attempt,
       model: resolveWireSttModel(this.#options.model ?? 'grok-stt'),
+      auth: auth.kind,
     });
 
+    const headers =
+      auth.kind === 'grok-com'
+        ? grokComConnectHeaders(auth.cookieHeader)
+        : bearerConnectHeaders(auth.bearer);
+
     const socket = new WebSocket(url, {
-      headers: {
-        Authorization: `Bearer ${bearer.token}`,
-        // Attribution only; the connection is fully authorised without these
-        // (`streaming.rs:49-55`).
-        'x-grok-client-identifier': 'grok-dictate',
-        'User-Agent': 'grok-dictate/0.1',
-      },
+      headers,
       handshakeTimeout: this.#deps.timeouts.connectMs, // `streaming.rs:63-68` — 15 s
     });
     this.#socket = socket;
@@ -403,7 +437,7 @@ class SttTurnImpl implements SttTurn {
 
     socket.on('unexpected-response', (request: ClientRequest, response: IncomingMessage) => {
       if (!isCurrent()) return;
-      this.#onUnexpectedResponse(bearer, request, response);
+      this.#onUnexpectedResponse(auth, request, response);
     });
 
     socket.on('open', () => {
@@ -449,7 +483,7 @@ class SttTurnImpl implements SttTurn {
    * is present, which is the whole reason to have one: it is the only place the
    * status code and the rate-limit headers are visible.
    */
-  #onUnexpectedResponse(bearer: Bearer, request: ClientRequest, response: IncomingMessage): void {
+  #onUnexpectedResponse(auth: SttConnectAuth, request: ClientRequest, response: IncomingMessage): void {
     const status = response.statusCode ?? 0;
     const headers = response.headers;
 
@@ -464,7 +498,7 @@ class SttTurnImpl implements SttTurn {
         attempt: this.#attempt,
         headers: { ...headers },
       });
-      this.#retryAfterRateLimit(bearer, headers);
+      this.#retryAfterRateLimit(auth, headers);
       return;
     }
 
@@ -472,6 +506,11 @@ class SttTurnImpl implements SttTurn {
       response.resume();
       request.destroy();
       this.#socket = null;
+      if (auth.kind === 'grok-com') {
+        this.#log.warn('grok.com rejected the session', { status });
+        this.#fail(errorFromSttHandshake(status, '', 'grok-com'));
+        return;
+      }
       this.#log.warn('the xAI speech service rejected the token', { status });
       this.#fail(
         appError(
@@ -509,7 +548,7 @@ class SttTurnImpl implements SttTurn {
     this.#fail(errorFromSttHandshake(status, body));
   }
 
-  #retryAfterRateLimit(bearer: Bearer, headers: IncomingHttpHeaders): void {
+  #retryAfterRateLimit(auth: SttConnectAuth, headers: IncomingHttpHeaders): void {
     const retryAfter = parseRetryAfterMs(headers['retry-after'], this.#deps.now());
 
     if (this.#attempt >= RATE_LIMIT_MAX_RETRIES) {
@@ -550,7 +589,7 @@ class SttTurnImpl implements SttTurn {
     this.#attempt++;
     this.#log.info('retrying after rate limit', { attempt: this.#attempt, delayMs: delay });
     this.#arm('retry', delay, () => {
-      this.#connect(bearer);
+      this.#connect(auth);
     });
   }
 
@@ -901,6 +940,25 @@ class SttTurnImpl implements SttTurn {
 /* ------------------------------------------------------------------ *
  * Helpers
  * ------------------------------------------------------------------ */
+
+function bearerConnectHeaders(bearer: Bearer): Record<string, string> {
+  return {
+    Authorization: `Bearer ${bearer.token}`,
+    // Attribution only; the connection is fully authorised without these
+    // (`streaming.rs:49-55`).
+    'x-grok-client-identifier': 'grok-dictate',
+    'User-Agent': 'grok-dictate/0.1',
+  };
+}
+
+function grokComConnectHeaders(cookieHeader: string): Record<string, string> {
+  return {
+    Cookie: `${cookieHeader}`,
+    Origin: GROK_COM_ORIGIN,
+    Referer: `${GROK_COM_ORIGIN}/`,
+    'User-Agent': GROK_COM_USER_AGENT,
+  };
+}
 
 function rawToString(data: RawData): string {
   if (Buffer.isBuffer(data)) return data.toString('utf8');

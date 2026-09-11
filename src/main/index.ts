@@ -37,6 +37,7 @@ import { STATS_ROW_CAP, aggregateStats } from '@shared/stats.js';
 import { envString } from '@shared/env.js';
 import { createAudioSource } from './audio/index.js';
 import { createAuthProvider } from './auth/index.js';
+import { GrokComSession, electronGrokComCookieStore } from './auth/grok-com.js';
 import { CredentialStore, credentialsPath } from './auth/store.js';
 import { GrokCliRenewer } from './auth/renew.js';
 import { fileSink, logFilePath } from './log-file.js';
@@ -50,6 +51,7 @@ import { createSttClient } from './stt/index.js';
 import { createTray } from './tray/index.js';
 import { Orchestrator } from './state/orchestrator.js';
 import { createUiServices } from './ui/index.js';
+import { GrokComSignInWindow } from './ui/grok-com-signin.js';
 import { PanelWindows } from './ui/panels.js';
 import { SignInWindow } from './ui/signin.js';
 
@@ -102,6 +104,8 @@ function main(): void {
   });
   const panels = new PanelWindows(log);
   const signIn = new SignInWindow(log);
+  const grokCom = new GrokComSession(electronGrokComCookieStore(), log);
+  const grokComSignIn = new GrokComSignInWindow(grokCom, log);
   const hud = createHud(log, (message) => {
     panels.broadcast(message);
     signIn.send(message);
@@ -109,7 +113,7 @@ function main(): void {
   const sound = createSound(log, () => hud.window);
   const { port: native, supervisor } = createNativeHelper(log);
   const audio = createAudioSource(log);
-  const stt = createSttClient(log, auth);
+  const stt = createSttClient(log, auth, grokCom);
   const preview = createHudPreview(hud);
   let signedIn = false;
   const tray = createTray({
@@ -135,6 +139,10 @@ function main(): void {
     signedIn = status.state === 'signed-in';
     broadcast({ type: 'auth-updated', status });
     if (status.state === 'signed-in') signIn.close();
+  });
+
+  grokCom.onChange((signedInToGrokCom) => {
+    broadcast({ type: 'grok-com-updated', signedIn: signedInToGrokCom });
   });
 
   // Escape is caught by a global shortcut, which the UI services own, and it
@@ -284,6 +292,12 @@ function main(): void {
           });
           return;
         }
+        if (message.window === 'grok-com-signin') {
+          void grokComSignIn.open().catch((cause: unknown) => {
+            log.error('could not open the grok.com sign-in window', { err: cause });
+          });
+          return;
+        }
         void panels.open(message.window).catch((cause: unknown) => {
           log.error('could not open a panel', { window: message.window, err: cause });
         });
@@ -347,6 +361,11 @@ function main(): void {
         }
         case 'clear-api-key':
           return { type: 'auth-status', status: await auth.clearApiKey() };
+        case 'get-grok-com-status':
+          return { type: 'grok-com-status', signedIn: await grokCom.hasSession() };
+        case 'grok-com-sign-out':
+          await grokCom.clearSession();
+          return { type: 'grok-com-status', signedIn: false };
         case 'open-external': {
           if (!isAllowedExternalUrl(request.url)) {
             return {

@@ -15,7 +15,13 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { AuthPort, SttHandlers, SttTurn, SttTurnOptions } from '@contracts/ports.js';
+import type {
+  AuthPort,
+  GrokComSessionPort,
+  SttHandlers,
+  SttTurn,
+  SttTurnOptions,
+} from '@contracts/ports.js';
 import { CHUNK_BYTES } from '@shared/constants.js';
 import {
   addLogSink,
@@ -72,6 +78,23 @@ function failingAuth(error: AppError): AuthPort {
   return {
     getBearer(): Promise<Result<Bearer>> {
       return Promise.resolve(err(error));
+    },
+  };
+}
+
+function staticGrokCom(cookieHeader: string | null): GrokComSessionPort {
+  return {
+    hasSession(): Promise<boolean> {
+      return Promise.resolve(cookieHeader !== null && cookieHeader.length > 0);
+    },
+    getCookieHeader(): Promise<string | null> {
+      return Promise.resolve(cookieHeader);
+    },
+    clearSession(): Promise<void> {
+      return Promise.resolve();
+    },
+    onChange(_listener: (signedIn: boolean) => void): () => void {
+      return () => undefined;
     },
   };
 }
@@ -143,9 +166,37 @@ describe('the connection', () => {
     expect(request).toBeDefined();
     if (request === undefined) return;
     expect(request.headers.authorization).toBe(`Bearer ${FAKE_JWT}`);
+    expect(request.headers.cookie).toBeUndefined();
     expect(request.url).not.toContain(FAKE_JWT);
     // Attribution headers only; `streaming.rs:49-55` says they are optional.
     expect(request.headers['x-grok-client-identifier']).toBe('grok-dictate');
+  });
+
+  it('authenticates grok-stt-2-fast with grok.com cookies, not a bearer', async () => {
+    const { handlers } = start(
+      { model: 'grok-stt-2-fast' },
+      { grokCom: staticGrokCom('sso-rw=test-session') },
+    );
+    await waitFor(() => handlers.ready > 0);
+
+    const request = server.requests[0];
+    expect(request).toBeDefined();
+    if (request === undefined) return;
+    expect(request.headers.cookie).toContain('sso-rw');
+    expect(request.headers.origin).toBe('https://grok.com');
+    expect(request.headers.authorization).toBeUndefined();
+    expect(handlers.ready).toBe(1);
+  });
+
+  it('fails grok-stt-2-fast without a grok.com session, without opening a socket', async () => {
+    const { handlers } = start(
+      { model: 'grok-stt-2-fast' },
+      { grokCom: staticGrokCom(null) },
+    );
+    await waitFor(() => handlers.errors.length > 0);
+    expect(handlers.errors[0]?.code).toBe('auth_missing');
+    expect(handlers.errors[0]?.hint).toMatch(/grok\.com/);
+    expect(server.requests).toHaveLength(0);
   });
 
   it('carries the query contract from config.rs and the spikes', async () => {
@@ -562,6 +613,19 @@ describe('rate limiting', () => {
     expect(handlers.errors[0]?.hint).toMatch(/Sign in|`grok`/);
     expect(server.requests).toHaveLength(1); // no retry, and above all no refresh
   });
+
+  it('maps grok-stt-2-fast 401 to a grok.com re-sign-in, not `grok`', async () => {
+    server.rejections.push({ status: 401 });
+    const { handlers } = start(
+      { model: 'grok-stt-2-fast' },
+      { grokCom: staticGrokCom('sso-rw=test-session') },
+    );
+    await waitFor(() => handlers.errors.length === 1, 5000);
+    expect(handlers.errors[0]?.code).toBe('auth_expired');
+    expect(handlers.errors[0]?.hint).toMatch(/grok\.com/);
+    expect(handlers.errors[0]?.hint).not.toMatch(/`grok`/);
+    expect(server.requests).toHaveLength(1);
+  });
 });
 
 describe('the no-speech watchdog (pipeline.rs:198-209)', () => {
@@ -614,6 +678,23 @@ describe('the token never reaches a log', () => {
     for (const record of records) assertClean('log record', JSON.stringify(record));
     for (const error of [...handlers.errors, ...failed.handlers.errors]) {
       assertClean('AppError', JSON.stringify(error));
+    }
+  });
+
+  it('does not log grok.com cookie values', async () => {
+    const cookie = 'sso-rw=test-session';
+    const { handlers } = start(
+      { model: 'grok-stt-2-fast' },
+      { grokCom: staticGrokCom(cookie) },
+    );
+    await waitFor(() => handlers.ready > 0);
+
+    expect(lines.length).toBeGreaterThan(0);
+    for (const line of lines) {
+      expect(`${String(line.includes('test-session'))}`).toBe('false');
+    }
+    for (const record of records) {
+      expect(`${String(JSON.stringify(record).includes('test-session'))}`).toBe('false');
     }
   });
 });
