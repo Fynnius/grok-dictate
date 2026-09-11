@@ -27,6 +27,7 @@
 
 import AVFoundation
 import CaptureCore
+import CaptureObjC
 import Foundation
 
 final class CaptureEngine {
@@ -110,7 +111,7 @@ final class CaptureEngine {
         }
 
         if !tapInstalled {
-            installTap(on: engine)
+            try installTap(on: engine)
         }
 
         do {
@@ -187,14 +188,15 @@ final class CaptureEngine {
     /// - Returns: `true` when the existing prepared graph was reused.
     @discardableResult
     private func ensureGraph(sampleRate: Double) throws -> Bool {
-        if let engine,
+        if let existing = engine,
             converter != nil,
             outputFormat?.sampleRate == sampleRate,
-            hardwareFormatStillValid(engine)
+            hardwareFormatStillValid(existing)
         {
-            // `pause()` keeps prepare(); calling it again is cheap and covers
-            // a graph the system stopped under us.
-            engine.prepare()
+            // Already prepared and paused. `start()` will resume IO.
+            // Calling `prepare()` again is unnecessary and, on a graph that
+            // has not yet created its nodes, aborts the process (NSException
+            // `inputNode != nullptr || outputNode != nullptr`).
             return true
         }
 
@@ -243,10 +245,12 @@ final class CaptureEngine {
         }
 
         let engine = AVAudioEngine()
-        // Without prepare(), `inputFormat(forBus:)` is often 0 Hz on a
-        // command-line process that has never run an engine.
-        engine.prepare()
+        // Accessing `inputNode` is what creates it. `prepare()` before that
+        // raises NSException `inputNode != nullptr || outputNode != nullptr`
+        // and aborts the process — Swift `catch` does not see it. The 2026-09-11
+        // crash reports were exactly this, at first Fn press.
         let input = engine.inputNode
+        try objcAudio("prepare") { engine.prepare() }
         let hardwareFormat = input.inputFormat(forBus: 0)
         if hardwareFormat.sampleRate <= 0 || hardwareFormat.channelCount == 0 {
             throw OpenError(
@@ -280,19 +284,38 @@ final class CaptureEngine {
             && current.channelCount == cached.channelCount
     }
 
-    private func installTap(on engine: AVAudioEngine) {
+    private func installTap(on engine: AVAudioEngine) throws {
         let input = engine.inputNode
         let format = input.inputFormat(forBus: 0)
-        input.installTap(onBus: 0, bufferSize: Self.tapBufferFrames, format: format) {
-            [weak self] buffer, _ in
-            self?.handleTap(buffer)
+        try objcAudio("installTap") {
+            input.installTap(onBus: 0, bufferSize: Self.tapBufferFrames, format: format) {
+                [weak self] buffer, _ in
+                self?.handleTap(buffer)
+            }
         }
         tapInstalled = true
     }
 
     private func removeTap(from engine: AVAudioEngine) {
-        engine.inputNode.removeTap(onBus: 0)
+        guard tapInstalled else { return }
+        // `removeTap` with no tap is an NSException, not an error. A device
+        // change can invalidate the tap under us.
+        _ = GDCatchException { engine.inputNode.removeTap(onBus: 0) }
         tapInstalled = false
+    }
+
+    /// AVAudioEngine raises `NSException` for illegal graph states. Those
+    /// abort the process unless caught here; the user then sees "capture
+    /// process stopped unexpectedly" instead of a recoverable device error.
+    private func objcAudio(_ label: String, _ body: () -> Void) throws {
+        if let exception = GDCatchException(body) {
+            logStderr("\(label) raised \(exception.name.rawValue): \(exception.reason ?? "")")
+            throw OpenError(
+                code: .audioDevice,
+                message: "Could not start the microphone.",
+                hint: "Try dictating again. If it keeps happening, rebuild the capture binary with `./native/build.sh`."
+            )
+        }
     }
 
     private func observe(_ engine: AVAudioEngine) {

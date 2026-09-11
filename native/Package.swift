@@ -4,7 +4,7 @@
 // key, put text into another application, and capture the microphone as raw
 // 16 kHz PCM without Chromium's audio graph.
 //
-// Split deliberately into four targets:
+// Split deliberately into these targets:
 //
 //   HelperCore              — pure logic. No CoreGraphics, no ApplicationServices,
 //                             no AppKit. Everything here runs headless in `swift
@@ -18,6 +18,8 @@
 //                             no STT.
 //   CaptureCore             — pure PCM chunking, RMS and the capture JSON
 //                             protocol. No CoreAudio, no AVFoundation.
+//   CaptureObjC             — NSException catcher. AVAudioEngine raises
+//                             exceptions, not errors; Swift cannot catch them.
 //   grok-dictate-capture    — AVAudioEngine + the HAL input tap. Prepares the
 //                             graph at launch; opens the microphone only on
 //                             `start`.
@@ -52,9 +54,13 @@ let package = Package(
             dependencies: ["HelperCore"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
+        .target(
+            name: "CaptureObjC",
+            publicHeadersPath: "include"
+        ),
         .executableTarget(
             name: "grok-dictate-capture",
-            dependencies: ["CaptureCore", "HelperCore"],
+            dependencies: ["CaptureCore", "HelperCore", "CaptureObjC"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .testTarget(

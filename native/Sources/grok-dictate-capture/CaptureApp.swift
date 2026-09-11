@@ -12,17 +12,18 @@ final class CaptureApp {
 
     init(dryRun: Bool) {
         self.dryRun = dryRun
-        // Warm the graph before the first hold so Fn-down is "start hardware",
-        // not "construct an engine". Does not open the device; skipped when
-        // microphone permission is not yet granted (see CaptureEngine).
-        if !dryRun {
-            engine.prepareIdle(sampleRate: 16_000)
-        }
     }
 
     func startReadingStdin() {
         if dryRun {
             logStderr("DRY RUN — GROK_DICTATE_CAPTURE_DRY_RUN is set, so the microphone will not open")
+        }
+        // After the run loop is spinning — `prepare()` before that has no
+        // audio session and can raise. Does not open the device.
+        if !dryRun {
+            DispatchQueue.main.async { [weak self] in
+                self?.engine.prepareIdle(sampleRate: 16_000)
+            }
         }
         FileHandle.standardInput.readabilityHandler = { [weak self] handle in
             let data = handle.availableData

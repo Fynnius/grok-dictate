@@ -25,10 +25,22 @@ describe('native capture keeps the graph warm across holds', () => {
     expect(disposeFn).not.toMatch(/engine\.pause\(\)/);
   });
 
-  it('prepares the graph at process launch, not at the first hold', () => {
+  it('prepares the graph once the run loop is up, not at process init', () => {
     const app = readFileSync(appPath, 'utf8');
     expect(app).toMatch(/engine\.prepareIdle\(sampleRate:/);
     const init = app.split('init(dryRun:')[1]?.split('func startReadingStdin')[0] ?? '';
-    expect(init).toMatch(/prepareIdle/);
+    expect(init).not.toMatch(/prepareIdle/);
+    const stdin = app.split('func startReadingStdin')[1] ?? '';
+    expect(stdin).toMatch(/prepareIdle/);
+  });
+
+  it('creates the input node before calling prepare()', () => {
+    const src = readFileSync(enginePath, 'utf8');
+    const rebuild = src.split('private func finishRebuild')[1] ?? '';
+    const prepareAt = rebuild.indexOf('engine.prepare()');
+    const nodeAt = rebuild.indexOf('engine.inputNode');
+    expect(nodeAt).toBeGreaterThanOrEqual(0);
+    expect(prepareAt).toBeGreaterThan(nodeAt);
+    expect(src).toMatch(/GDCatchException/);
   });
 });

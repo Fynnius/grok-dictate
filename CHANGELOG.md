@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **The first word of a hold is no longer cut off waiting for the microphone.** Every Fn press used to construct a new `AVAudioEngine`, `prepare()` it, and `stop()` it at release — and `stop()` throws away the prepare, so the next press paid a cold HAL open (a few hundred milliseconds of speech that never became a sample). The graph is now prepared at launch and **paused** between holds; the orange indicator still only lights while hardware is running. The start cue waits until the device is actually open, so it means "we are listening" rather than "we saw the key".
+- **The capture process no longer aborts on the first hold.** `AVAudioEngine.prepare()` was called before the input node existed, which raises an `NSException` Swift cannot catch (`inputNode != nullptr || outputNode != nullptr`). The node is created first, and those exceptions are caught so a graph error is a recoverable HUD message rather than a dead process.
 
 ## [0.3.0] — 2026-09-06
 
