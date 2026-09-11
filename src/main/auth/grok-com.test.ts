@@ -22,6 +22,20 @@ class MemoryCookieStore implements GrokComCookieStore {
     return Promise.resolve(this.#cookies);
   }
 
+  write(
+    cookies: readonly { readonly name: string; readonly value: string }[],
+  ): Promise<void> {
+    const next = [...this.#cookies];
+    for (const cookie of cookies) {
+      const index = next.findIndex((existing) => existing.name === cookie.name);
+      if (index >= 0) next[index] = { name: cookie.name, value: cookie.value };
+      else next.push({ name: cookie.name, value: cookie.value });
+    }
+    this.#cookies = next;
+    this.#emit();
+    return Promise.resolve();
+  }
+
   clear(): Promise<void> {
     this.#cookies = [];
     this.#emit();
@@ -147,6 +161,15 @@ describe('GrokComSession', () => {
     store.set([]);
     await flush();
     expect(events).toEqual([true, false]);
+  });
+
+  it('imports cookies through the store and then reports signed in', async () => {
+    await session.importCookies([
+      { name: 'grok_device_id', value: 'device-abc' },
+      { name: 'sso-rw', value: 'fake' },
+    ]);
+    await expect(session.hasSession()).resolves.toBe(true);
+    await expect(session.getCookieHeader()).resolves.toContain('sso-rw=fake');
   });
 
   it('never logs cookie values', async () => {

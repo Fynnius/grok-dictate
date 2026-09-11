@@ -37,6 +37,7 @@ import { STATS_ROW_CAP, aggregateStats } from '@shared/stats.js';
 import { envString } from '@shared/env.js';
 import { createAudioSource } from './audio/index.js';
 import { createAuthProvider } from './auth/index.js';
+import { ChromePasskeySignIn } from './auth/chrome-passkey.js';
 import { GrokComSession, electronGrokComCookieStore } from './auth/grok-com.js';
 import { CredentialStore, credentialsPath } from './auth/store.js';
 import { GrokCliRenewer } from './auth/renew.js';
@@ -73,6 +74,14 @@ function isAllowedExternalUrl(url: string): boolean {
 }
 
 function main(): void {
+  // Chromium in this window is not Safari; hybrid/QR is the only in-app
+  // passkey transport that does not need Apple Associated Domains.
+  if (process.platform === 'darwin') {
+    app.commandLine.appendSwitch(
+      'enable-features',
+      'WebAuthenticationHybrid,WebAuthenticationHybridLinkedQR',
+    );
+  }
   // Menu-bar app: no dock icon.
   app.dock?.hide();
 
@@ -106,6 +115,11 @@ function main(): void {
   const signIn = new SignInWindow(log);
   const grokCom = new GrokComSession(electronGrokComCookieStore(), log);
   const grokComSignIn = new GrokComSignInWindow(grokCom, log);
+  const chromePasskey = new ChromePasskeySignIn({
+    logger: log,
+    grokCom,
+    userDataDir,
+  });
   const hud = createHud(log, (message) => {
     panels.broadcast(message);
     signIn.send(message);
@@ -366,6 +380,11 @@ function main(): void {
         case 'grok-com-sign-out':
           await grokCom.clearSession();
           return { type: 'grok-com-status', signedIn: false };
+        case 'grok-com-passkey-signin': {
+          const result = await chromePasskey.start();
+          if (!result.ok) return { type: 'error', error: result.error };
+          return { type: 'grok-com-status', signedIn: await grokCom.hasSession() };
+        }
         case 'open-external': {
           if (!isAllowedExternalUrl(request.url)) {
             return {
@@ -416,6 +435,7 @@ function main(): void {
     // going to restart — correct, and not something to put on screen while the
     // app is closing.
     isQuitting = true;
+    chromePasskey.dispose();
     auth.stopAutoRenew();
     orchestrator.dispose();
     ui.dispose();

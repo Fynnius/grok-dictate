@@ -59,6 +59,7 @@ export function SettingsView(): React.JSX.Element {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [auth, setAuth] = useState<AuthStatus | null>(null);
   const [grokComSignedIn, setGrokComSignedIn] = useState<boolean | null>(null);
+  const [chromePasskeyWaiting, setChromePasskeyWaiting] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [keytermText, setKeytermText] = useState('');
   const [issues, setIssues] = useState<readonly string[]>([]);
@@ -217,7 +218,7 @@ export function SettingsView(): React.JSX.Element {
           <div className="card-row">
             <span className="row-label">
               grok.com
-              <InfoTip text="STT 2 Fast talks to grok.com with this login, not the xAI API key. The session stays inside Grok Dictate (partition persist:grok-com). Signing out here does not log you out of the browser." />
+              <InfoTip text="STT 2 Fast talks to grok.com with this login, not the xAI API key. The in-app window cannot use macOS iCloud passkeys — Electron is not Safari. Passkeys (Chrome) opens a real Chrome window where those passkeys work, then copies only grok.com cookies back here." />
             </span>
             <span className="control">
               {grokComSignedIn === null ? (
@@ -239,15 +240,34 @@ export function SettingsView(): React.JSX.Element {
                     Sign out
                   </button>
                 </>
+              ) : chromePasskeyWaiting ? (
+                <span className="unit">Waiting for Chrome…</span>
               ) : (
-                <button
-                  type="button"
-                  onClick={() => {
-                    api.send({ type: 'open-window', window: 'grok-com-signin' });
-                  }}
-                >
-                  Sign in to grok.com…
-                </button>
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      api.send({ type: 'open-window', window: 'grok-com-signin' });
+                    }}
+                  >
+                    Sign in to grok.com…
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setChromePasskeyWaiting(true);
+                      void request({ type: 'grok-com-passkey-signin' }, 'grok-com-status').then(
+                        (outcome) => {
+                          setChromePasskeyWaiting(false);
+                          if (outcome.ok) setGrokComSignedIn(outcome.value.signedIn);
+                          else setIssues([`Passkey sign-in — ${outcome.message}`]);
+                        },
+                      );
+                    }}
+                  >
+                    Passkeys (Chrome)…
+                  </button>
+                </>
               )}
             </span>
           </div>

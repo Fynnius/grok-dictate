@@ -331,6 +331,7 @@ export type InvokeRequest =
   | { type: 'clear-api-key' }
   | { type: 'get-grok-com-status' }
   | { type: 'grok-com-sign-out' }
+  | { type: 'grok-com-passkey-signin' }
   | { type: 'open-external'; url: string };
 
 export interface AppSnapshot {

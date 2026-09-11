@@ -17,8 +17,19 @@ import type { Logger } from '@shared/logger.js';
 
 export type { GrokComSessionPort };
 
+export interface GrokComCookieRecord {
+  readonly name: string;
+  readonly value: string;
+  readonly domain?: string;
+  readonly path?: string;
+  readonly secure?: boolean;
+  readonly httpOnly?: boolean;
+  readonly expirationDate?: number;
+}
+
 export interface GrokComCookieStore {
   get(url: string): Promise<readonly { readonly name: string; readonly value: string }[]>;
+  write(cookies: readonly GrokComCookieRecord[]): Promise<void>;
   clear(): Promise<void>;
   onChanged(listener: () => void): () => void;
 }
@@ -71,6 +82,11 @@ export class GrokComSession implements GrokComSessionPort {
     const cookies = await this.#store.get(GROK_COM_ORIGIN);
     if (!hasGrokComSessionCookie(cookies)) return null;
     return cookieHeader(cookies);
+  }
+
+  async importCookies(cookies: readonly GrokComCookieRecord[]): Promise<void> {
+    await this.#store.write(cookies);
+    await this.#onStoreChanged();
   }
 
   async clearSession(): Promise<void> {
@@ -145,6 +161,23 @@ export function electronGrokComCookieStore(
     async get(url) {
       const ready = await sessionWhenReady();
       return ready.cookies.get({ url });
+    },
+    async write(cookies) {
+      const ready = await sessionWhenReady();
+      for (const cookie of cookies) {
+        const domain = (cookie.domain ?? 'grok.com').replace(/^\./, '');
+        const url = `https://${domain}/`;
+        await ready.cookies.set({
+          url,
+          name: cookie.name,
+          value: cookie.value,
+          ...(cookie.domain === undefined ? {} : { domain: cookie.domain }),
+          path: cookie.path ?? '/',
+          secure: cookie.secure ?? true,
+          httpOnly: cookie.httpOnly ?? false,
+          ...(cookie.expirationDate === undefined ? {} : { expirationDate: cookie.expirationDate }),
+        });
+      }
     },
     async clear() {
       const ready = await sessionWhenReady();

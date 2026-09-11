@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **In-app grok.com sign-in** (Settings → Dictation → grok.com). STT 2 Fast talks to grok.com's website STT socket using a session that lives in its own Electron partition (`persist:grok-com`), not the system browser's cookies and not the xAI API key. Signing out in Settings clears that partition only.
+- **Passkeys (Chrome)** for that grok.com session. Electron cannot show iCloud Keychain passkeys (it is not Safari, and Apple Associated Domains cannot be claimed for grok.com). The button opens Chrome/Edge/Brave, where those passkeys work, then copies only grok.com / x.ai cookies back. The in-app window still works for a password sign-in.
 
 ### Changed
 

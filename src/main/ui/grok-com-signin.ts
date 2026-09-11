@@ -8,7 +8,7 @@
  * This constructs `BrowserWindow` itself and does not use `createWindow()`.
  */
 
-import { BrowserWindow } from 'electron';
+import { app, BrowserWindow } from 'electron';
 import type { GrokComSessionPort } from '@contracts/ports.js';
 import { GROK_COM_ORIGIN, GROK_COM_PARTITION } from '@shared/constants.js';
 import type { Logger } from '@shared/logger.js';
@@ -58,6 +58,22 @@ export class GrokComSignInWindow {
     window.on('closed', () => {
       this.#teardown(window);
     });
+    window.webContents.setWindowOpenHandler(({ url }) => {
+      const hostname = hostnameOf(url);
+      if (hostname === null || !isAuthHost(hostname)) {
+        return { action: 'deny' };
+      }
+      return {
+        action: 'allow',
+        overrideBrowserWindowOptions: {
+          webPreferences: {
+            partition: GROK_COM_PARTITION,
+            nodeIntegration: false,
+            contextIsolation: true,
+          },
+        },
+      };
+    });
 
     this.#unsubSession = this.#session.onChange(() => {
       void this.#considerClose();
@@ -78,6 +94,9 @@ export class GrokComSignInWindow {
     }
 
     if (window.isDestroyed()) return;
+    // LSUIElement menu-bar apps often never receive the system passkey sheet.
+    app.dock?.show();
+    app.focus({ steal: true });
     window.show();
     window.focus();
     this.#log.info('opened');
@@ -94,6 +113,7 @@ export class GrokComSignInWindow {
     this.#unsubSession?.();
     this.#unsubSession = null;
     if (this.#window === window) this.#window = null;
+    app.dock?.hide();
   }
 
   async #considerClose(url?: string): Promise<void> {
@@ -133,4 +153,13 @@ function hostnameOf(url: string): string | null {
   } catch {
     return null;
   }
+}
+
+function isAuthHost(hostname: string): boolean {
+  return (
+    hostname === 'grok.com' ||
+    hostname.endsWith('.grok.com') ||
+    hostname === 'x.ai' ||
+    hostname.endsWith('.x.ai')
+  );
 }
