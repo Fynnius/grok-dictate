@@ -19,6 +19,7 @@
  *   npx tsx scripts/probe-stt.ts --wav path/to/clip.wav --language de
  *   npx tsx scripts/probe-stt.ts --wav … --end finalize --endpointing 50
  *   npx tsx scripts/probe-stt.ts --wav … --keyterm kubectl --keyterm Vitest
+ *   npx tsx scripts/probe-stt.ts --wav … --model grok-stt-2-fast
  *
  * Auth: `XAI_API_KEY`, or a logged-in Grok CLI (`~/.grok/auth.json`).
  */
@@ -58,6 +59,7 @@ interface Options {
   label: string;
   extraParams: [string, string][];
   maxSeconds: number;
+  model: string | null; // null = omit the parameter (today's behaviour)
 }
 
 function parseArgs(argv: string[]): Options {
@@ -75,6 +77,7 @@ function parseArgs(argv: string[]): Options {
     label: 'probe',
     extraParams: [],
     maxSeconds: 120,
+    model: null,
   };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -123,6 +126,9 @@ function parseArgs(argv: string[]): Options {
         break;
       case '--max-seconds':
         options.maxSeconds = Number(next());
+        break;
+      case '--model':
+        options.model = next();
         break;
       case '--param': {
         const [key, ...rest] = next().split('=');
@@ -197,6 +203,7 @@ function buildUrl(options: Options): string {
   url.searchParams.set('interim_results', String(options.interimResults));
   if (options.language !== null) url.searchParams.set('language', options.language);
   url.searchParams.set('endpointing', String(options.endpointing));
+  if (options.model !== null) url.searchParams.set('model', options.model);
 
   if (options.keyterms.length > 0) {
     //  explicitly leaves this open: "never checked whether the

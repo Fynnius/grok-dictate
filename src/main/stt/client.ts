@@ -41,6 +41,7 @@
 
 import type { ClientRequest, IncomingHttpHeaders, IncomingMessage } from 'node:http';
 import { WebSocket, type RawData } from 'ws';
+import { resolveWireSttModel } from '@contracts/config.js';
 import type {
   AuthPort,
   Bearer,
@@ -382,6 +383,7 @@ class SttTurnImpl implements SttTurn {
       // tuning parameters and keyterms.
       url,
       attempt: this.#attempt,
+      model: resolveWireSttModel(this.#options.model ?? 'grok-stt'),
     });
 
     const socket = new WebSocket(url, {

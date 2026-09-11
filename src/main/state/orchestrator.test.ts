@@ -555,6 +555,14 @@ describe('W0 timing channel', () => {
   });
 });
 
+describe('STT model from config', () => {
+  it('passes sttModel into startTurn', () => {
+    const { orchestrator, stt } = harness({ config: { sttModel: 'grok-stt-2-fast' } });
+    orchestrator.dispatch({ type: 'PTT_DOWN', ts: 1 });
+    expect(stt.only.options.model).toBe('grok-stt-2-fast');
+  });
+});
+
 describe('error HUD dismiss (click / FN)', () => {
   it('dismissHud hides and lets the same error show again', () => {
     const { orchestrator, hud } = harness();

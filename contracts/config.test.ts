@@ -1,10 +1,33 @@
 import { describe, expect, it } from 'vitest';
-import { AppConfigSchema, DEFAULT_CONFIG, parseConfig, resolveWireLanguage } from './config.js';
+import {
+  AppConfigSchema,
+  DEFAULT_CONFIG,
+  parseConfig,
+  resolveWireLanguage,
+  resolveWireSttModel,
+} from './config.js';
 
 describe('config defaults', () => {
   it('defaults to auto language and no keyterms', () => {
     expect(DEFAULT_CONFIG.languageMode).toBe('auto');
     expect(DEFAULT_CONFIG.keyterms).toEqual([]);
+  });
+
+  it('defaults `sttModel` to `grok-stt` so the wire URL stays bit-identical', () => {
+    expect(DEFAULT_CONFIG.sttModel).toBe('grok-stt');
+  });
+
+  it('keeps `grok-stt-2-fast` when the user asks for grok.com dictate', () => {
+    const { config, issues } = parseConfig({ sttModel: 'grok-stt-2-fast' });
+    expect(issues).toEqual([]);
+    expect(config.sttModel).toBe('grok-stt-2-fast');
+  });
+
+  it('falls back to `grok-stt` for an sttModel it does not recognise', () => {
+    const { config, issues } = parseConfig({ sttModel: 'whisper', endpointingMs: 250 });
+    expect(issues.length).toBeGreaterThan(0);
+    expect(config.sttModel).toBe('grok-stt');
+    expect(config.endpointingMs).toBe(250);
   });
 
   it('defaults `useFinalize` to false on the evidence of spike 2', () => {
@@ -70,6 +93,7 @@ describe('config defaults', () => {
     const { config, issues } = parseConfig({ languageMode: 'de' });
     expect(issues).toEqual([]);
     expect(config.insertMethod).toBe('auto');
+    expect(config.sttModel).toBe('grok-stt');
   });
 });
 
@@ -122,5 +146,15 @@ describe('resolveWireLanguage', () => {
     for (const mode of ['auto', 'de', 'en'] as const) {
       expect(resolveWireLanguage(mode, 'auto', 'auto')).not.toBe('auto');
     }
+  });
+});
+
+describe('resolveWireSttModel', () => {
+  it('omits `grok-stt` so the default URL stays bit-identical', () => {
+    expect(resolveWireSttModel('grok-stt')).toBeNull();
+  });
+
+  it('sends `grok-stt-2-fast` (grok.com composer dictate)', () => {
+    expect(resolveWireSttModel('grok-stt-2-fast')).toBe('grok-stt-2-fast');
   });
 });

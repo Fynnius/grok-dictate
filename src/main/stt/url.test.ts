@@ -65,6 +65,39 @@ describe('buildSttUrl', () => {
     });
     expect(url.startsWith('ws://127.0.0.1:5555/v1/stt?')).toBe(true);
   });
+
+  it('omits `model` when it is missing (public default, bit-identical URL)', () => {
+    const q = query(
+      buildSttUrl({ apiBase: base, language: null, endpointingMs: 400, keyterms: [] }),
+    );
+    expect(q.has('model')).toBe(false);
+  });
+
+  it('omits `model` for `grok-stt`', () => {
+    const q = query(
+      buildSttUrl({
+        apiBase: base,
+        language: null,
+        endpointingMs: 400,
+        keyterms: [],
+        model: 'grok-stt',
+      }),
+    );
+    expect(q.has('model')).toBe(false);
+  });
+
+  it('sends `model=grok-stt-2-fast` (grok.com composer dictate)', () => {
+    const q = query(
+      buildSttUrl({
+        apiBase: base,
+        language: null,
+        endpointingMs: 400,
+        keyterms: [],
+        model: 'grok-stt-2-fast',
+      }),
+    );
+    expect(q.get('model')).toBe('grok-stt-2-fast');
+  });
 });
 
 describe('selectKeyterms', () => {

@@ -18,7 +18,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import type { AppConfig, LanguageMode } from '@contracts/config.js';
+import type { AppConfig, LanguageMode, SttModel } from '@contracts/config.js';
 import { DEFAULT_CONFIG } from '@contracts/config.js';
 import type { AuthStatus } from '@contracts/events.js';
 import { KEYTERM_MAX_COUNT, KEYTERM_MAX_LENGTH } from '@shared/constants.js';
@@ -38,6 +38,11 @@ const LANGUAGE_OPTIONS: readonly (readonly [LanguageMode, string])[] = [
   ['auto', 'Automatic'],
   ['de', 'Deutsch'],
   ['en', 'English'],
+];
+
+const STT_MODEL_OPTIONS: readonly (readonly [SttModel, string])[] = [
+  ['grok-stt', 'Standard'],
+  ['grok-stt-2-fast', 'STT 2 Fast'],
 ];
 
 /**
@@ -187,6 +192,20 @@ export function SettingsView(): React.JSX.Element {
                 value={config.languageMode}
                 onChange={(mode) => save({ languageMode: mode })}
                 ariaLabel="Language preference"
+              />
+            </span>
+          </div>
+          <div className="card-row">
+            <span className="row-label">
+              Speech model
+              <InfoTip text="Standard is the public default this app has always used. STT 2 Fast is the model grok.com's composer dictate button uses. Switching takes effect on the next dictation." />
+            </span>
+            <span className="control">
+              <Segmented
+                options={STT_MODEL_OPTIONS}
+                value={config.sttModel ?? 'grok-stt'}
+                onChange={(model) => save({ sttModel: model })}
+                ariaLabel="Speech recognition model"
               />
             </span>
           </div>

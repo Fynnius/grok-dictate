@@ -14,6 +14,7 @@
  * | `endpointing`      | config, 400 ms | `config.rs:36-48`; spike 2                |
  * | `language`         | omitted for `auto` | spike 1 + 3, docs/spike-results.md    |
  * | `keyterm`          | repeated       | spike 5                                   |
+ * | `model`            | omitted by default | grok.com `web_streaming_dictation_config` |
  *
  * Two of those are the direct output of the Phase 1 spikes and would otherwise
  * be guesses:
@@ -29,8 +30,15 @@
  *   - **`keyterm` is repeated, not comma-separated.** Spike 5 proved both forms
  *     work identically, and repetition is chosen because a term containing a
  *     comma is unrepresentable in the CSV form.
+ *
+ *   - **`model` is omitted for `grok-stt`.** grok.com composer dictate sends
+ *     `model=grok-stt-2-fast` from `web_streaming_dictation_config.model` on the
+ *     same protocol. The public default is `grok-stt`; omitting it keeps existing
+ *     sessions bit-identical. We do not copy grok.com's `endpointing=20` — that
+ *     would wreck hold-to-talk.
  */
 
+import { resolveWireSttModel, type SttModel } from '@contracts/config.js';
 import type { SttTurnOptions } from '@contracts/ports.js';
 import {
   KEYTERM_MAX_COUNT,
@@ -85,6 +93,12 @@ export interface SttUrlOptions {
   readonly keyterms: readonly string[];
   /** `config.rs:36-48` sets this true; xAI's documented default is false. */
   readonly interimResults?: boolean;
+  /**
+   * STT model id. Missing / `grok-stt` / `null` omit `model` on the wire.
+   * `grok-stt-2-fast` is grok.com composer dictate
+   * (`web_streaming_dictation_config.model`).
+   */
+  readonly model?: SttModel | null;
 }
 
 export function sttUrlOptions(apiBase: string, options: SttTurnOptions): SttUrlOptions {
@@ -93,6 +107,7 @@ export function sttUrlOptions(apiBase: string, options: SttTurnOptions): SttUrlO
     language: options.language,
     endpointingMs: options.endpointingMs,
     keyterms: options.keyterms,
+    model: options.model ?? 'grok-stt',
   };
 }
 
@@ -109,6 +124,10 @@ export function buildSttUrl(options: SttUrlOptions): string {
   // `null` means "omit" — never the literal string `auto`, and never a
   // guessed code (spike 3: the parameter did not steer anything we could test).
   if (options.language !== null) url.searchParams.set('language', options.language);
+  // Missing / `grok-stt` omit `model` so the default URL stays bit-identical.
+  // `grok-stt-2-fast` is grok.com `web_streaming_dictation_config.model`.
+  const model = resolveWireSttModel(options.model ?? 'grok-stt');
+  if (model !== null) url.searchParams.set('model', model);
 
   for (const term of selectKeyterms(options.keyterms).accepted) {
     url.searchParams.append('keyterm', term);

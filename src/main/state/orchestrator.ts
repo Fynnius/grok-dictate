@@ -311,6 +311,7 @@ export class Orchestrator {
             endpointingMs: cfg.endpointingMs,
             keyterms: cfg.keyterms,
             useFinalize: cfg.useFinalize,
+            model: cfg.sttModel,
           },
           {
             onReady: () => {

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Settings → Dictation → Speech model.** _Standard_ (the default) is unchanged. _STT 2 Fast_ is `grok-stt-2-fast`, the model grok.com composer dictate uses, sent as `model=` on the existing `api.x.ai` socket.
+
 ## [0.3.0] — 2026-09-06
 
 Dictation now pastes instead of typing, where pasting is better — and it costs you your clipboard.

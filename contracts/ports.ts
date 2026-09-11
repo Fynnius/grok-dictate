@@ -27,7 +27,7 @@
  *      same window as the connect.
  */
 
-import type { AppConfig, HotkeyBindings } from './config.js';
+import type { AppConfig, HotkeyBindings, SttModel } from './config.js';
 import type { HistoryEntry, HudView, SessionState } from './events.js';
 import type { InsertDeclineReason, InsertRoute, InsertTier } from './helper-protocol.js';
 import type { AppError, Result } from '../src/shared/result.js';
@@ -255,6 +255,11 @@ export interface SttTurnOptions {
   /** `finalize` (documented for push-to-talk) vs `audio.done` (what the CLI
    *  sends, `streaming.rs:82`). Chosen by spike 2. */
   readonly useFinalize: boolean;
+  /**
+   * STT model id. `grok-stt` or omitted → no `model` query param (public
+   * default). `grok-stt-2-fast` → `model=grok-stt-2-fast` (grok.com dictate).
+   */
+  readonly model?: SttModel;
 }
 
 export interface SttHandlers {

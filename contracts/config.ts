@@ -49,6 +49,18 @@ export const LANGUAGE_MODES = ['auto', 'de', 'en'] as const;
 export const LanguageModeSchema = z.enum(LANGUAGE_MODES);
 export type LanguageMode = (typeof LANGUAGE_MODES)[number];
 
+/**
+ * STT model sent as the `model` query parameter on `wss://api.x.ai/v1/stt`.
+ *
+ * `grok-stt` is the public default. Omit it on the wire so existing sessions
+ * are bit-identical. `grok-stt-2-fast` is what grok.com composer dictate uses
+ * (`web_streaming_dictation_config.model`).
+ */
+export const STT_MODELS = ['grok-stt', 'grok-stt-2-fast'] as const;
+export const SttModelSchema = z.enum(STT_MODELS);
+export type SttModel = (typeof STT_MODELS)[number];
+export const DEFAULT_STT_MODEL: SttModel = 'grok-stt';
+
 /** The 25-code xAI STT catalog. */
 export const STT_LANGUAGE_CATALOG = [
   'ar',
@@ -96,6 +108,16 @@ export type HotkeyBindings = z.infer<typeof HotkeyBindingsSchema>;
 
 export const AppConfigSchema = z.object({
   languageMode: LanguageModeSchema.default('auto'),
+
+  /**
+   * Which Grok STT model the streaming socket asks for.
+   *
+   * `grok-stt` (default) omits the `model` query parameter — the public API
+   * default, and what this app has always sent. `grok-stt-2-fast` is the
+   * model grok.com composer dictate uses; it is not in the public STT docs
+   * yet, but the website sends it on the same protocol.
+   */
+  sttModel: SttModelSchema.default('grok-stt'),
 
   /**
    * Server-side custom dictionary: max 100 terms × 50 chars.
@@ -311,4 +333,13 @@ export function resolveWireLanguage(
 
 export function isCatalogLanguage(code: string): boolean {
   return (STT_LANGUAGE_CATALOG as readonly string[]).includes(code);
+}
+
+/**
+ * Value for the `model` query parameter, or `null` to omit it.
+ * `grok-stt` is omitted so the default URL stays bit-identical to today.
+ */
+export function resolveWireSttModel(model: SttModel): string | null {
+  if (model === 'grok-stt') return null;
+  return model;
 }
