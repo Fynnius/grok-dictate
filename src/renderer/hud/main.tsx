@@ -215,7 +215,10 @@ function Capsule({
       if (!capsule.buttons) {
         return (
           <div
-            className={capsuleClass(`capsule is-hold${live === null ? '' : ' is-live'}`, dragging)}
+            className={capsuleClass(
+              `capsule is-hold${live === null ? '' : ' is-live'} tone-${p.tone}`,
+              dragging,
+            )}
             {...chrome}
           >
             <Waveform level={level} />
@@ -229,7 +232,10 @@ function Capsule({
       // `no-drag` + stopPropagation: a press on ✕/✓ must not start a window drag.
       return (
         <div
-          className={capsuleClass(`capsule is-toggle${live === null ? '' : ' is-live'}`, dragging)}
+          className={capsuleClass(
+            `capsule is-toggle${live === null ? '' : ' is-live'} tone-${p.tone}`,
+            dragging,
+          )}
           {...chrome}
         >
           <button

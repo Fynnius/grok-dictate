@@ -134,6 +134,30 @@ describe('present', () => {
     expect(p.liveText).toBeNull();
   });
 
+  it('turns the recording capsule to a warning in the last minute of the cap', () => {
+    const early = present({
+      kind: 'recording',
+      elapsedMs: 8 * 60_000 + 59_000,
+      level: 0.4,
+      interim: '',
+      mode: 'hold',
+    });
+    expect(early.tone).toBe('recording');
+    expect(early.label).toBe('Listening');
+
+    const warn = present({
+      kind: 'recording',
+      elapsedMs: 9 * 60_000,
+      level: 0.4,
+      interim: '',
+      mode: 'hold',
+    });
+    expect(warn.tone).toBe('warning');
+    expect(warn.label).toMatch(/one minute left/);
+    expect(warn.message).toBeNull();
+    expect(warn.capsule).toEqual({ kind: 'waveform', buttons: false });
+  });
+
   it('colours failure red and the self-clearing pause amber (overhaul §16.5b)', () => {
     expect(
       present({ kind: 'not_inserted', text: LONG, reason: 'insert_failed', detail: null }).tone,

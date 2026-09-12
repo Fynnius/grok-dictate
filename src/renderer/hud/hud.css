@@ -255,6 +255,13 @@ button.round:active {
   border-color: rgba(255, 255, 255, 0.2);
 }
 
+/* Last minute of a take: the black island turns orange so the cap is visible. */
+.capsule.is-hold.tone-warning,
+.capsule.is-toggle.tone-warning {
+  background: #e07a1a;
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
 .glyph {
   width: 16px;
   height: 16px;

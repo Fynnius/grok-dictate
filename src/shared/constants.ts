@@ -100,12 +100,14 @@ export const KEYTERM_MAX_COUNT = 100;
 export const KEYTERM_MAX_LENGTH = 50;
 
 /**
- * Hard ceiling on a single recording.  flags the real server-side
- * limit as unknown and Wispr Flow caps at ~6 min; spike 4 measures ours. Until
- * then this bounds the full-utterance buffer (§11.1.1) at 6 min × 32 KB/s ≈
- * 11.5 MB.
+ * Hard ceiling on a single recording. The xAI socket has no published session
+ * cap (spike 4 streamed 15 min without a server close). This bounds the
+ * full-utterance buffer (§11.1.1) at 10 min × 32 KB/s ≈ 19 MB, and the HUD
+ * turns the capsule orange for the last `RECORDING_WARN_REMAINING_MS`.
  */
-export const MAX_RECORDING_MS = 6 * 60 * 1000;
+export const MAX_RECORDING_MS = 10 * 60 * 1000;
+/** How long before the cap the recording capsule warns (orange). */
+export const RECORDING_WARN_REMAINING_MS = 60_000;
 export const MAX_UTTERANCE_BUFFER_BYTES = (MAX_RECORDING_MS / 1000) * BYTES_PER_SECOND;
 
 /**

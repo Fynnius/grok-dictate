@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A take can run for 10 minutes**, up from 6. In the last minute the recording capsule turns orange so the cap is visible before it ends the turn.
 - **Transcripts stay until you delete them.** The old days-spinner is gone. Audio sidecars expire after one day, and Retry disappears with them. Stats are over all history on disk.
 - Settings groups are one topic each. grok.com is no longer mixed into Dictation.
 - **Microphone processing is off by default.** Chromium echo cancellation, noise suppression and auto-gain were always requested, which is what a phone call wants and not what a recogniser wants. The Grok CLI captures raw, and this app mutes other audio while you talk, so there is usually nothing to cancel. Settings → Dictation → Microphone processing turns the three flags back on together. Native capture ignores the setting — it is already raw.

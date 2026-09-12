@@ -16,7 +16,7 @@
  * the other two are live.
  *
  * At 16 kHz PCM16 mono the cost is 32 KB/s. `MAX_UTTERANCE_BUFFER_BYTES` bounds
- * it at the recording cap — 6 minutes, ~11.5 MB — and the orchestrator's own cap
+ * it at the recording cap — 10 minutes, ~19 MB — and the orchestrator's own cap
  * timer fires at exactly that point, so the ceiling here is a backstop rather
  * than something reached in normal use.
  */

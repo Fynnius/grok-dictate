@@ -30,6 +30,7 @@
 
 import type { HudView, NotInsertedReason } from '@contracts/events.js';
 import type { InsertTier } from '@contracts/helper-protocol.js';
+import { MAX_RECORDING_MS, RECORDING_WARN_REMAINING_MS } from '@shared/constants.js';
 import { hudLayer, type HudLayer } from '@shared/hud-view.js';
 
 /**
@@ -216,15 +217,18 @@ export function present(view: HudView): HudPresentation {
     case 'hidden':
       return { layer, tone: 'idle', label: '', capsule: null, message: null, liveText: null };
 
-    case 'recording':
+    case 'recording': {
+      const nearingCap = view.elapsedMs >= MAX_RECORDING_MS - RECORDING_WARN_REMAINING_MS;
+      const listening = view.mode === 'toggle' ? 'Hands-free recording' : 'Listening';
       return {
         layer,
-        tone: 'recording',
-        label: view.mode === 'toggle' ? 'Hands-free recording' : 'Listening',
+        tone: nearingCap ? 'warning' : 'recording',
+        label: nearingCap ? `${listening} — one minute left` : listening,
         capsule: { kind: 'waveform', buttons: view.mode === 'toggle' },
         message: null,
         liveText: null,
       };
+    }
 
     case 'processing':
       return {
