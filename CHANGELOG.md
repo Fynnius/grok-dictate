@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-09-12
+
+The microphone opens through Core Audio, grok.com STT 2 Fast is a real option, and a cancelled take is no longer gone.
+
 ### Added
 
 - **Settings → Account** is three independent logins at the top of the pane: xAI API key, grok.com, and Grok CLI. Each row shows its own signed-in / expired / signed-out state. **Sign in with Grok CLI** opens Terminal.app and runs `grok login`, then watches `~/.grok/auth.json` until it is usable. It never writes that file, so there is no CLI Sign out. **Keep the Grok CLI login signed in** moved here from General.
