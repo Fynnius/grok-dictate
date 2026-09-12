@@ -30,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Fn on an error pill starts a new take.** It used to only dismiss the pill, so you had to press once to clear it and again to record. Clicking the pill still just dismisses it.
+- **Clicking History in the menu bar opens History.** A macOS submenu never fires its own click, so the row did nothing unless you slid into Open History…. History is now a normal item; recent copies sit under Recent.
 - **Dictation no longer inserts `. ,` or `? ,`.** A pause is punctuated by the recogniser as both a sentence end and a comma — inside one `speech_final`, not only at a segment join. Seam repair keeps the sentence-end, drops the comma, and capitalises a closed-class word that follows. Off with **Settings → Dictation → Repair segment joins**, like the other stitch rules.
 - The Account row no longer says Sign in when you are already signed in via the Grok CLI.
 - **The first word of a hold is no longer cut off waiting for the microphone.** Every Fn press used to construct a new `AVAudioEngine`, `prepare()` it, and `stop()` it at release — and `stop()` throws away the prepare, so the next press paid a cold HAL open (a few hundred milliseconds of speech that never became a sample). The graph is now prepared at launch and **paused** between holds; the orange indicator still only lights while hardware is running. The start cue waits until the device is actually open, so it means "we are listening" rather than "we saw the key".

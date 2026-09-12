@@ -83,7 +83,7 @@ describe('trayStatusLabel', () => {
 describe('buildTrayMenu', () => {
   it('offers history, stats, settings and quit', () => {
     const items = ids(buildTrayMenu(model()));
-    expect(items).toContain('history');
+    expect(items).toContain('open.history');
     expect(items).toContain('open.stats');
     expect(items).toContain('open.settings');
     expect(items).toContain('quit');
@@ -130,53 +130,48 @@ describe('buildTrayMenu', () => {
     expect(ids(buildTrayMenu(model()))).not.toContain('audioCues');
   });
 
-  it('nests recent transcripts under History, copy on click', () => {
-    const history = buildTrayMenu(
+  it('opens History on a direct click, and nests copies under Recent', () => {
+    const menu = buildTrayMenu(
       model({
         recentHistory: [
           row({ id: 'newest', text: 'just said this' }),
           row({ id: 'older', text: 'said that earlier' }),
         ],
       }),
-    ).find((i) => i.id === 'history');
-    expect(history?.type).toBe('submenu');
-    const submenu = history?.submenu ?? [];
-    expect(submenu.map((i) => i.id)).toEqual([
-      'history.row.newest',
-      'history.row.older',
-      'history.sep',
-      'open.history',
-    ]);
+    );
+    const history = menu.find((i) => i.id === 'open.history');
+    expect(history?.type).not.toBe('submenu');
+    expect(history?.action).toEqual({ kind: 'open', panel: 'history' });
+    const recent = menu.find((i) => i.id === 'history.recent');
+    expect(recent?.type).toBe('submenu');
+    const submenu = recent?.submenu ?? [];
+    expect(submenu.map((i) => i.id)).toEqual(['history.row.newest', 'history.row.older']);
     expect(submenu[0]?.label).toBe('just said this');
     expect(submenu[0]?.action).toEqual({ kind: 'copy-history', id: 'newest' });
-    expect(submenu.at(-1)?.label).toBe('Open History…');
-    expect(submenu.at(-1)?.action).toEqual({ kind: 'open', panel: 'history' });
   });
 
-  it('shows an empty state when nothing has been dictated', () => {
-    const submenu = buildTrayMenu(model()).find((i) => i.id === 'history')?.submenu ?? [];
-    expect(submenu[0]).toMatchObject({
-      id: 'history.empty',
-      label: 'Nothing dictated yet',
-      enabled: false,
+  it('omits Recent when nothing has been dictated', () => {
+    const menu = buildTrayMenu(model());
+    expect(menu.find((i) => i.id === 'open.history')?.action).toEqual({
+      kind: 'open',
+      panel: 'history',
     });
-    expect(submenu.at(-1)?.id).toBe('open.history');
-    expect(flattenActions(submenu).map((a) => a.kind)).toEqual(['open']);
+    expect(ids(menu)).not.toContain('history.recent');
+    expect(ids(menu)).not.toContain('history.empty');
   });
 
-  it('caps the submenu at five rows and truncates long labels', () => {
+  it('caps Recent at five rows and truncates long labels', () => {
     const long =
       'Deployed that on the staging server and then ran the migration because the pod would otherwise restart';
     const recentHistory = Array.from({ length: 7 }, (_, i) =>
       row({ id: `r${String(i)}`, text: i === 0 ? long : `row ${String(i)}` }),
     );
-    const submenu = buildTrayMenu(model({ recentHistory })).find((i) => i.id === 'history')
-      ?.submenu ?? [];
-    const rows = submenu.filter((i) => i.id.startsWith('history.row.'));
-    expect(rows).toHaveLength(5);
-    expect(rows[0]?.label).toBe(truncateHistoryLabel(long));
-    expect(rows[0]?.label?.length).toBeLessThanOrEqual(HISTORY_LABEL_MAX);
-    expect(rows[0]?.label?.endsWith('…')).toBe(true);
+    const submenu =
+      buildTrayMenu(model({ recentHistory })).find((i) => i.id === 'history.recent')?.submenu ?? [];
+    expect(submenu).toHaveLength(5);
+    expect(submenu[0]?.label).toBe(truncateHistoryLabel(long));
+    expect(submenu[0]?.label?.length).toBeLessThanOrEqual(HISTORY_LABEL_MAX);
+    expect(submenu[0]?.label?.endsWith('…')).toBe(true);
   });
 
   it('includes the HUD preview submenu only when asked', () => {
@@ -204,7 +199,7 @@ describe('buildTrayMenu', () => {
   });
 
   it('the only clipboard action is copy-history, carrying an id not the text', () => {
-    // A History-submenu click is an explicit copy. Every other tray item must
+    // A Recent-submenu click is an explicit copy. Every other tray item must
     // still leave the pasteboard alone — including Preview HUD.
     const recentHistory = [row({ id: 'keep-me', text: 'secret transcript' })];
     for (const includePreview of [false, true]) {

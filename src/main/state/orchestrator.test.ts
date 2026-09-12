@@ -622,33 +622,34 @@ describe('error HUD dismiss (click / FN)', () => {
     expect(hud.views.length).toBe(n);
   });
 
-  it('FN while the error is up dismisses it without starting a recording', () => {
+  it('FN while the error is up starts a recording', () => {
     const { orchestrator, helper, hud, audio } = harness();
     orchestrator.start();
     orchestrator.reportError('auth_missing', 'Not signed in.', null);
     helper.fireHotkey('ptt_down', 10);
-    expect(hud.last).toEqual({ kind: 'hidden' });
-    expect(orchestrator.snapshot.state).toBe('idle');
-    expect(audio.sessionId).toBeNull();
+    expect(orchestrator.snapshot.state).toBe('recording');
+    expect(audio.sessionId).not.toBeNull();
+    expect(hud.last).toMatchObject({ kind: 'recording' });
   });
 
-  it('toggle FN also dismisses without starting', () => {
+  it('toggle FN while the error is up starts hands-free', () => {
     const { orchestrator, helper, audio } = harness();
     orchestrator.start();
     orchestrator.reportError('auth_missing', 'Not signed in.', null);
     helper.fireHotkey('toggle', 10);
-    expect(orchestrator.snapshot.state).toBe('idle');
-    expect(audio.sessionId).toBeNull();
+    expect(orchestrator.snapshot.state).toBe('recording');
+    expect(orchestrator.snapshot.ctx.mode).toBe('toggle');
+    expect(audio.sessionId).not.toBeNull();
   });
 
-  it('the next FN after dismiss starts recording', () => {
-    const { orchestrator, helper, audio } = harness();
+  it('clicking the pill still dismisses without starting', () => {
+    const { orchestrator, hud, audio } = harness();
     orchestrator.start();
     orchestrator.reportError('auth_missing', 'Not signed in.', null);
-    helper.fireHotkey('ptt_down', 10);
-    helper.fireHotkey('ptt_down', 20);
-    expect(orchestrator.snapshot.state).toBe('recording');
-    expect(audio.sessionId).not.toBeNull();
+    orchestrator.dismissHud();
+    expect(hud.last).toEqual({ kind: 'hidden' });
+    expect(orchestrator.snapshot.state).toBe('idle');
+    expect(audio.sessionId).toBeNull();
   });
 });
 

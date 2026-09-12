@@ -297,7 +297,12 @@ export function buildTrayMenu(model: TrayModel): readonly TrayMenuItem[] {
         languageItem('en', 'Prefer English', config.languageMode),
       ],
     },
-    historySubmenu(model.recentHistory),
+    {
+      id: 'open.history',
+      label: 'History',
+      action: { kind: 'open', panel: 'history' },
+    },
+    ...recentHistoryItems(model.recentHistory),
     {
       id: 'open.stats',
       label: 'Stats',
@@ -341,30 +346,26 @@ export function buildTrayMenu(model: TrayModel): readonly TrayMenuItem[] {
   return items;
 }
 
-function historySubmenu(rows: readonly TrayHistoryRow[]): TrayMenuItem {
+/**
+ * Recent copies live in their own submenu so History itself can be a normal
+ * click that opens the window. A macOS item with a submenu never fires its
+ * own click — that is why "History ▸" used to do nothing.
+ */
+function recentHistoryItems(rows: readonly TrayHistoryRow[]): readonly TrayMenuItem[] {
   const recent = rows.slice(0, 5);
-  const items: TrayMenuItem[] =
-    recent.length === 0
-      ? [{ id: 'history.empty', label: 'Nothing dictated yet', enabled: false }]
-      : recent.map((row) => ({
-          id: `history.row.${row.id}`,
-          label: truncateHistoryLabel(row.text),
-          action: { kind: 'copy-history' as const, id: row.id },
-        }));
-  items.push(
-    { id: 'history.sep', type: 'separator' },
+  if (recent.length === 0) return [];
+  return [
     {
-      id: 'open.history',
-      label: 'Open History…',
-      action: { kind: 'open', panel: 'history' },
+      id: 'history.recent',
+      label: 'Recent',
+      type: 'submenu',
+      submenu: recent.map((row) => ({
+        id: `history.row.${row.id}`,
+        label: truncateHistoryLabel(row.text),
+        action: { kind: 'copy-history' as const, id: row.id },
+      })),
     },
-  );
-  return {
-    id: 'history',
-    label: 'History',
-    type: 'submenu',
-    submenu: items,
-  };
+  ];
 }
 
 function languageItem(mode: LanguageMode, label: string, current: LanguageMode): TrayMenuItem {

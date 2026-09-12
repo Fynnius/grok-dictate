@@ -177,12 +177,10 @@ export class Orchestrator {
         native.unmuteOutput();
       }),
       native.onHotkey((action, ts) => {
-        // Error is HUD chrome on idle, not a machine state. FN dismisses it
-        // without starting a recording; the next press after hide does.
-        if ((action === 'ptt_down' || action === 'toggle') && this.#hudView.kind === 'error') {
-          this.dismissHud();
-          return;
-        }
+        // Error is HUD chrome on idle, not a machine state. A click on the
+        // pill still only dismisses (`dismissHud`). Fn / Fn+Space start a
+        // new take — `startSession` replaces the error view — so you do not
+        // have to press once to clear the pill and again to record.
         switch (action) {
           case 'ptt_down':
             this.dispatch({ type: 'PTT_DOWN', ts });
@@ -767,8 +765,7 @@ export class Orchestrator {
 
   /**
    * Take the error (or any) pill off screen without touching the session.
-   * Clears `#hudView` so a second identical error can show and so FN after a
-   * dwell-hide starts a recording instead of being swallowed. Idempotent:
+   * Clears `#hudView` so a second identical error can show. Idempotent:
    * `hide()` may call `onHidden` which calls this again.
    */
   dismissHud(): void {

@@ -174,11 +174,11 @@ export function hudDwellMs(view: HudView): number | null {
       // History and ⌃⌘V, not a paragraph over the document.
       return 2_000;
     case 'error':
-      // Shortened from 8 s (§19.3). Click or FN dismisses immediately; this
-      // timer is the fallback so a red capsule does not sit over the document
-      // until the next dictation. Five seconds is a comfortable read of a
-      // title plus one line of advice; the last 260 ms of it are the fade in
-      // `hud-window.ts`.
+      // Shortened from 8 s (§19.3). Click dismisses immediately; Fn starts a
+      // new take and replaces this view. The timer is the fallback so a red
+      // capsule does not sit over the document until the next dictation. Five
+      // seconds is a comfortable read of a title plus one line of advice; the
+      // last 260 ms of it are the fade in `hud-window.ts`.
       return 5_000;
   }
 }
