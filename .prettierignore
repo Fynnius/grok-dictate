@@ -18,3 +18,8 @@ CHANGELOG.md
 LICENSE
 CODE_OF_CONDUCT.md
 .github/**
+
+# Long-form session reports. Prettier wraps tables and shell blocks into
+# diffs that bury the content; they are not product source.
+docs/handoff-insertion-2026-09-06.md
+docs/report-insertion-2026-09-06.md

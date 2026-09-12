@@ -11,7 +11,7 @@
  * the device only when it receives `start`.
  */
 
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import type { MainToRenderer, RendererToMain } from '@contracts/events.js';
 import { Backoff } from '@shared/backoff.js';
 import type { Logger } from '@shared/logger.js';
@@ -54,7 +54,7 @@ export interface NativeCaptureTransportOptions {
 }
 
 function defaultSpawn(command: string): CaptureChild {
-  return spawn(command, [], { stdio: ['pipe', 'pipe', 'pipe'] }) as ChildProcessWithoutNullStreams;
+  return spawn(command, [], { stdio: ['pipe', 'pipe', 'pipe'] });
 }
 
 export class NativeCaptureTransport implements CaptureTransport {

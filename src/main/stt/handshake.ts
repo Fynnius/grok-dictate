@@ -11,14 +11,13 @@
 
 import { appError, type AppError } from '@shared/result.js';
 
-const UNKNOWN_MODEL =
-  /does not exist or your team does not have access/i;
+const UNKNOWN_MODEL = /does not exist or your team does not have access/i;
 
 export function handshakeErrorText(body: string): string | null {
   try {
     const parsed: unknown = JSON.parse(body);
     if (parsed !== null && typeof parsed === 'object' && 'error' in parsed) {
-      const value = (parsed as { error: unknown }).error;
+      const value = parsed.error;
       return typeof value === 'string' && value.length > 0 ? value : null;
     }
   } catch {

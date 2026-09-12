@@ -30,6 +30,12 @@ probe-out/
 # repository and must never be committed into it.
 .claude/
 
+# Agent session transcripts accidentally dropped in the repo root.
+*-local-command-caveat*.txt
+
+# Local cue audition rig. Nothing here is wired into the app.
+sound-lab/
+
 # TypeScript incremental build state
 *.tsbuildinfo
 

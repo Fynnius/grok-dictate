@@ -24,7 +24,9 @@ describe('errorFromSttHandshake', () => {
       '{"error":"The model \'grok-stt-2-fast\' does not exist or your team does not have access to it"}',
     );
     expect(error.code).toBe('stt_connect');
-    expect(error.message).toBe("The speech model 'grok-stt-2-fast' is not available on the xAI API.");
+    expect(error.message).toBe(
+      "The speech model 'grok-stt-2-fast' is not available on the xAI API.",
+    );
     expect(error.hint).toContain('Standard');
   });
 

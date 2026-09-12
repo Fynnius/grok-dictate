@@ -95,7 +95,7 @@ export class GrokComSignInWindow {
 
     if (window.isDestroyed()) return;
     // LSUIElement menu-bar apps often never receive the system passkey sheet.
-    app.dock?.show();
+    void app.dock?.show();
     app.focus({ steal: true });
     window.show();
     window.focus();

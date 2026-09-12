@@ -189,10 +189,7 @@ describe('the connection', () => {
   });
 
   it('fails grok-stt-2-fast without a grok.com session, without opening a socket', async () => {
-    const { handlers } = start(
-      { model: 'grok-stt-2-fast' },
-      { grokCom: staticGrokCom(null) },
-    );
+    const { handlers } = start({ model: 'grok-stt-2-fast' }, { grokCom: staticGrokCom(null) });
     await waitFor(() => handlers.errors.length > 0);
     expect(handlers.errors[0]?.code).toBe('auth_missing');
     expect(handlers.errors[0]?.hint).toMatch(/grok\.com/);
@@ -683,10 +680,7 @@ describe('the token never reaches a log', () => {
 
   it('does not log grok.com cookie values', async () => {
     const cookie = 'sso-rw=test-session';
-    const { handlers } = start(
-      { model: 'grok-stt-2-fast' },
-      { grokCom: staticGrokCom(cookie) },
-    );
+    const { handlers } = start({ model: 'grok-stt-2-fast' }, { grokCom: staticGrokCom(cookie) });
     await waitFor(() => handlers.ready > 0);
 
     expect(lines.length).toBeGreaterThan(0);

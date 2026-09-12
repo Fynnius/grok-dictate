@@ -483,7 +483,11 @@ class SttTurnImpl implements SttTurn {
    * is present, which is the whole reason to have one: it is the only place the
    * status code and the rate-limit headers are visible.
    */
-  #onUnexpectedResponse(auth: SttConnectAuth, request: ClientRequest, response: IncomingMessage): void {
+  #onUnexpectedResponse(
+    auth: SttConnectAuth,
+    request: ClientRequest,
+    response: IncomingMessage,
+  ): void {
     const status = response.statusCode ?? 0;
     const headers = response.headers;
 

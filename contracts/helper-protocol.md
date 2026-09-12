@@ -53,7 +53,7 @@ First frame after start-up. `caps` lists the insertion tiers this build can actu
 
 `ts` is milliseconds since the Unix epoch from the helper's clock. Same machine as the app, so no skew correction; it exists to measure hold duration.
 
-**`retry_insert` re-runs the ladder against `lastTranscript`.** `route` is the current `insertMethod`; it is not a clipboard *read*, but under `auto`/`paste` it may write a promise the same way a normal insert does.
+**`retry_insert` re-runs the ladder against `lastTranscript`.** `route` is the current `insertMethod`; it is not a clipboard _read_, but under `auto`/`paste` it may write a promise the same way a normal insert does.
 
 **Fn/Fn+Space disambiguation is the app's problem, not the helper's.** The helper reports both `ptt_down` and a subsequent `toggle` verbatim. : the mic opens immediately on `ptt_down` and the WebSocket handshake window doubles as the disambiguation window — a timer before opening the mic would clip the first word.
 
@@ -130,11 +130,11 @@ Answers exactly one `insert`, echoing its `id`.
 
 **A BUG-1 addition, and the second change made to this contract after Phase 1.**
 
-| `verified`      | Means                                                                                                                                                      |
-| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `verified`      | Means                                                                                                                                                                                      |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `true`          | The helper **confirmed** the text landed — `paste`: a consumer read the promise after our chord; `ax`: the caret moved. Unicode never produces `true`: it always reports `verified: null`. |
-| `false`         | Verification ran and **proved nothing landed**. Always accompanied by `ok:false` and `reason:"verification_failed"`.                                       |
-| `null` / absent | Verification was not possible for this target, or the frame came from an older helper build.                                                               |
+| `false`         | Verification ran and **proved nothing landed**. Always accompanied by `ok:false` and `reason:"verification_failed"`.                                                                       |
+| `null` / absent | Verification was not possible for this target, or the frame came from an older helper build.                                                                                               |
 
 > **The paste tier made this a stronger claim, 2026-09-06.** Every earlier `true` was an inference from a side effect the helper measured itself — a caret position, a text length — in a target that might expose neither. In `cmux`, where 59 % of dictations land, `kAXNumberOfCharacters` is permanently `0` and neither verifier could say anything at all. A receipt is the operating system reporting that the target _asked us for the text_. It is still not proof the text was kept: a target that reads and then discards produces a receipt too. Strictly better than what it replaces, not a guarantee.
 

@@ -23,7 +23,5 @@ export function createSttClient(
   auth: AuthPort,
   grokCom?: GrokComSessionPort,
 ): SttClientPort {
-  return new XaiSttClient(
-    grokCom === undefined ? { auth, logger } : { auth, logger, grokCom },
-  );
+  return new XaiSttClient(grokCom === undefined ? { auth, logger } : { auth, logger, grokCom });
 }

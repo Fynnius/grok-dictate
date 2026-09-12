@@ -85,13 +85,7 @@ export interface SilenceGateInput {
 }
 
 export type SilenceGateReason =
-  | 'disabled'
-  | 'too_long'
-  | 'has_transcript'
-  | 'too_short'
-  | 'no_audio'
-  | 'speech'
-  | 'silent';
+  'disabled' | 'too_long' | 'has_transcript' | 'too_short' | 'no_audio' | 'speech' | 'silent';
 
 export interface SilenceGateDecision {
   readonly gated: boolean;

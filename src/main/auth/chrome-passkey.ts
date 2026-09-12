@@ -35,9 +35,7 @@ export const CHROME_CANDIDATES = [
   '/Applications/Chromium.app/Contents/MacOS/Chromium',
 ] as const;
 
-export function findChromeBinary(
-  exists: (path: string) => boolean = existsSync,
-): string | null {
+export function findChromeBinary(exists: (path: string) => boolean = existsSync): string | null {
   for (const path of CHROME_CANDIDATES) {
     if (exists(path)) return path;
   }
@@ -168,7 +166,8 @@ export class ChromePasskeySignIn {
             .map(cdpCookieToRecord)
             .filter((cookie): cookie is GrokComCookieRecord => cookie !== null);
           const signedIn = records.some(
-            (cookie) => (cookie.name === 'sso' || cookie.name === 'sso-rw') && cookie.value.length > 0,
+            (cookie) =>
+              (cookie.name === 'sso' || cookie.name === 'sso-rw') && cookie.value.length > 0,
           );
           if (signedIn) {
             await this.#grokCom.importCookies(records);
@@ -250,6 +249,13 @@ async function readCdpCookies(port: number): Promise<CdpCookie[]> {
   return Array.isArray(cookies) ? cookies : [];
 }
 
+function websocketPayload(data: WebSocket.RawData): string {
+  if (typeof data === 'string') return data;
+  if (Buffer.isBuffer(data)) return data.toString('utf8');
+  if (Array.isArray(data)) return Buffer.concat(data).toString('utf8');
+  return Buffer.from(data).toString('utf8');
+}
+
 function getJson(url: string): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const request = http.get(url, { timeout: 800 }, (response) => {
@@ -259,7 +265,7 @@ function getJson(url: string): Promise<unknown> {
         try {
           resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
         } catch (cause) {
-          reject(cause);
+          reject(cause instanceof Error ? cause : new Error(String(cause)));
         }
       });
     });
@@ -289,14 +295,18 @@ function cdpCall(wsUrl: string, method: string, params: Record<string, unknown>)
     socket.on('message', (data) => {
       clearTimeout(timer);
       try {
-        const parsed = JSON.parse(data.toString()) as { id?: number; result?: unknown; error?: unknown };
+        const parsed = JSON.parse(websocketPayload(data)) as {
+          id?: number;
+          result?: unknown;
+          error?: unknown;
+        };
         if (parsed.id !== 1) return;
         socket.close();
         if (parsed.error !== undefined) reject(new Error('cdp error'));
         else resolve(parsed.result ?? {});
       } catch (cause) {
         socket.terminate();
-        reject(cause);
+        reject(cause instanceof Error ? cause : new Error(String(cause)));
       }
     });
   });

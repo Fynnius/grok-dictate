@@ -22,9 +22,7 @@ class MemoryCookieStore implements GrokComCookieStore {
     return Promise.resolve(this.#cookies);
   }
 
-  write(
-    cookies: readonly { readonly name: string; readonly value: string }[],
-  ): Promise<void> {
+  write(cookies: readonly { readonly name: string; readonly value: string }[]): Promise<void> {
     const next = [...this.#cookies];
     for (const cookie of cookies) {
       const index = next.findIndex((existing) => existing.name === cookie.name);
