@@ -226,7 +226,7 @@ describe('draining the tail after stop (2026-08-09 incident, BUG-2)', () => {
     expect(handlers.drained).toBe(1);
   });
 
-  it('does not wait for a drain on cancel — the audio is being thrown away', () => {
+  it('does not wait for a drain on cancel — RAM is freed after the caller archives', () => {
     const audio = coordinator({ drainTimeoutMs: 10_000 });
     const handlers = new Recorder();
     audio.start('s1', handlers);
@@ -309,11 +309,9 @@ describe('the full-utterance buffer', () => {
     expect(coordinator().getUtteranceBuffer('nope')).toBeNull();
   });
 
-  it('frees the audio on cancel rather than archiving it', () => {
-    // Phase 3 kept the bytes in a single-slot archive for a
-    // retry-after-network-failure that was never built; Phase 5 deleted it
-    // (docs/phase-3-report.md §5.3). An Esc-cancelled utterance must not sit in
-    // RAM waiting for a feature —  applies to memory too.
+  it('frees the audio on cancel rather than keeping it in RAM', () => {
+    // The orchestrator snaps `getUtteranceBuffer` and writes the wav *before*
+    // calling cancel. This method's job is to drop the bytes from memory.
     const audio = coordinator();
     audio.start('s1', new Recorder());
     audio.handleRendererMessage(chunk(9));

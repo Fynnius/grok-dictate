@@ -12,14 +12,14 @@ const alias = {
  * One HTML entry per renderer bundle.
  *
  * - hud      — the pill; must never take focus (§12.3)
- * - settings — Settings, History and Scratchpad, selected by URL hash
+ * - settings — Settings, History and Stats, selected by URL hash
  * - capture  — hidden renderer running getUserMedia + AudioWorklet
  * - signin   — first-run / missing-credential window
  *
  * Phase 1's `debug` entry (the walking-skeleton control surface) was removed in
  * Phase 5 along with the window.
  *
- * Settings, History and Scratchpad deliberately still share one entry. Phase 4
+ * Settings, History and Stats deliberately still share one entry. Phase 4
  * asked for a split (docs/phase-4-report.md §5.3), but only because the frozen
  * config was the reason they were combined in the first place; with the freeze
  * lifted the reason to split them is gone too. Three entries would mean three

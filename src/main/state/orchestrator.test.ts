@@ -177,6 +177,16 @@ class StubHelper implements NativeHelperPort {
   }
 }
 
+class ArchivingHistory extends MemoryHistory {
+  readonly files = new Map<string, Uint8Array>();
+  archiveAudio(id: string, pcm: Uint8Array): string | null {
+    if (pcm.byteLength === 0) return null;
+    const rel = `recordings/${id}.wav`;
+    this.files.set(rel, pcm);
+    return rel;
+  }
+}
+
 interface Harness {
   orchestrator: Orchestrator;
   audio: ScriptedAudio;
@@ -201,13 +211,14 @@ function harness(
     config?: Partial<AppConfig>;
     unmuteBeforeCueMs?: number;
     env?: MachineEnv;
+    history?: MemoryHistory;
   } = {},
 ): Harness {
   const audio = new ScriptedAudio(options.eagerDrain ?? false, options.announceStart ?? true);
   const stt = new ScriptedStt();
   const helper = new StubHelper();
   const hud = new MemoryHud();
-  const history = new MemoryHistory();
+  const history = options.history ?? new MemoryHistory();
   const sound = new MemorySound();
   const config = new MemoryConfig(options.config);
   const orchestrator = new Orchestrator({
@@ -649,5 +660,54 @@ describe('live interim stays off the HUD', () => {
     orchestrator.dispatch({ type: 'TRANSCRIPT_INTERIM', sessionId, text: 'hello there' });
     expect(hud.last).toMatchObject({ kind: 'recording', interim: '' });
     expect(orchestrator.snapshot.ctx.interim).toBe('hello there');
+  });
+});
+
+describe('Esc archives audio then stores a cancelled history row', () => {
+  it('writes a sidecar and a cancelled row when PCM exists', () => {
+    const history = new ArchivingHistory();
+    const { orchestrator, audio } = harness({ history });
+    audio.buffer = new Uint8Array(CHUNK_BYTES).fill(7);
+    orchestrator.dispatch({ type: 'PTT_DOWN', ts: 1 });
+    orchestrator.dispatch({ type: 'CANCEL' });
+
+    expect(orchestrator.snapshot.state).toBe('idle');
+    expect(history.entries).toHaveLength(1);
+    expect(history.entries[0]).toMatchObject({
+      cancelled: true,
+      inserted: false,
+      text: '',
+    });
+    expect(history.entries[0]?.audioRelPath).toMatch(/^recordings\/.+\.wav$/);
+    expect(history.files.get(history.entries[0]?.audioRelPath ?? '')?.byteLength).toBe(CHUNK_BYTES);
+    expect(audio.cancelled).toHaveLength(1);
+  });
+
+  it('stores nothing when there was no PCM', () => {
+    const history = new ArchivingHistory();
+    const { orchestrator } = harness({ history });
+    orchestrator.dispatch({ type: 'PTT_DOWN', ts: 1 });
+    orchestrator.dispatch({ type: 'CANCEL' });
+    expect(history.entries).toHaveLength(0);
+  });
+
+  it('archives PCM on a session error even with no text yet', () => {
+    const history = new ArchivingHistory();
+    const { orchestrator, audio } = harness({ history });
+    audio.buffer = new Uint8Array(CHUNK_BYTES).fill(3);
+    orchestrator.dispatch({ type: 'PTT_DOWN', ts: 1 });
+    const sessionId = orchestrator.snapshot.ctx.sessionId ?? '';
+    orchestrator.dispatch({
+      type: 'SESSION_ERROR',
+      sessionId,
+      error: { code: 'stt_connect', message: 'the socket died', hint: null },
+    });
+    expect(history.entries).toHaveLength(1);
+    expect(history.entries[0]).toMatchObject({
+      text: '',
+      transcribeError: 'the socket died',
+      inserted: false,
+    });
+    expect(history.entries[0]?.audioRelPath).toMatch(/^recordings\/.+\.wav$/);
   });
 });

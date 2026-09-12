@@ -30,16 +30,18 @@ import {
   type MainToRenderer,
   type RendererToMain,
 } from '@contracts/events.js';
-import { AppConfigSchema } from '@contracts/config.js';
+import { AppConfigSchema, resolveWireLanguage } from '@contracts/config.js';
 import { addLogSink, consoleSink, createLogger, setLogLevel } from '@shared/logger.js';
 import { appError } from '@shared/result.js';
 import { STATS_ROW_CAP, aggregateStats } from '@shared/stats.js';
-import { envString } from '@shared/env.js';
+import { envString, systemLanguageSubtag } from '@shared/env.js';
+import { parseWav } from '@shared/wav.js';
 import { createAudioSource } from './audio/index.js';
 import { createAuthProvider } from './auth/index.js';
 import { ChromePasskeySignIn } from './auth/chrome-passkey.js';
 import { GrokComSession, electronGrokComCookieStore } from './auth/grok-com.js';
 import { CredentialStore, credentialsPath } from './auth/store.js';
+import { GrokCliLogin } from './auth/login.js';
 import { GrokCliRenewer } from './auth/renew.js';
 import { fileSink, logFilePath } from './log-file.js';
 import { createConfigStore } from './config/index.js';
@@ -49,6 +51,7 @@ import { createHudPreview } from './hud/preview.js';
 import { createNativeHelper } from './native/index.js';
 import { createSound } from './sound/index.js';
 import { createSttClient } from './stt/index.js';
+import { transcribePcm } from './stt/transcribe.js';
 import { createTray } from './tray/index.js';
 import { Orchestrator } from './state/orchestrator.js';
 import { createUiServices } from './ui/index.js';
@@ -95,6 +98,7 @@ function main(): void {
   const userDataDir = app.getPath('userData');
   const config = createConfigStore(userDataDir, log);
   const history = createHistoryStore(userDataDir, log);
+  const retrying = new Set<string>();
   const auth = createAuthProvider(log, {
     store: new CredentialStore(
       credentialsPath(userDataDir),
@@ -110,6 +114,13 @@ function main(): void {
     // touches a refresh token — see the header of `auth/renew.ts`.
     renewer: new GrokCliRenewer({ logger: log }),
     autoRenew: () => config.get().autoRenewLogin,
+  });
+  const cliLogin = new GrokCliLogin({
+    logger: log,
+    status: () => auth.cliStatus(),
+    onSignedIn: () => {
+      void auth.refresh();
+    },
   });
   const panels = new PanelWindows(log);
   const signIn = new SignInWindow(log);
@@ -130,6 +141,10 @@ function main(): void {
   const stt = createSttClient(log, auth, grokCom);
   const preview = createHudPreview(hud);
   let signedIn = false;
+  // Late-bound: `createTray` runs before the orchestrator exists, same cycle as
+  // `cancelFromEscape`. Both the IPC `copy` message and a History-submenu click
+  // reach the pasteboard through this function.
+  let copyPlainText = (_text: string): void => {};
   const tray = createTray({
     logger: log,
     config,
@@ -142,6 +157,7 @@ function main(): void {
     getSignedIn: () => signedIn,
     onAuthChange: (listener) => auth.onChange(() => listener()),
     openSignIn: () => signIn.open(),
+    copyText: (text) => copyPlainText(text),
   });
 
   const broadcast = (message: MainToRenderer): void => {
@@ -215,6 +231,10 @@ function main(): void {
   // error is skipped and FN after the pill is gone still swallows recording.
   hud.onHidden = () => {
     orchestrator.dismissHud();
+  };
+
+  copyPlainText = (text) => {
+    orchestrator.copyToClipboard(text);
   };
 
   cancelFromEscape = () => {
@@ -291,10 +311,10 @@ function main(): void {
         orchestrator.dispatch({ type: 'INSERT_TEXT', text: message.text });
         return;
       case 'copy':
-        // The only renderer Copy path, and it can only be reached from an
-        // explicit click in the HUD, history or the Scratchpad. Insertion may
+        // Renderer Copy (HUD / History click) and the tray History submenu
+        // both reach the pasteboard through `copyPlainText`. Insertion may
         // also publish a promise; that does not come through this case.
-        orchestrator.copyToClipboard(message.text);
+        copyPlainText(message.text);
         return;
       case 'set-language-mode':
         void config.set({ ...config.get(), languageMode: message.mode });
@@ -352,16 +372,83 @@ function main(): void {
         case 'get-history':
           return { type: 'history', entries: await history.list(request.query, request.limit) };
         case 'get-stats': {
-          const cfg = config.get();
           const entries = await history.list(null, STATS_ROW_CAP);
           return {
             type: 'stats',
-            stats: aggregateStats(entries, Date.now(), cfg.historyRetentionDays),
+            stats: aggregateStats(entries, Date.now(), 0),
           };
         }
         case 'purge-history':
           await history.purge();
           return { type: 'ok' };
+        case 'retry-transcription': {
+          const id = request.id;
+          if (retrying.has(id)) {
+            return {
+              type: 'error',
+              error: appError('internal', 'Already retrying that dictation.', null),
+            };
+          }
+          const entry = await history.get(id);
+          if (entry === null) {
+            return {
+              type: 'error',
+              error: appError('internal', 'That dictation is no longer in history.', null),
+            };
+          }
+          const rel = entry.audioRelPath;
+          if (rel === undefined || rel.length === 0) {
+            return {
+              type: 'error',
+              error: appError(
+                'internal',
+                'Audio was deleted after one day.',
+                'Copy the transcript if it is still here, or dictate again.',
+              ),
+            };
+          }
+          const wavBytes = history.readAudio(rel);
+          if (wavBytes === null) {
+            await history.update(id, { audioRelPath: null });
+            return {
+              type: 'error',
+              error: appError(
+                'internal',
+                'Audio was deleted after one day.',
+                'Copy the transcript if it is still here, or dictate again.',
+              ),
+            };
+          }
+          const parsed = parseWav(wavBytes, 'recording');
+          if (!parsed.ok) return { type: 'error', error: parsed.error };
+          retrying.add(id);
+          try {
+            const cfg = config.get();
+            const result = await transcribePcm(stt, parsed.value.pcm, {
+              language: resolveWireLanguage(cfg.languageMode, undefined, systemLanguageSubtag()),
+              endpointingMs: cfg.endpointingMs,
+              keyterms: cfg.keyterms,
+              useFinalize: cfg.useFinalize,
+              model: cfg.sttModel,
+              repairSeams: cfg.repairSeams,
+            });
+            if (!result.ok) {
+              await history.update(id, { transcribeError: result.error.message });
+              return { type: 'error', error: result.error };
+            }
+            await history.update(id, {
+              text: result.value.text,
+              language: result.value.language ?? entry.language,
+              durationSec: result.value.durationSec ?? parsed.value.durationSec,
+              cancelled: null,
+              transcribeError: null,
+              unconfirmedTail: null,
+            });
+            return { type: 'ok' };
+          } finally {
+            retrying.delete(id);
+          }
+        }
         case 'get-snapshot': {
           const snapshot: AppSnapshot = orchestrator.appSnapshot;
           return { type: 'snapshot', snapshot };
@@ -385,6 +472,30 @@ function main(): void {
           if (!result.ok) return { type: 'error', error: result.error };
           return { type: 'grok-com-status', signedIn: await grokCom.hasSession() };
         }
+        case 'get-cli-status':
+          return {
+            type: 'cli-status',
+            status: await auth.cliStatus(),
+            binaryFound: cliLogin.available,
+          };
+        case 'start-grok-cli-login': {
+          const result = await cliLogin.start();
+          if (!result.ok) return { type: 'error', error: result.error };
+          return { type: 'cli-status', status: result.value, binaryFound: cliLogin.available };
+        }
+        case 'cancel-grok-cli-login':
+          cliLogin.cancel();
+          return {
+            type: 'cli-status',
+            status: await auth.cliStatus(),
+            binaryFound: cliLogin.available,
+          };
+        case 'renew-cli-login':
+          return {
+            type: 'cli-status',
+            status: await auth.renewCliNow(),
+            binaryFound: cliLogin.available,
+          };
         case 'open-external': {
           if (!isAllowedExternalUrl(request.url)) {
             return {
@@ -436,6 +547,7 @@ function main(): void {
     // app is closing.
     isQuitting = true;
     chromePasskey.dispose();
+    cliLogin.cancel();
     auth.stopAutoRenew();
     orchestrator.dispose();
     ui.dispose();

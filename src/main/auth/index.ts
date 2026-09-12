@@ -43,7 +43,7 @@
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import type { AuthStatus } from '@contracts/events.js';
+import type { AuthStatus, CliAuthStatus } from '@contracts/events.js';
 import type { AuthPort, Bearer } from '@contracts/ports.js';
 import {
   API_KEY_SENTINEL_EXPIRY,
@@ -291,6 +291,19 @@ export class GrokAuthProvider implements AuthPort {
     }
     return null;
   }
+
+  /**
+   * The CLI file on its own. Independent of a stored API key, so Settings can
+   * show a Grok CLI row even when dictation is using the key.
+   */
+  async cliStatus(): Promise<CliAuthStatus> {
+    const expiry = await this.peekExpiry();
+    if (expiry === null) return { state: 'signed-out' };
+    if (expiry.getTime() - this.#now() < TOKEN_EXPIRY_MARGIN_MS) {
+      return { state: 'expired', expiresAt: expiry.toISOString() };
+    }
+    return { state: 'signed-in', expiresAt: expiry.toISOString() };
+  }
 }
 
 export interface DictateAuthOptions {
@@ -413,9 +426,13 @@ export class DictateAuth implements AuthPort {
    * or produced nothing usable — every one of which leaves the caller's original
    * error as the honest thing to report.
    */
-  async #renewAndReread(reason: string): Promise<Result<Bearer> | null> {
+  async #renewAndReread(
+    reason: string,
+    options: { readonly ignoreSetting?: boolean } = {},
+  ): Promise<Result<Bearer> | null> {
     const renewer = this.#renewer;
-    if (renewer === undefined || !this.#autoRenew()) return null;
+    if (renewer === undefined) return null;
+    if (!options.ignoreSetting && !this.#autoRenew()) return null;
 
     const outcome = await waitAtMost(renewer.renew(reason), RENEW_WAIT_IN_DICTATION_MS);
     if (outcome === null) {
@@ -487,6 +504,22 @@ export class DictateAuth implements AuthPort {
     if (expiry.getTime() - Date.now() > RENEW_MARGIN_MS) return;
 
     await this.#renewAndReread('the Grok token is close to expiry');
+  }
+
+  /** The CLI file, ignoring a stored API key or `XAI_API_KEY`. */
+  cliStatus(): Promise<CliAuthStatus> {
+    return this.#cli.cliStatus();
+  }
+
+  /**
+   * Ask the CLI to renew now, even if an API key is the active dictation
+   * source or auto-renew is off. The Settings row's Refresh now.
+   */
+  async renewCliNow(): Promise<CliAuthStatus> {
+    await this.#renewAndReread('the user asked to refresh the Grok CLI login', {
+      ignoreSetting: true,
+    });
+    return this.cliStatus();
   }
 
   async status(): Promise<AuthStatus> {

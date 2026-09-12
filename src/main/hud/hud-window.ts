@@ -40,8 +40,7 @@ import {
 } from './layout.js';
 
 /**
- * Where a `hud` view goes besides the pill itself. The Scratchpad tracks the
- * latest transcript, so it needs the same stream. Injected rather than imported
+ * Where a `hud` view goes besides the pill itself. Injected rather than imported
  * so the HUD does not depend on the panel windows.
  */
 export type HudBroadcast = (message: { type: 'hud'; view: HudView }) => void;
@@ -113,8 +112,6 @@ export class HudWindow implements HudPort {
   }
 
   show(view: HudView): void {
-    // The Scratchpad tracks the latest transcript, so it needs the view stream
-    // too.
     this.#broadcast({ type: 'hud', view });
 
     const window = this.window;

@@ -28,12 +28,24 @@
  * temp directory.
  */
 
-import { appendFileSync, existsSync, readFileSync, renameSync, rmSync } from 'node:fs';
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import type { HistoryEntry } from '@contracts/events.js';
 import type { HistoryPort } from '@contracts/ports.js';
 import { INSERT_TIERS } from '@contracts/helper-protocol.js';
 import type { Logger } from '@shared/logger.js';
+import { encodeWav } from '@shared/wav.js';
 import { writeAtomically } from '../config/index.js';
 
 export function historyPath(userDataDir: string): string {
@@ -49,7 +61,26 @@ export function historyJournalPath(userDataDir: string): string {
   return join(userDataDir, 'history.pending.jsonl');
 }
 
+export function recordingsDir(userDataDir: string): string {
+  return join(userDataDir, RECORDINGS_DIR);
+}
+
+const RECORDINGS_DIR = 'recordings';
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/** Audio sidecars expire after one day; transcript rows do not. */
+export const AUDIO_RETENTION_MS = MS_PER_DAY;
+
+/** Patch for `update`. `null` on an optional field clears it. */
+export interface HistoryPatch {
+  readonly text?: string;
+  readonly language?: string;
+  readonly durationSec?: number | null;
+  readonly cancelled?: boolean | null;
+  readonly transcribeError?: string | null;
+  readonly unconfirmedTail?: boolean | null;
+  readonly audioRelPath?: string | null;
+}
 
 /**
  * How many appended rows may sit in the journal before it is folded back into
@@ -89,6 +120,16 @@ export interface HistoryStore extends HistoryPort {
    * can log a number rather than a promise.
    */
   sweep(retentionDays: number, now?: number): Promise<number>;
+  /**
+   * Delete sidecar wavs older than `AUDIO_RETENTION_MS` and clear
+   * `audioRelPath` on those rows so the UI stops offering Retry. Transcript
+   * rows stay. Returns how many files were removed.
+   */
+  sweepAudio(now?: number): Promise<number>;
+  get(id: string): Promise<HistoryEntry | null>;
+  update(id: string, patch: HistoryPatch): Promise<HistoryEntry | null>;
+  archiveAudio(id: string, pcm: Uint8Array): string | null;
+  readAudio(relPath: string): Buffer | null;
   /** Fired after any mutation, with the new row count. Drives `history-updated`. */
   onChange(listener: (count: number) => void): () => void;
 }
@@ -111,12 +152,19 @@ function isOptionalBoolean(value: unknown): boolean {
   return value === undefined || value === null || typeof value === 'boolean';
 }
 
+function isOptionalString(value: unknown): boolean {
+  return value === undefined || value === null || typeof value === 'string';
+}
+
 function isHistoryEntry(value: unknown): value is HistoryEntry {
   if (value === null || typeof value !== 'object') return false;
   const e = value as Record<string, unknown>;
   return (
     isOptionalBoolean(e['verified']) &&
     isOptionalBoolean(e['unconfirmedTail']) &&
+    isOptionalBoolean(e['cancelled']) &&
+    isOptionalString(e['audioRelPath']) &&
+    isOptionalString(e['transcribeError']) &&
     typeof e['id'] === 'string' &&
     typeof e['at'] === 'string' &&
     typeof e['text'] === 'string' &&
@@ -129,10 +177,32 @@ function isHistoryEntry(value: unknown): value is HistoryEntry {
   );
 }
 
+function isSafeRecordingId(id: string): boolean {
+  return /^[A-Za-z0-9_-]+$/.test(id);
+}
+
+function audioRelPathFor(id: string): string {
+  return `${RECORDINGS_DIR}/${id}.wav`;
+}
+
+function resolveAudioAbs(userDataDir: string, relPath: string): string | null {
+  const prefix = `${RECORDINGS_DIR}/`;
+  if (!relPath.startsWith(prefix) || !relPath.endsWith('.wav')) return null;
+  const name = relPath.slice(prefix.length, -'.wav'.length);
+  if (!isSafeRecordingId(name)) return null;
+  return join(userDataDir, RECORDINGS_DIR, `${name}.wav`);
+}
+
+function omitAudio(entry: HistoryEntry): HistoryEntry {
+  const { audioRelPath: _removed, ...rest } = entry;
+  return rest;
+}
+
 export function createHistoryStore(userDataDir: string, logger: Logger): HistoryStore {
   const log = logger.child('history');
   const path = historyPath(userDataDir);
   const journal = historyJournalPath(userDataDir);
+  const audioDir = recordingsDir(userDataDir);
   const listeners = new Set<(count: number) => void>();
 
   let entries: HistoryEntry[] = load();
@@ -345,8 +415,142 @@ export function createHistoryStore(userDataDir: string, logger: Logger): History
       const removed = entries.length;
       entries = [];
       save();
+      try {
+        rmSync(audioDir, { recursive: true, force: true });
+      } catch (cause) {
+        log.warn('could not remove recordings', { err: cause });
+      }
       log.info('history purged', { removed });
       return Promise.resolve();
+    },
+
+    get(id: string): Promise<HistoryEntry | null> {
+      return Promise.resolve(entries.find((row) => row.id === id) ?? null);
+    },
+
+    update(id: string, patch: HistoryPatch): Promise<HistoryEntry | null> {
+      const index = entries.findIndex((row) => row.id === id);
+      const current = entries[index];
+      if (current === undefined) return Promise.resolve(null);
+      let next: HistoryEntry = { ...current };
+      if (patch.text !== undefined) next = { ...next, text: patch.text };
+      if (patch.language !== undefined) next = { ...next, language: patch.language };
+      if (patch.durationSec !== undefined) next = { ...next, durationSec: patch.durationSec };
+      if (patch.cancelled === null || patch.cancelled === false) {
+        const { cancelled: _c, ...rest } = next;
+        next = rest;
+      } else if (patch.cancelled === true) {
+        next = { ...next, cancelled: true };
+      }
+      if (patch.transcribeError === null) {
+        const { transcribeError: _e, ...rest } = next;
+        next = rest;
+      } else if (patch.transcribeError !== undefined) {
+        next = { ...next, transcribeError: patch.transcribeError };
+      }
+      if (patch.unconfirmedTail === null || patch.unconfirmedTail === false) {
+        const { unconfirmedTail: _u, ...rest } = next;
+        next = rest;
+      } else if (patch.unconfirmedTail === true) {
+        next = { ...next, unconfirmedTail: true };
+      }
+      if (patch.audioRelPath === null) {
+        next = omitAudio(next);
+      } else if (patch.audioRelPath !== undefined) {
+        next = { ...next, audioRelPath: patch.audioRelPath };
+      }
+      entries[index] = next;
+      save();
+      return Promise.resolve(next);
+    },
+
+    archiveAudio(id: string, pcm: Uint8Array): string | null {
+      if (pcm.byteLength === 0 || !isSafeRecordingId(id)) return null;
+      const relPath = audioRelPathFor(id);
+      const abs = resolveAudioAbs(userDataDir, relPath);
+      if (abs === null) return null;
+      try {
+        mkdirSync(audioDir, { recursive: true });
+        writeFileSync(abs, encodeWav(pcm));
+      } catch (cause) {
+        log.warn('could not write recording', { err: cause, id });
+        return null;
+      }
+      return relPath;
+    },
+
+    readAudio(relPath: string): Buffer | null {
+      const abs = resolveAudioAbs(userDataDir, relPath);
+      if (abs === null) return null;
+      try {
+        return readFileSync(abs);
+      } catch {
+        return null;
+      }
+    },
+
+    sweepAudio(now = Date.now()): Promise<number> {
+      const cutoff = now - AUDIO_RETENTION_MS;
+      let removed = 0;
+      let mutated = false;
+      const keptRel = new Set<string>();
+
+      const next = entries.map((row) => {
+        const rel = row.audioRelPath;
+        if (rel === undefined) return row;
+        const abs = resolveAudioAbs(userDataDir, rel);
+        const at = Date.parse(row.at);
+        const tooOld = !Number.isNaN(at) && at < cutoff;
+        const missing = abs === null || !existsSync(abs);
+        if (!tooOld && !missing) {
+          keptRel.add(rel);
+          return row;
+        }
+        if (abs !== null && existsSync(abs)) {
+          try {
+            unlinkSync(abs);
+            removed += 1;
+          } catch (cause) {
+            log.warn('could not delete expired recording', { err: cause, path: abs });
+          }
+        }
+        mutated = true;
+        return omitAudio(row);
+      });
+
+      if (existsSync(audioDir)) {
+        let names: string[] = [];
+        try {
+          names = readdirSync(audioDir);
+        } catch (cause) {
+          log.warn('could not list recordings', { err: cause });
+        }
+        for (const name of names) {
+          const rel = `${RECORDINGS_DIR}/${name}`;
+          if (keptRel.has(rel)) continue;
+          const abs = join(audioDir, name);
+          let mtime: number;
+          try {
+            mtime = statSync(abs).mtimeMs;
+          } catch {
+            continue;
+          }
+          if (mtime >= cutoff) continue;
+          try {
+            unlinkSync(abs);
+            removed += 1;
+          } catch (cause) {
+            log.warn('could not delete orphan recording', { err: cause, path: abs });
+          }
+        }
+      }
+
+      if (mutated) {
+        entries = next;
+        save();
+      }
+      if (removed > 0) log.info('audio retention sweep', { removed });
+      return Promise.resolve(removed);
     },
 
     count(): Promise<number> {

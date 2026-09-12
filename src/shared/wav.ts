@@ -9,6 +9,7 @@
  * usable message (§4: "Errors carry actionable text").
  */
 
+import { CHANNELS, SAMPLE_RATE_HZ } from './constants.js';
 import { appError, err, ok, type Result } from './result.js';
 
 export interface WavAudio {
@@ -129,6 +130,34 @@ export function trimTrailingSilence(
     end -= windowBytes;
   }
   return pcm.subarray(0, end);
+}
+
+/**
+ * Wrap PCM16 samples in a RIFF/WAVE header. Inverse of `parseWav` for the
+ * 16-bit PCM files this app writes (`recordings/<id>.wav`).
+ */
+export function encodeWav(
+  pcm: Uint8Array,
+  sampleRate = SAMPLE_RATE_HZ,
+  channels = CHANNELS,
+): Buffer {
+  const dataBytes = pcm.byteLength - (pcm.byteLength % 2);
+  const data = Buffer.from(pcm.buffer, pcm.byteOffset, dataBytes);
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0, 'ascii');
+  header.writeUInt32LE(36 + data.length, 4);
+  header.write('WAVE', 8, 'ascii');
+  header.write('fmt ', 12, 'ascii');
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(WAVE_FORMAT_PCM, 20);
+  header.writeUInt16LE(channels, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(sampleRate * channels * 2, 28);
+  header.writeUInt16LE(channels * 2, 32);
+  header.writeUInt16LE(16, 34);
+  header.write('data', 36, 'ascii');
+  header.writeUInt32LE(data.length, 40);
+  return Buffer.concat([header, data]);
 }
 
 /** Split PCM into fixed-size chunks; the last one may be short. */

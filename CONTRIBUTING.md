@@ -29,7 +29,7 @@ npm run typecheck
 | --------------- | --------------------------------------------------------- |
 | `contracts/`    | Frozen types every side of the app builds against         |
 | `src/main/`     | Electron main process (state machine, STT, tray, auth)    |
-| `src/renderer/` | HUD, Settings / History / Scratchpad, sign-in, capture    |
+| `src/renderer/` | HUD, Settings / History / Stats, sign-in, capture         |
 | `src/shared/`   | Logger, redaction, constants                              |
 | `native/`       | Swift helper: hotkey tap + insertion ladder               |
 | `mocks/`        | Test doubles. The app itself does not use them at runtime |

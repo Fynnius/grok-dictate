@@ -13,8 +13,9 @@
  *     Removing the call deletes all audio with no build error, no failing test
  *     and no visible symptom. It survives every rewrite of this file.
  *   - Insert outcomes are wordless. The transcript lives in History; ⌃⌘V
- *     re-inserts it. *Copy* in History is the **only** route to the
- *     pasteboard, and it exists solely because the user clicked it.
+ *     re-inserts it. *Copy* in History (and the menu-bar History submenu) is
+ *     the **only** route to the pasteboard, and it exists solely because the
+ *     user clicked it.
  */
 
 import { StrictMode, useEffect, useRef, useState } from 'react';
@@ -55,9 +56,6 @@ function runAction(id: HudActionId, text: string | null): void {
       return;
     case 'retry':
       api.send({ type: 'retry-insert' });
-      return;
-    case 'scratchpad':
-      api.send({ type: 'open-window', window: 'scratchpad' });
       return;
     case 'dismiss':
       // Offered only if a presentation still carries a Dismiss action.

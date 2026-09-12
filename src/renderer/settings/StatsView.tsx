@@ -6,9 +6,9 @@
  * transcript text on this surface: the main process aggregates and this
  * view renders the view-model.
  *
- * Retention is labelled as the configured window (default 90 days), never
- * "lifetime". "Time saved" shows the 40 WPM assumption or it would be
- * marketing. Empty history is a designed first-run state.
+ * Retention is labelled as the configured window — now all history on disk,
+ * never a rolling 90 days. "Time saved" shows the 40 WPM assumption or it
+ * would be marketing. Empty history is a designed first-run state.
  *
  * Keyboard/assistive access matches the other panels: no custom widgets,
  * native text, a real heading. The HUD is unfocusable and is not claimed

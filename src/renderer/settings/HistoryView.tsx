@@ -18,10 +18,9 @@
  * itself. Copy is the only coherent action from a focused window, and stays
  * the product's only route to the pasteboard.
  *
- *  is the counterweight to keeping everything: "everything
- * dictated, including into private contexts, in one searchable local store".
- * *Delete everything* is therefore a first-class control, not something
- * buried in Settings.
+ * Transcripts stay until the user deletes them. Audio is kept for one day so
+ * a cancelled or failed take can be retried from this window. Retry never
+ * inserts — Copy is still the only pasteboard write from History.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -80,10 +79,34 @@ function rowDetail(entry: HistoryEntry): string {
  * unconfirmed rather than as confirmed: that is exactly what it was.
  */
 function outcomeLabel(entry: HistoryEntry): string {
+  if (entry.cancelled === true) return 'cancelled';
+  if (entry.transcribeError !== undefined && entry.transcribeError.length > 0) return 'failed';
   if (!entry.inserted) return 'not inserted';
   return entry.verified === true
     ? `inserted · ${entry.tier}`
     : `typed, unconfirmed · ${entry.tier}`;
+}
+
+function rowFlag(entry: HistoryEntry): string | null {
+  if (entry.cancelled === true) return 'Cancelled';
+  if (entry.transcribeError !== undefined && entry.transcribeError.length > 0) return 'Failed';
+  if (!entry.inserted) return 'Not inserted';
+  return entry.verified === true ? null : 'Unconfirmed';
+}
+
+function rowText(entry: HistoryEntry): { text: string; placeholder: boolean } {
+  if (entry.text.length > 0) return { text: entry.text, placeholder: false };
+  if (entry.cancelled === true) {
+    return { text: 'Cancelled — tap Retry to transcribe', placeholder: true };
+  }
+  if (entry.transcribeError !== undefined && entry.transcribeError.length > 0) {
+    return { text: 'Failed — tap Retry to transcribe', placeholder: true };
+  }
+  return { text: '', placeholder: false };
+}
+
+function hasAudio(entry: HistoryEntry): boolean {
+  return entry.audioRelPath !== undefined && entry.audioRelPath.length > 0;
 }
 
 export function HistoryView(): React.JSX.Element {
@@ -92,6 +115,8 @@ export function HistoryView(): React.JSX.Element {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [confirmingPurge, setConfirmingPurge] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
+  const [retryingId, setRetryingId] = useState<string | null>(null);
+  const [retryError, setRetryError] = useState<string | null>(null);
 
   // The live-update listener needs the current query, but must not
   // re-subscribe on every keystroke.
@@ -133,9 +158,25 @@ export function HistoryView(): React.JSX.Element {
   const copy = (entry: HistoryEntry): void => {
     //  — an explicit user action is the only thing that may
     // write the pasteboard.
+    if (entry.text.length === 0) return;
     api.send({ type: 'copy', text: entry.text });
     setCopied(entry.id);
     window.setTimeout(() => setCopied(null), 1_200);
+  };
+
+  const retry = (entry: HistoryEntry): void => {
+    if (!hasAudio(entry) || retryingId !== null) return;
+    setRetryingId(entry.id);
+    setRetryError(null);
+    void request({ type: 'retry-transcription', id: entry.id }, 'ok').then((outcome) => {
+      setRetryingId(null);
+      if (outcome.ok) {
+        reload(queryRef.current);
+        return;
+      }
+      setRetryError(outcome.message);
+      reload(queryRef.current);
+    });
   };
 
   const now = new Date();
@@ -168,7 +209,10 @@ export function HistoryView(): React.JSX.Element {
       }
       footer={
         <>
-          <p className="note">Stored on this machine only. Retention is set in Settings.</p>
+          <p className="note">
+            Stored on this machine only. Transcripts stay until you delete them. Audio is kept for
+            one day.
+          </p>
           {confirmingPurge ? (
             <>
               <button
@@ -215,33 +259,50 @@ export function HistoryView(): React.JSX.Element {
           </p>
         </div>
       ) : (
-        <ul className="rows">
-          {entries.map((entry) => (
-            <li key={entry.id} title={rowDetail(entry)}>
-              <p className="row-text">{entry.text}</p>
-              <span className="row-side">
-                <time dateTime={entry.at}>{when(entry.at, now)}</time>
-                {entry.inserted ? (
-                  // The same distinction the HUD makes, in the surface the user
-                  // comes to when they suspect something went missing.
-                  entry.verified === true ? null : (
-                    <span className="row-flag">Unconfirmed</span>
-                  )
-                ) : (
-                  <span className="row-flag">Not inserted</span>
-                )}
-              </span>
-              <button
-                type="button"
-                className={`icon row-copy${copied === entry.id ? ' copied' : ''}`}
-                aria-label="Copy this transcript"
-                onClick={() => copy(entry)}
-              >
-                {copied === entry.id ? <CheckIcon /> : <CopyIcon />}
-              </button>
-            </li>
-          ))}
-        </ul>
+        <>
+          {retryError !== null ? (
+            <div className="issues" role="alert">
+              <p>{retryError}</p>
+            </div>
+          ) : null}
+          <ul className="rows">
+            {entries.map((entry) => {
+              const body = rowText(entry);
+              const flag = rowFlag(entry);
+              return (
+                <li key={entry.id} title={rowDetail(entry)}>
+                  <p className={body.placeholder ? 'row-text placeholder' : 'row-text'}>
+                    {body.text}
+                  </p>
+                  <span className="row-side">
+                    <time dateTime={entry.at}>{when(entry.at, now)}</time>
+                    {flag === null ? null : <span className="row-flag">{flag}</span>}
+                  </span>
+                  {hasAudio(entry) ? (
+                    <button
+                      type="button"
+                      className="ghost row-retry"
+                      disabled={retryingId !== null}
+                      onClick={() => retry(entry)}
+                    >
+                      {retryingId === entry.id ? 'Retrying…' : 'Retry'}
+                    </button>
+                  ) : null}
+                  {entry.text.length === 0 ? null : (
+                    <button
+                      type="button"
+                      className={`icon row-copy${copied === entry.id ? ' copied' : ''}`}
+                      aria-label="Copy this transcript"
+                      onClick={() => copy(entry)}
+                    >
+                      {copied === entry.id ? <CheckIcon /> : <CopyIcon />}
+                    </button>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </>
       )}
     </PanelShell>
   );

@@ -1,5 +1,5 @@
 /**
- * The Settings, History and Scratchpad windows.
+ * The Settings, History and Stats windows.
  *
  * These are ordinary focusable windows — the opposite of the HUD, which must
  * never take focus. Opening one deliberately *does* change

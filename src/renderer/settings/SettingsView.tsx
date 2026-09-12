@@ -13,24 +13,19 @@
  * column (overhaul §4.7). The explanatory prose stays, because it is honest
  * about settings that do less than their names suggest (spikes 2 and 3), but
  * moves behind ⓘ disclosures so the pane stops reading as documentation.
- * Where a note's content is *dynamic* — what retention will actually do —
- * it stays visible as a caption.
+ * Where a note's content is *dynamic* — which login dictation will actually
+ * use — it stays visible as a caption.
  */
 
 import { useCallback, useEffect, useState } from 'react';
 import type { AppConfig, LanguageMode, SttModel } from '@contracts/config.js';
 import { DEFAULT_CONFIG } from '@contracts/config.js';
-import type { AuthStatus } from '@contracts/events.js';
+import type { AuthStatus, CliAuthStatus } from '@contracts/events.js';
 import { KEYTERM_MAX_COUNT, KEYTERM_MAX_LENGTH } from '@shared/constants.js';
 import { request } from './ipc.js';
 import { InfoTip, PanelShell, Segmented, Switch } from './shell.js';
 import { CheckIcon } from './icons.js';
-import {
-  describeRetention,
-  formatKeyterms,
-  parseBoundedInteger,
-  parseKeyterms,
-} from './validation.js';
+import { formatKeyterms, parseBoundedInteger, parseKeyterms } from './validation.js';
 
 const api = window.grokDictate;
 
@@ -58,12 +53,21 @@ const INSERT_METHOD_OPTIONS: readonly (readonly [AppConfig['insertMethod'], stri
 export function SettingsView(): React.JSX.Element {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [auth, setAuth] = useState<AuthStatus | null>(null);
+  const [cli, setCli] = useState<CliAuthStatus | null>(null);
+  const [cliBinaryFound, setCliBinaryFound] = useState(true);
+  const [cliLoginWaiting, setCliLoginWaiting] = useState(false);
+  const [cliRenewWaiting, setCliRenewWaiting] = useState(false);
   const [grokComSignedIn, setGrokComSignedIn] = useState<boolean | null>(null);
   const [chromePasskeyWaiting, setChromePasskeyWaiting] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [keytermText, setKeytermText] = useState('');
   const [issues, setIssues] = useState<readonly string[]>([]);
   const [saved, setSaved] = useState(false);
+
+  const applyCliStatus = useCallback((status: CliAuthStatus, binaryFound: boolean) => {
+    setCli(status);
+    setCliBinaryFound(binaryFound);
+  }, []);
 
   useEffect(() => {
     void request({ type: 'get-config' }, 'config').then((outcome) => {
@@ -77,16 +81,24 @@ export function SettingsView(): React.JSX.Element {
     void request({ type: 'get-auth-status' }, 'auth-status').then((outcome) => {
       if (outcome.ok) setAuth(outcome.value.status);
     });
+    void request({ type: 'get-cli-status' }, 'cli-status').then((outcome) => {
+      if (outcome.ok) applyCliStatus(outcome.value.status, outcome.value.binaryFound);
+    });
     void request({ type: 'get-grok-com-status' }, 'grok-com-status').then((outcome) => {
       if (outcome.ok) setGrokComSignedIn(outcome.value.signedIn);
     });
     // The tray can change language and audio cues behind this window's back.
     return api.on((message) => {
       if (message.type === 'config-updated') setConfig(message.config);
-      if (message.type === 'auth-updated') setAuth(message.status);
+      if (message.type === 'auth-updated') {
+        setAuth(message.status);
+        void request({ type: 'get-cli-status' }, 'cli-status').then((outcome) => {
+          if (outcome.ok) applyCliStatus(outcome.value.status, outcome.value.binaryFound);
+        });
+      }
       if (message.type === 'grok-com-updated') setGrokComSignedIn(message.signedIn);
     });
-  }, []);
+  }, [applyCliStatus]);
 
   const save = useCallback((patch: Partial<AppConfig>, nextIssues: readonly string[] = []) => {
     setConfig((current) => {
@@ -128,6 +140,7 @@ export function SettingsView(): React.JSX.Element {
   }
 
   const keyterms = parseKeyterms(keytermText);
+  const apiKeySignedIn = auth?.state === 'signed-in' && auth.source === 'api-key';
 
   return (
     <PanelShell
@@ -151,68 +164,38 @@ export function SettingsView(): React.JSX.Element {
         <h2 className="group-title">Account</h2>
         <div className="card">
           <div className="card-row">
-            <span className="row-label">{accountLabel(auth)}</span>
+            <span className="row-label">xAI API key</span>
             <span className="control">
-              {auth?.state === 'signed-in' && auth.source === 'api-key' ? (
-                <button
-                  type="button"
-                  className="ghost destructive"
-                  onClick={() => {
-                    void request({ type: 'clear-api-key' }, 'auth-status').then((outcome) => {
-                      if (outcome.ok) setAuth(outcome.value.status);
-                    });
-                  }}
-                >
-                  Sign out
-                </button>
+              {auth === null ? (
+                <span className="unit">Checking…</span>
+              ) : apiKeySignedIn ? (
+                <>
+                  <span className="chip ok">Signed in</span>
+                  <button
+                    type="button"
+                    className="ghost destructive"
+                    onClick={() => {
+                      void request({ type: 'clear-api-key' }, 'auth-status').then((outcome) => {
+                        if (outcome.ok) setAuth(outcome.value.status);
+                      });
+                    }}
+                  >
+                    Sign out
+                  </button>
+                </>
               ) : (
-                <button
-                  type="button"
-                  onClick={() => {
-                    api.send({ type: 'open-window', window: 'signin' });
-                  }}
-                >
-                  Sign in…
-                </button>
+                <>
+                  <span className="chip">Not signed in</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      api.send({ type: 'open-window', window: 'signin' });
+                    }}
+                  >
+                    Sign in…
+                  </button>
+                </>
               )}
-            </span>
-          </div>
-        </div>
-        <p className="card-caption">
-          An xAI API key is stored in the macOS Keychain. A Grok CLI login is read from
-          ~/.grok/auth.json and is never written back.
-        </p>
-      </div>
-
-      <div className="group">
-        <h2 className="group-title">Dictation</h2>
-        <div className="card">
-          <div className="card-row">
-            <span className="row-label">
-              Language
-              <InfoTip text="The server detects the language it hears and reports it back, so this is a preference rather than an override — English speech sent as German still came back as English in testing. Every transcript records the language that was actually detected." />
-            </span>
-            <span className="control">
-              <Segmented
-                options={LANGUAGE_OPTIONS}
-                value={config.languageMode}
-                onChange={(mode) => save({ languageMode: mode })}
-                ariaLabel="Language preference"
-              />
-            </span>
-          </div>
-          <div className="card-row">
-            <span className="row-label">
-              Speech model
-              <InfoTip text="Standard uses the xAI API. STT 2 Fast uses grok.com after you sign in here." />
-            </span>
-            <span className="control">
-              <Segmented
-                options={STT_MODEL_OPTIONS}
-                value={config.sttModel ?? 'grok-stt'}
-                onChange={(model) => save({ sttModel: model })}
-                ariaLabel="Speech recognition model"
-              />
             </span>
           </div>
           <div className="card-row">
@@ -244,13 +227,14 @@ export function SettingsView(): React.JSX.Element {
                 <span className="unit">Waiting for Chrome…</span>
               ) : (
                 <>
+                  <span className="chip">Not signed in</span>
                   <button
                     type="button"
                     onClick={() => {
                       api.send({ type: 'open-window', window: 'grok-com-signin' });
                     }}
                   >
-                    Sign in to grok.com…
+                    Sign in…
                   </button>
                   <button
                     type="button"
@@ -269,6 +253,98 @@ export function SettingsView(): React.JSX.Element {
                   </button>
                 </>
               )}
+            </span>
+          </div>
+          <div className="card-row">
+            <span className="row-label">
+              Grok CLI
+              <InfoTip text="Sign in opens Terminal and runs `grok login`. Grok Dictate reads ~/.grok/auth.json and never writes it, so there is no Sign out here — that file belongs to the Grok CLI." />
+            </span>
+            <span className="control">
+              {cliRowControls({
+                cli,
+                binaryFound: cliBinaryFound,
+                waiting: cliLoginWaiting,
+                renewing: cliRenewWaiting,
+                onSignIn: () => {
+                  setCliLoginWaiting(true);
+                  setIssues([]);
+                  void request({ type: 'start-grok-cli-login' }, 'cli-status').then((outcome) => {
+                    setCliLoginWaiting(false);
+                    if (outcome.ok) applyCliStatus(outcome.value.status, outcome.value.binaryFound);
+                    else setIssues([outcome.message]);
+                  });
+                },
+                onCancel: () => {
+                  void request({ type: 'cancel-grok-cli-login' }, 'cli-status').then((outcome) => {
+                    setCliLoginWaiting(false);
+                    if (outcome.ok) applyCliStatus(outcome.value.status, outcome.value.binaryFound);
+                  });
+                },
+                onRenew: () => {
+                  setCliRenewWaiting(true);
+                  setIssues([]);
+                  void request({ type: 'renew-cli-login' }, 'cli-status').then((outcome) => {
+                    setCliRenewWaiting(false);
+                    if (!outcome.ok) {
+                      setIssues([outcome.message]);
+                      return;
+                    }
+                    applyCliStatus(outcome.value.status, outcome.value.binaryFound);
+                    if (outcome.value.status.state !== 'signed-in') {
+                      setIssues([
+                        'The Grok CLI could not renew the login. Try Sign in… which opens Terminal.',
+                      ]);
+                    }
+                  });
+                },
+              })}
+            </span>
+          </div>
+          <div className="card-row">
+            <span className="row-label">
+              Keep the Grok CLI login signed in
+              <InfoTip text="A Grok CLI login lasts a few hours. Rather than failing a dictation and asking you to run `grok` yourself, Grok Dictate runs `grok models` in the background shortly before the token expires and lets the CLI renew its own login. It never handles the token itself. Does nothing if you signed in with an xAI API key, which does not expire." />
+            </span>
+            <Switch
+              checked={config.autoRenewLogin}
+              onChange={(next) => save({ autoRenewLogin: next })}
+              ariaLabel="Keep the Grok CLI login signed in"
+            />
+          </div>
+        </div>
+        <p className="card-caption">{dictationSourceCaption(auth)}</p>
+      </div>
+
+      <div className="group">
+        <h2 className="group-title">Dictation</h2>
+        <div className="card">
+          <div className="card-row">
+            <span className="row-label">
+              Language
+              <InfoTip text="The server detects the language it hears and reports it back, so this is a preference rather than an override — English speech sent as German still came back as English in testing. Every transcript records the language that was actually detected." />
+            </span>
+            <span className="control">
+              <Segmented
+                options={LANGUAGE_OPTIONS}
+                value={config.languageMode}
+                onChange={(mode) => save({ languageMode: mode })}
+                ariaLabel="Language preference"
+              />
+            </span>
+          </div>
+          <div className="card-row">
+            <span className="row-label">
+              Speech model
+              <InfoTip text="Standard uses the xAI API. STT 2 Fast needs the grok.com login under Account." />
+            </span>
+            <span className="control">
+              <Segmented
+                options={STT_MODEL_OPTIONS}
+                value={config.sttModel ?? 'grok-stt'}
+                onChange={(model) => save({ sttModel: model })}
+                ariaLabel="Speech recognition model"
+              />
             </span>
           </div>
           <div className="card-row">
@@ -315,7 +391,7 @@ export function SettingsView(): React.JSX.Element {
           <div className="card-row">
             <span className="row-label">
               Repair segment joins
-              <InfoTip text="A long dictation is cut into segments, each transcribed without seeing the one before it, which leaves a duplicated word, a capital letter mid-sentence, or a stray “Thank you.” where the two meet. This tidies those joins before the text is inserted. It is the only thing in the app that edits what you said — turn it off to get the transcript exactly as the server sent it." />
+              <InfoTip text="A long dictation is cut into segments, each transcribed without seeing the one before it, which leaves a duplicated word, a capital letter mid-sentence, a stray “Thank you.”, or a pause punctuated as “. ,”. This tidies those before the text is inserted. It is the only thing in the app that edits what you said — turn it off to get the transcript exactly as the server sent it." />
             </span>
             <Switch
               checked={config.repairSeams}
@@ -406,39 +482,9 @@ export function SettingsView(): React.JSX.Element {
 
       <div className="group">
         <h2 className="group-title">History</h2>
-        <div className="card">
-          <div className="card-row">
-            <span className="row-label">
-              Keep for
-              <InfoTip text="Everything you dictate is stored locally and is searchable, including anything said into a private context. The History window has a delete-everything button." />
-            </span>
-            <span className="control">
-              <input
-                type="number"
-                min={0}
-                max={3_650}
-                aria-label="History retention in days"
-                defaultValue={config.historyRetentionDays}
-                onBlur={(event) => {
-                  const result = parseBoundedInteger(event.target.value, {
-                    min: 0,
-                    max: 3_650,
-                    fallback: DEFAULT_CONFIG.historyRetentionDays,
-                    label: 'Retention',
-                  });
-                  event.target.value = String(result.value);
-                  save(
-                    { historyRetentionDays: result.value },
-                    result.issue === null ? [] : [result.issue],
-                  );
-                }}
-              />
-              <span className="unit">days</span>
-            </span>
-          </div>
-        </div>
         <p className="card-caption">
-          {describeRetention(config.historyRetentionDays)} 0 keeps everything.
+          Transcripts stay until you delete them. Audio is kept for one day so a recording can be
+          retried.
         </p>
       </div>
 
@@ -472,33 +518,95 @@ export function SettingsView(): React.JSX.Element {
               ariaLabel="Open Grok Dictate at login"
             />
           </div>
-          <div className="card-row">
-            <span className="row-label">
-              Keep the Grok CLI login signed in
-              <InfoTip text="A Grok CLI login lasts a few hours. Rather than failing a dictation and asking you to run `grok` yourself, Grok Dictate runs `grok models` in the background shortly before the token expires and lets the CLI renew its own login. It never handles the token itself. Does nothing if you signed in with an xAI API key, which does not expire." />
-            </span>
-            <Switch
-              checked={config.autoRenewLogin}
-              onChange={(next) => save({ autoRenewLogin: next })}
-              ariaLabel="Keep the Grok CLI login signed in"
-            />
-          </div>
         </div>
       </div>
     </PanelShell>
   );
 }
 
-function accountLabel(auth: AuthStatus | null): string {
-  if (auth === null) return 'Checking login…';
-  if (auth.state === 'expired') return 'Grok CLI login expired';
-  if (auth.state === 'signed-out') return 'Not signed in';
+function dictationSourceCaption(auth: AuthStatus | null): string {
+  const grokCom = 'grok.com is only for STT 2 Fast.';
+  if (auth === null) return `Checking which login dictation will use… ${grokCom}`;
+  if (auth.state === 'signed-out') {
+    return `Dictation has no login yet. Add an xAI API key or a Grok CLI login. ${grokCom}`;
+  }
+  if (auth.state === 'expired') {
+    return `Dictation will use the Grok CLI login once it is renewed. ${grokCom}`;
+  }
   switch (auth.source) {
     case 'api-key':
-      return 'Signed in with an xAI API key';
+      return `Dictation will use the xAI API key. ${grokCom}`;
     case 'environment':
-      return 'Signed in via XAI_API_KEY';
+      return `Dictation will use XAI_API_KEY from the environment. ${grokCom}`;
     case 'grok-cli':
-      return 'Signed in via the Grok CLI';
+      return `Dictation will use the Grok CLI login. ${grokCom}`;
   }
+}
+
+function formatExpiryClock(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  return `${hours}:${minutes}`;
+}
+
+function cliRowControls({
+  cli,
+  binaryFound,
+  waiting,
+  renewing,
+  onSignIn,
+  onCancel,
+  onRenew,
+}: {
+  readonly cli: CliAuthStatus | null;
+  readonly binaryFound: boolean;
+  readonly waiting: boolean;
+  readonly renewing: boolean;
+  readonly onSignIn: () => void;
+  readonly onCancel: () => void;
+  readonly onRenew: () => void;
+}): React.JSX.Element {
+  if (cli === null) return <span className="unit">Checking…</span>;
+  if (waiting) {
+    return (
+      <>
+        <span className="unit">Waiting for Terminal…</span>
+        <button type="button" className="ghost" onClick={onCancel}>
+          Cancel
+        </button>
+      </>
+    );
+  }
+  if (cli.state === 'signed-in') {
+    const clock = formatExpiryClock(cli.expiresAt);
+    return (
+      <>
+        <span className="chip ok">Signed in</span>
+        {clock.length > 0 ? <span className="unit">Expires {clock}</span> : null}
+      </>
+    );
+  }
+  if (cli.state === 'expired') {
+    return (
+      <>
+        <span className="chip">Expired</span>
+        <button type="button" disabled={renewing} onClick={onRenew}>
+          {renewing ? 'Refreshing…' : 'Refresh now'}
+        </button>
+        <button type="button" onClick={onSignIn}>
+          Sign in…
+        </button>
+      </>
+    );
+  }
+  return (
+    <>
+      <span className="chip">{binaryFound ? 'Not signed in' : 'CLI not found'}</span>
+      <button type="button" onClick={onSignIn}>
+        Sign in…
+      </button>
+    </>
+  );
 }

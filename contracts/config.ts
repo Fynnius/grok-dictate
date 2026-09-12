@@ -141,8 +141,8 @@ export const AppConfigSchema = z.object({
    * One hold produces several segments, each re-transcribed with no knowledge
    * of the one before it, and the joins are where the text goes wrong —
    * duplicated seam words, mid-sentence capitals, "Thank you." hallucinated out
-   * of the closing silence. `src/shared/stitch.ts` has the evidence and the
-   * three rules.
+   * of the closing silence, a pause punctuated as `. ,`. `src/shared/stitch.ts`
+   * has the evidence and the rules.
    *
    * On by default because every rule is a measured artefact, and a setting
    * because this is the one thing in the app that rewrites what a person said:
@@ -158,11 +158,13 @@ export const AppConfigSchema = z.object({
   }),
 
   /**
-   * Days of history to keep; 0 means keep forever. : the history
-   * file is "a partial keylogger" — everything ever dictated, searchable, in
-   * one place. Retention plus an explicit purge is the conscious mitigation.
+   * Days of transcript history to keep; 0 means keep forever. Default is 0:
+   * History is the recovery surface, so rows stay until the user deletes
+   * them. The field is kept so an older `config.json` still parses; the app
+   * no longer sweeps transcripts by this value. Audio sidecars expire on
+   * their own clock (`AUDIO_RETENTION_MS` in the history store).
    */
-  historyRetentionDays: z.number().int().min(0).max(3650).default(90),
+  historyRetentionDays: z.number().int().min(0).max(3650).default(0),
 
   /** Short start/stop cues, under ~80 ms. Dictation is
    *  eyes-free; this is the entire feedback channel. */

@@ -3,9 +3,10 @@
  *
  * The template is pure data — every item carries a `TrayAction` value rather
  * than a closure — so the whole menu is unit-testable without Electron, and so
- * a test can assert the property that matters most here: **no tray item writes
- * the clipboard**. A menu built
- * from closures would make that assertion impossible.
+ * a test can assert the clipboard property: the History submenu may copy a
+ * recent transcript on click (`copy-history`); nothing else on the menu writes
+ * the pasteboard. A menu built from closures would make that assertion
+ * impossible.
  *
  * `src/main/tray/index.ts` maps the actions onto handlers and hands the result
  * to `Menu.buildFromTemplate`.
@@ -15,17 +16,34 @@ import type { AppConfig, LanguageMode } from '@contracts/config.js';
 import type { HudView, SessionState } from '@contracts/events.js';
 import type { TrayIconName } from './icons.js';
 
-export type PanelName = 'settings' | 'history' | 'scratchpad' | 'stats';
+export type PanelName = 'settings' | 'history' | 'stats';
 
 export type TrayAction =
   | { kind: 'set-language'; mode: LanguageMode }
   /** Open System Settings at the pane that fixes a missing grant. */
   | { kind: 'open-accessibility-settings' }
-  | { kind: 'set-audio-cues'; enabled: boolean }
   | { kind: 'open'; panel: PanelName }
   | { kind: 'sign-in' }
+  /** Copy a recent history row. The text is resolved at click time by id. */
+  | { kind: 'copy-history'; id: string }
   | { kind: 'preview-hud'; view: HudView; delayMs: number }
   | { kind: 'quit' };
+
+export interface TrayHistoryRow {
+  readonly id: string;
+  readonly text: string;
+  readonly at: string;
+}
+
+/** Menu labels longer than this get an ellipsis so the bar stays readable. */
+export const HISTORY_LABEL_MAX = 60;
+
+export function truncateHistoryLabel(text: string, max = HISTORY_LABEL_MAX): string {
+  const collapsed = text.replace(/\s+/g, ' ').trim();
+  if (collapsed.length === 0) return '…';
+  if (collapsed.length <= max) return collapsed;
+  return `${collapsed.slice(0, Math.max(0, max - 1))}…`;
+}
 
 export interface TrayMenuItem {
   readonly id: string;
@@ -41,7 +59,8 @@ export interface TrayModel {
   readonly state: SessionState;
   readonly secureInput: boolean;
   readonly config: AppConfig;
-  readonly historyCount: number;
+  /** Newest first. The menu shows at most five. */
+  readonly recentHistory: readonly TrayHistoryRow[];
   /**
    * The HUD-preview submenu. It exists because Phase 4 runs in parallel with
    * Phase 2, so there is no real `Fn` key yet — and clicking a button in the
@@ -247,7 +266,7 @@ export function buildTrayMenu(model: TrayModel): readonly TrayMenuItem[] {
   if (!model.accessibility) {
     items.push({
       id: 'open-accessibility',
-      label: 'Open Accessibility settings…',
+      label: 'Open Accessibility…',
       action: { kind: 'open-accessibility-settings' },
     });
   }
@@ -278,28 +297,11 @@ export function buildTrayMenu(model: TrayModel): readonly TrayMenuItem[] {
         languageItem('en', 'Prefer English', config.languageMode),
       ],
     },
-    {
-      id: 'audioCues',
-      label: 'Audio cues',
-      type: 'checkbox',
-      checked: config.audioCues,
-      action: { kind: 'set-audio-cues', enabled: !config.audioCues },
-    },
-    { id: 'sep.settings', type: 'separator' },
-    {
-      id: 'open.history',
-      label: model.historyCount === 0 ? 'History' : `History (${String(model.historyCount)})`,
-      action: { kind: 'open', panel: 'history' },
-    },
+    historySubmenu(model.recentHistory),
     {
       id: 'open.stats',
       label: 'Stats',
       action: { kind: 'open', panel: 'stats' },
-    },
-    {
-      id: 'open.scratchpad',
-      label: 'Scratchpad',
-      action: { kind: 'open', panel: 'scratchpad' },
     },
     {
       id: 'open.settings',
@@ -337,6 +339,32 @@ export function buildTrayMenu(model: TrayModel): readonly TrayMenuItem[] {
   );
 
   return items;
+}
+
+function historySubmenu(rows: readonly TrayHistoryRow[]): TrayMenuItem {
+  const recent = rows.slice(0, 5);
+  const items: TrayMenuItem[] =
+    recent.length === 0
+      ? [{ id: 'history.empty', label: 'Nothing dictated yet', enabled: false }]
+      : recent.map((row) => ({
+          id: `history.row.${row.id}`,
+          label: truncateHistoryLabel(row.text),
+          action: { kind: 'copy-history' as const, id: row.id },
+        }));
+  items.push(
+    { id: 'history.sep', type: 'separator' },
+    {
+      id: 'open.history',
+      label: 'Open History…',
+      action: { kind: 'open', panel: 'history' },
+    },
+  );
+  return {
+    id: 'history',
+    label: 'History',
+    type: 'submenu',
+    submenu: items,
+  };
 }
 
 function languageItem(mode: LanguageMode, label: string, current: LanguageMode): TrayMenuItem {

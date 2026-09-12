@@ -6,8 +6,8 @@
  * The history file is already "a partial keylogger"; this view is aggregates
  * only — no transcript text leaves this function.
  *
- * Honesty about the denominator: retention defaults to 90 days, so "total
- * words" means "in the configured window", labelled as such. "Time saved" is
+ * Honesty about the denominator: transcripts stay until the user deletes
+ * them, so the window is all history on disk (retention 0). "Time saved" is
  * an estimate built on a typing-speed assumption and is labelled with that
  * assumption or not shown.
  */

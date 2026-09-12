@@ -41,7 +41,7 @@ import { hudLayer, type HudLayer } from '@shared/hud-view.js';
 export type HudTone = 'idle' | 'recording' | 'processing' | 'success' | 'warning' | 'error';
 
 /** Buttons the message pill can offer. `id` maps to a `RendererToMain` message. */
-export type HudActionId = 'copy' | 'retry' | 'scratchpad' | 'dismiss';
+export type HudActionId = 'copy' | 'retry' | 'dismiss';
 
 export interface HudAction {
   readonly id: HudActionId;

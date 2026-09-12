@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { CHUNK_BYTES, SAMPLE_RATE_HZ } from './constants.js';
-import { chunkPcm, parseWav, rms, trimTrailingSilence } from './wav.js';
+import { chunkPcm, encodeWav, parseWav, rms, trimTrailingSilence } from './wav.js';
 
 /** Build a WAV in memory so the tests do not depend on a recording existing. */
 function makeWav(options: {
@@ -72,6 +72,21 @@ describe('parseWav', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.pcm.length).toBe(6);
+  });
+});
+
+describe('encodeWav', () => {
+  it('round-trips 16 kHz mono PCM16 through parseWav', () => {
+    const samples = Buffer.alloc(32_000);
+    for (let i = 0; i < 16_000; i += 1) samples.writeInt16LE(1000, i * 2);
+    const wav = encodeWav(samples);
+    const result = parseWav(wav);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.sampleRate).toBe(16_000);
+    expect(result.value.channels).toBe(1);
+    expect(result.value.pcm.length).toBe(32_000);
+    expect(result.value.durationSec).toBeCloseTo(1, 5);
   });
 });
 

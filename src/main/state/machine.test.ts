@@ -500,7 +500,7 @@ describe('Ctrl+Cmd+V re-insert (contract §6, )', () => {
 });
 
 describe('cancel (Esc — )', () => {
-  it('discards a recording without inserting or storing anything', () => {
+  it('stores a cancelled history row without inserting, and archives before cancel', () => {
     const { snapshot, all } = run([
       { type: 'PTT_DOWN', ts: 1 },
       { type: 'TRANSCRIPT_FINAL', sessionId: 's1', text: 'vergiss das' },
@@ -508,12 +508,21 @@ describe('cancel (Esc — )', () => {
     ]);
     expect(snapshot.state).toBe('idle');
     expect(inserts(all)).toHaveLength(0);
-    expect(histories(all)).toHaveLength(0);
-    expect(kinds(all)).toContain('cancel_capture');
-    expect(kinds(all)).toContain('abort_stt');
+    expect(histories(all)).toHaveLength(1);
+    expect(histories(all)[0]?.entry).toMatchObject({
+      text: 'vergiss das',
+      cancelled: true,
+      inserted: false,
+      tier: 'none',
+    });
+    const names = kinds(all);
+    expect(names).toContain('archive_audio');
+    expect(names.indexOf('archive_audio')).toBeLessThan(names.indexOf('cancel_capture'));
+    expect(names.indexOf('history_append')).toBeLessThan(names.indexOf('cancel_capture'));
+    expect(names).toContain('abort_stt');
   });
 
-  it('discards during processing too', () => {
+  it('stores a cancelled row during processing too', () => {
     const { snapshot, all } = run([
       { type: 'PTT_DOWN', ts: 1 },
       { type: 'PTT_UP', ts: 2 },
@@ -521,6 +530,8 @@ describe('cancel (Esc — )', () => {
     ]);
     expect(snapshot.state).toBe('idle');
     expect(inserts(all)).toHaveLength(0);
+    expect(histories(all)[0]?.entry).toMatchObject({ cancelled: true, inserted: false });
+    expect(kinds(all)).toContain('archive_audio');
   });
 
   it('cannot recall an insert already dispatched to the helper', () => {
@@ -906,14 +917,15 @@ describe('contract §9 invariants', () => {
     }
   });
 
-  it('5. cancel produces no insert and no history row', () => {
+  it('5. cancel produces no insert; it stores a history row so the take can be retried', () => {
     const env = testEnv();
     let snapshot = INITIAL_SNAPSHOT;
     for (const event of SOAK) {
       const stepped = reduce(snapshot, event, env);
       if (event.type === 'CANCEL' && snapshot.state !== 'inserting') {
         expect(inserts(stepped.effects)).toHaveLength(0);
-        expect(histories(stepped.effects)).toHaveLength(0);
+        expect(histories(stepped.effects)).toHaveLength(1);
+        expect(histories(stepped.effects)[0]?.entry.cancelled).toBe(true);
       }
       snapshot = stepped.snapshot;
     }
@@ -1286,7 +1298,11 @@ describe('a mid-utterance failure keeps what was already transcribed', () => {
       text: 'First sentence. Second sentence.',
       inserted: false,
       tier: 'none',
+      transcribeError: NETWORK_DROP.error.message,
     });
+    expect(kinds(effects).indexOf('archive_audio')).toBeLessThan(
+      kinds(effects).indexOf('cancel_capture'),
+    );
   });
 
   it('never attempts an insert — half a sentence must not land in the editor', () => {
@@ -1298,11 +1314,17 @@ describe('a mid-utterance failure keeps what was already transcribed', () => {
     expect(inserts(all)).toHaveLength(0);
   });
 
-  it('still shows a plain error when nothing had been transcribed', () => {
+  it('still shows a plain error when nothing had been transcribed, and stores audio for retry', () => {
     const { snapshot, effects } = run([{ type: 'PTT_DOWN', ts: 1 }, NETWORK_DROP]);
     expect(snapshot.ctx.lastTranscript).toBeNull();
     expect(huds(effects).at(-1)?.view).toMatchObject({ kind: 'error' });
-    expect(histories(effects)).toHaveLength(0);
+    expect(histories(effects)).toHaveLength(1);
+    expect(histories(effects)[0]?.entry).toMatchObject({
+      text: '',
+      inserted: false,
+      transcribeError: NETWORK_DROP.error.message,
+    });
+    expect(kinds(effects)).toContain('archive_audio');
   });
 
   /* ---------------------------------------------------------------- *
@@ -1688,6 +1710,8 @@ describe('minimum PTT hold', () => {
     expect(huds(effects).at(-1)?.view).toEqual({ kind: 'hidden' });
     expect(kinds(effects)).toContain('cancel_capture');
     expect(kinds(effects)).toContain('abort_stt');
+    expect(kinds(effects)).not.toContain('history_append');
+    expect(kinds(effects)).not.toContain('archive_audio');
     expect(kinds(effects)).not.toContain('finish_stt');
     expect(huds(effects).some((e) => e.view.kind === 'processing')).toBe(false);
     expect(huds(effects).some((e) => e.view.kind === 'error')).toBe(false);

@@ -4,17 +4,29 @@ import { SESSION_STATES, type SessionState } from '@contracts/events.js';
 import {
   buildTrayMenu,
   flattenActions,
+  HISTORY_LABEL_MAX,
+  truncateHistoryLabel,
   trayIconFor,
   trayStatusLabel,
+  type TrayHistoryRow,
   type TrayModel,
 } from './menu.js';
+
+function row(overrides: Partial<TrayHistoryRow> = {}): TrayHistoryRow {
+  return {
+    id: 'a',
+    text: 'hello there',
+    at: '2026-09-12T00:00:00.000Z',
+    ...overrides,
+  };
+}
 
 function model(overrides: Partial<TrayModel> = {}): TrayModel {
   return {
     state: 'idle',
     secureInput: false,
     config: DEFAULT_CONFIG,
-    historyCount: 0,
+    recentHistory: [],
     includePreview: false,
     hotkeyActive: true,
     accessibility: true,
@@ -69,13 +81,14 @@ describe('trayStatusLabel', () => {
 });
 
 describe('buildTrayMenu', () => {
-  it('offers history, scratchpad, settings and quit', () => {
+  it('offers history, stats, settings and quit', () => {
     const items = ids(buildTrayMenu(model()));
-    expect(items).toContain('open.history');
+    expect(items).toContain('history');
     expect(items).toContain('open.stats');
-    expect(items).toContain('open.scratchpad');
     expect(items).toContain('open.settings');
     expect(items).toContain('quit');
+    expect(items).not.toContain('open.scratchpad');
+    expect(items).not.toContain('audioCues');
   });
 
   it('offers Sign in only when nobody is signed in', () => {
@@ -111,23 +124,59 @@ describe('buildTrayMenu', () => {
     expect(language.find((i) => i.id === 'language.note')?.enabled).toBe(false);
   });
 
-  it('reflects and toggles the audio-cue setting', () => {
-    const on = buildTrayMenu(model()).find((i) => i.id === 'audioCues');
-    expect(on?.checked).toBe(true);
-    expect(on?.action).toEqual({ kind: 'set-audio-cues', enabled: false });
-
-    const off = buildTrayMenu(model({ config: { ...DEFAULT_CONFIG, audioCues: false } })).find(
-      (i) => i.id === 'audioCues',
-    );
-    expect(off?.checked).toBe(false);
-    expect(off?.action).toEqual({ kind: 'set-audio-cues', enabled: true });
+  it('does not put audio cues on the menu', () => {
+    const actions = flattenActions(buildTrayMenu(model()));
+    expect(actions.map((a) => a.kind)).not.toContain('set-audio-cues');
+    expect(ids(buildTrayMenu(model()))).not.toContain('audioCues');
   });
 
-  it('shows the history count only when there is history', () => {
-    expect(buildTrayMenu(model()).find((i) => i.id === 'open.history')?.label).toBe('History');
-    expect(
-      buildTrayMenu(model({ historyCount: 12 })).find((i) => i.id === 'open.history')?.label,
-    ).toBe('History (12)');
+  it('nests recent transcripts under History, copy on click', () => {
+    const history = buildTrayMenu(
+      model({
+        recentHistory: [
+          row({ id: 'newest', text: 'just said this' }),
+          row({ id: 'older', text: 'said that earlier' }),
+        ],
+      }),
+    ).find((i) => i.id === 'history');
+    expect(history?.type).toBe('submenu');
+    const submenu = history?.submenu ?? [];
+    expect(submenu.map((i) => i.id)).toEqual([
+      'history.row.newest',
+      'history.row.older',
+      'history.sep',
+      'open.history',
+    ]);
+    expect(submenu[0]?.label).toBe('just said this');
+    expect(submenu[0]?.action).toEqual({ kind: 'copy-history', id: 'newest' });
+    expect(submenu.at(-1)?.label).toBe('Open History…');
+    expect(submenu.at(-1)?.action).toEqual({ kind: 'open', panel: 'history' });
+  });
+
+  it('shows an empty state when nothing has been dictated', () => {
+    const submenu = buildTrayMenu(model()).find((i) => i.id === 'history')?.submenu ?? [];
+    expect(submenu[0]).toMatchObject({
+      id: 'history.empty',
+      label: 'Nothing dictated yet',
+      enabled: false,
+    });
+    expect(submenu.at(-1)?.id).toBe('open.history');
+    expect(flattenActions(submenu).map((a) => a.kind)).toEqual(['open']);
+  });
+
+  it('caps the submenu at five rows and truncates long labels', () => {
+    const long =
+      'Deployed that on the staging server and then ran the migration because the pod would otherwise restart';
+    const recentHistory = Array.from({ length: 7 }, (_, i) =>
+      row({ id: `r${String(i)}`, text: i === 0 ? long : `row ${String(i)}` }),
+    );
+    const submenu = buildTrayMenu(model({ recentHistory })).find((i) => i.id === 'history')
+      ?.submenu ?? [];
+    const rows = submenu.filter((i) => i.id.startsWith('history.row.'));
+    expect(rows).toHaveLength(5);
+    expect(rows[0]?.label).toBe(truncateHistoryLabel(long));
+    expect(rows[0]?.label?.length).toBeLessThanOrEqual(HISTORY_LABEL_MAX);
+    expect(rows[0]?.label?.endsWith('…')).toBe(true);
   });
 
   it('includes the HUD preview submenu only when asked', () => {
@@ -154,16 +203,23 @@ describe('buildTrayMenu', () => {
     }
   });
 
-  it('NEVER offers an action that writes the clipboard', () => {
-    // The pasteboard may only be written from an explicit user action in the
-    // HUD or history — never from a menu the user might brush past. Phase 5
-    // audits every path; this is Phase 4's half of that audit.
+  it('the only clipboard action is copy-history, carrying an id not the text', () => {
+    // A History-submenu click is an explicit copy. Every other tray item must
+    // still leave the pasteboard alone — including Preview HUD.
+    const recentHistory = [row({ id: 'keep-me', text: 'secret transcript' })];
     for (const includePreview of [false, true]) {
       for (const state of SESSION_STATES) {
-        const actions = flattenActions(buildTrayMenu(model({ state, includePreview })));
+        const actions = flattenActions(
+          buildTrayMenu(model({ state, includePreview, recentHistory })),
+        );
         expect(actions.map((a) => a.kind)).not.toContain('copy');
+        const copies = actions.filter((a) => a.kind === 'copy-history');
+        expect(copies).toEqual([{ kind: 'copy-history', id: 'keep-me' }]);
         for (const action of actions) {
           expect(JSON.stringify(action)).not.toMatch(/clipboard|pasteboard/i);
+          if (action.kind === 'copy-history') {
+            expect(JSON.stringify(action)).not.toContain('secret transcript');
+          }
         }
       }
     }
@@ -223,11 +279,27 @@ describe('the tray tells the truth about a dead hotkey', () => {
     expect(fine.map((a) => a.kind)).not.toContain('open-accessibility-settings');
   });
 
-  it('still writes no clipboard, whatever the permission state', () => {
-    //  A new action kind is exactly how that could regress.
+  it('still writes no clipboard except copy-history, whatever the permission state', () => {
+    // A new action kind is exactly how that could regress.
     for (const accessibility of [true, false]) {
-      const actions = flattenActions(buildTrayMenu(model({ accessibility })));
+      const actions = flattenActions(
+        buildTrayMenu(model({ accessibility, recentHistory: [row({ id: 'x' })] })),
+      );
       expect(actions.map((a) => a.kind)).not.toContain('copy');
+      expect(actions.filter((a) => a.kind === 'copy-history')).toEqual([
+        { kind: 'copy-history', id: 'x' },
+      ]);
     }
+  });
+});
+
+describe('truncateHistoryLabel', () => {
+  it('collapses whitespace and ellipsises past the cap', () => {
+    expect(truncateHistoryLabel('  hello   there  ')).toBe('hello there');
+    expect(truncateHistoryLabel('')).toBe('…');
+    const long = 'a'.repeat(HISTORY_LABEL_MAX + 8);
+    const shown = truncateHistoryLabel(long);
+    expect(shown.length).toBe(HISTORY_LABEL_MAX);
+    expect(shown.endsWith('…')).toBe(true);
   });
 });

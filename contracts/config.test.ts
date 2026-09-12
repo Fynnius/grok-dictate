@@ -77,6 +77,16 @@ describe('config defaults', () => {
     expect(DEFAULT_CONFIG.insertMethod).toBe('auto');
   });
 
+  it('keeps transcript history forever by default', () => {
+    expect(DEFAULT_CONFIG.historyRetentionDays).toBe(0);
+  });
+
+  it('still parses an older config that set a retention window', () => {
+    const { config, issues } = parseConfig({ historyRetentionDays: 90 });
+    expect(issues).toEqual([]);
+    expect(config.historyRetentionDays).toBe(90);
+  });
+
   it('keeps `type` reachable, which is the pre-paste behaviour exactly', () => {
     // The escape hatch matters more than the default: it is what a user reaches
     // for if pasting trips macOS 26's Terminal paste-protection dialog, and

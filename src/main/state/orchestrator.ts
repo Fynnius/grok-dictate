@@ -24,7 +24,7 @@ import type {
 } from '@contracts/ports.js';
 import type { AppSnapshot, HudView } from '@contracts/events.js';
 import { resolveWireLanguage } from '@contracts/config.js';
-import { MAX_RECORDING_MS } from '@shared/constants.js';
+import { BYTES_PER_SECOND, MAX_RECORDING_MS } from '@shared/constants.js';
 import { systemLanguageSubtag } from '@shared/env.js';
 import { sameHudView } from '@shared/hud-view.js';
 import type { Logger } from '@shared/logger.js';
@@ -139,6 +139,11 @@ export class Orchestrator {
   #pendingStartCue = false;
   #muteAfterStartCue = false;
   #captureOpen = false;
+  /**
+   * PCM snapped by `archive_audio` before `cancel_capture` frees it. Consumed
+   * by the following `history_append`.
+   */
+  #pendingPcm: Uint8Array | null = null;
 
   constructor(deps: OrchestratorDeps) {
     this.#deps = deps;
@@ -477,13 +482,30 @@ export class Orchestrator {
         this.#playCue(effect.cue);
         return;
 
+      case 'archive_audio': {
+        const pcm = audio.getUtteranceBuffer(effect.sessionId);
+        this.#pendingPcm = pcm !== null && pcm.byteLength > 0 ? pcm : null;
+        return;
+      }
+
       case 'history_append': {
         // The reducer cannot know these three (machine.ts, `HistoryDraft`).
+        const pcm = this.#pendingPcm;
+        this.#pendingPcm = null;
+        const id = randomUUID();
+        const audioRelPath =
+          pcm !== null ? (history.archiveAudio?.(id, pcm) ?? undefined) : undefined;
+        if (effect.entry.text.length === 0 && audioRelPath === undefined) return;
+        const durationSec =
+          effect.entry.durationSec ??
+          (pcm !== null ? Math.round((pcm.byteLength / BYTES_PER_SECOND) * 10) / 10 : null);
         const entry = {
           ...effect.entry,
-          id: randomUUID(),
+          id,
           at: new Date(this.#env.now()).toISOString(),
           language: this.#detectedLanguage ?? this.#wireLanguage ?? 'unknown',
+          durationSec,
+          ...(audioRelPath === undefined ? {} : { audioRelPath }),
         };
         void history.append(entry).catch((cause: unknown) => {
           this.#log.error('failed to append history', { err: cause });

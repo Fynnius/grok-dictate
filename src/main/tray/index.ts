@@ -27,6 +27,7 @@ import {
   trayIconFor,
   trayStatusLabel,
   type TrayAction,
+  type TrayHistoryRow,
   type TrayMenuItem,
 } from './menu.js';
 
@@ -67,6 +68,11 @@ export interface TrayDeps {
   readonly getSignedIn: () => boolean;
   readonly onAuthChange: (listener: () => void) => () => void;
   readonly openSignIn: () => Promise<unknown>;
+  /**
+   * The HUD/History copy path. A History-submenu click is an explicit copy;
+   * this must reach `orchestrator.copyToClipboard`, not Electron's clipboard.
+   */
+  readonly copyText: (text: string) => void;
 }
 
 export function createTray(deps: TrayDeps): TrayPort {
@@ -85,7 +91,7 @@ export function createTray(deps: TrayDeps): TrayPort {
   let tray: Tray | null = null;
   let state: SessionState = 'idle';
   let secureInput = false;
-  let historyCount = 0;
+  let recentHistory: TrayHistoryRow[] = [];
   // Optimistic until the helper says otherwise, so a healthy launch never
   // flashes a warning. `HelperClient` replays its last `permissions` report to
   // a late subscriber, so this is corrected within a second of start-up.
@@ -96,9 +102,12 @@ export function createTray(deps: TrayDeps): TrayPort {
       case 'set-language':
         void config.set({ ...config.get(), languageMode: action.mode });
         return;
-      case 'set-audio-cues':
-        void config.set({ ...config.get(), audioCues: action.enabled });
+      case 'copy-history': {
+        const row = recentHistory.find((entry) => entry.id === action.id);
+        if (row === undefined) return;
+        deps.copyText(row.text);
         return;
+      }
       case 'open':
         void deps.openPanel(action.panel).catch((cause: unknown) => {
           log.error('could not open a panel', { panel: action.panel, err: cause });
@@ -151,7 +160,7 @@ export function createTray(deps: TrayDeps): TrayPort {
       state,
       secureInput,
       config: config.get(),
-      historyCount,
+      recentHistory,
       includePreview,
       hotkeyActive: permissions.hotkeyActive,
       accessibility: permissions.accessibility,
@@ -197,10 +206,19 @@ export function createTray(deps: TrayDeps): TrayPort {
       render();
     });
 
-    historyCount = await history.count();
-    history.onChange((count) => {
-      historyCount = count;
-      render();
+    const refreshRecent = async (): Promise<void> => {
+      // Pull extra so empty cancelled rows do not eat the five copyable slots.
+      const rows = await history.list(null, 20);
+      recentHistory = rows
+        .filter((row) => row.text.trim().length > 0)
+        .slice(0, 5)
+        .map((row) => ({ id: row.id, text: row.text, at: row.at }));
+    };
+    await refreshRecent();
+    history.onChange(() => {
+      void refreshRecent().then(() => {
+        render();
+      });
     });
     config.onChange(() => {
       render();
@@ -211,13 +229,13 @@ export function createTray(deps: TrayDeps): TrayPort {
     // the log — see the header of `menu-bar-managers.ts`.
     warnAboutMenuBarManagers(log);
     log.info('tray ready', {
-      // Proof the clipboard is unreachable from the menu.
+      // copy-history is the only clipboard action; the text is resolved at click.
       actions: flattenActions(
         buildTrayMenu({
           state,
           secureInput,
           config: config.get(),
-          historyCount,
+          recentHistory,
           includePreview,
           hotkeyActive: permissions.hotkeyActive,
           accessibility: permissions.accessibility,

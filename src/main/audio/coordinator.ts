@@ -228,26 +228,12 @@ export class CaptureCoordinator implements AudioSourcePort {
   }
 
   /**
-   * Discard the session and free its audio, per the port contract.
+   * Discard the session and free its audio.
    *
-   * Phase 3 moved the bytes to a single-slot archive instead of freeing them,
-   * on the grounds that  lists "retry-after-network-failure"
-   * as one of the three reasons the buffer exists, and that the state machine
-   * reaches this method by two routes that are indistinguishable from here:
-   * `CANCEL` (Esc — the user meant it) and `SESSION_ERROR` (the network
-   * dropped — the user did not). It then recorded that nothing consumed the
-   * archive and asked Phase 5 to wire it up or delete it rather than leave it
-   * as decoration (docs/phase-3-report.md §5.3).
-   *
-   * **Deleted.** Re-submitting the PCM needs a second turn whose transcript has
-   * to be reconciled with the text the first turn already committed, and that
-   * design does not exist. Meanwhile the machine now keeps the *text* through a
-   * mid-utterance failure (`contracts/state-machine.md` §10), which covers the
-   * realistic recovery — the user gets what was heard and re-dictates the rest.
-   * Against a hypothetical feature, an Esc-cancelled utterance sitting in RAM
-   * until the next cancel overwrites it is a real cost:  point
-   * about this product accumulating everything the user says applies to memory
-   * as much as to the history file.
+   * Callers that still need the bytes (Esc / session-error archive into a
+   * history sidecar) must `getUtteranceBuffer` and write the wav **before**
+   * this. After `cancel`, the buffer is gone — that is the RAM bound, not a
+   * discarded take. The orchestrator archives first, then cancels.
    */
   cancel(sessionId: string): void {
     const session = this.#active;
@@ -256,9 +242,8 @@ export class CaptureCoordinator implements AudioSourcePort {
         session.draining = true;
         this.#transport.send({ type: 'capture-stop', sessionId });
       }
-      // Closed at once rather than drained. Esc throws the audio away, so there
-      // is nothing for a tail chunk to be kept for, and holding the session
-      // open would delay teardown by the drain timeout for no gain.
+      // Closed at once rather than drained: the wav (if any) has already been
+      // snapped, so there is nothing for a tail chunk to be kept for.
       this.#endDrain(session, 'cancelled');
     }
 

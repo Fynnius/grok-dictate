@@ -17,12 +17,12 @@ describe('panelTarget', () => {
   });
 
   it('loads from disk in a packaged build, with the hash passed separately', () => {
-    const target = panelTarget('scratchpad', undefined, '/app/out/renderer');
+    const target = panelTarget('stats', undefined, '/app/out/renderer');
     // Electron's loadFile takes `hash` as an option and adds the `#` itself.
     expect(target).toEqual({
       kind: 'file',
       path: '/app/out/renderer/settings/index.html',
-      hash: '/scratchpad',
+      hash: '/stats',
     });
   });
 
@@ -41,7 +41,7 @@ describe('panelTarget', () => {
 describe('panelFromHash', () => {
   it('reads the route the window was opened for', () => {
     expect(panelFromHash('#/history')).toBe('history');
-    expect(panelFromHash('#/scratchpad')).toBe('scratchpad');
+    expect(panelFromHash('#/stats')).toBe('stats');
     expect(panelFromHash('#/settings')).toBe('settings');
   });
 
@@ -53,6 +53,7 @@ describe('panelFromHash', () => {
 
   it('falls back to Settings rather than rendering nothing', () => {
     expect(panelFromHash('#/nonsense')).toBe('settings');
+    expect(panelFromHash('#/scratchpad')).toBe('settings');
     expect(panelFromHash('#/../../etc/passwd')).toBe('settings');
   });
 
@@ -78,6 +79,7 @@ describe('panelWindowSpec', () => {
   });
 
   it('gives History the most room, since it is the searchable surface', () => {
-    expect(panelWindowSpec('history').width).toBeGreaterThan(panelWindowSpec('scratchpad').width);
+    expect(panelWindowSpec('history').width).toBeGreaterThan(panelWindowSpec('settings').width);
+    expect(panelWindowSpec('history').width).toBeGreaterThan(panelWindowSpec('stats').width);
   });
 });

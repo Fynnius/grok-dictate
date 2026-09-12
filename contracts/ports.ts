@@ -243,7 +243,12 @@ export interface AudioSourcePort {
    * still delivering `onChunk` — until `onDrained` fires. See `onDrained`.
    */
   stop(sessionId: string): void;
-  /** Discard everything, including the buffer (Esc — ). */
+  /**
+   * End the session and free its RAM. Does not mean the bytes are lost to
+   * the product: callers that still need them (Esc / session-error archive)
+   * must `getUtteranceBuffer` and write the wav **before** this. After
+   * `cancel`, the buffer is gone.
+   */
   cancel(sessionId: string): void;
   /**
    * The full utterance PCM. Load-bearing, not an
@@ -341,6 +346,13 @@ export interface HistoryPort {
    *  is the minimum mitigation. */
   purge(): Promise<void>;
   count(): Promise<number>;
+  /**
+   * Write utterance PCM as `recordings/<id>.wav` and return that
+   * userData-relative path, or null if the bytes were empty or could not be
+   * stored. Optional so in-memory test doubles can skip it — a cancelled
+   * take with no archived audio is then not stored either.
+   */
+  archiveAudio?(id: string, pcm: Uint8Array): string | null;
 }
 
 export interface ConfigPort {

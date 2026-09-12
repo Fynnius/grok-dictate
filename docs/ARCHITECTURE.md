@@ -43,8 +43,13 @@ wires the real implementations. Tests wire mocks from `mocks/`.
 2. `XAI_API_KEY`
 3. `~/.grok/auth.json` from the Grok CLI
 
-There is no token-refresh path. Refreshing a Grok CLI token from a second
-client can rotate it out from under the CLI.
+grok.com is a separate session (`persist:grok-com`) used only by STT 2 Fast.
+
+There is no token-refresh path in this app. Refreshing a Grok CLI token from a
+second client can rotate it out from under the CLI. To keep a CLI login alive,
+the app runs `grok models` and lets the CLI rewrite `auth.json` itself
+(`src/main/auth/renew.ts`). Settings → Account can also open Terminal.app for
+`grok login`.
 
 ## Insertion
 

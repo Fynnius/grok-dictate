@@ -11,9 +11,8 @@
  *
  * - **Added `insert-text`.** `retry-insert` re-inserts the app's own
  *   `lastTranscript` and nothing else, so history could only offer *Re-insert*
- *   on the row that happened to be the last one, and the Scratchpad could not
- *   insert an edited transcript at all (docs/phase-4-report.md §5.1). Both
- *   features were shipped stunted and labelled as such.
+ *   on the row that happened to be the last one (docs/phase-4-report.md §5.1).
+ *   That feature was shipped stunted and labelled as such.
  * - **Added `dismiss-hud`.** There was no "hide the pill" message, so the HUD's
  *   *Dismiss* button sent `cancel` and the main process hid the pill on any
  *   `cancel` the machine ignored (§5.2). That conflated "stop showing me this"
@@ -42,6 +41,13 @@
  * - `open-window` accepts `'grok-com-signin'`.
  * - `grok-com-updated` / `get-grok-com-status` / `grok-com-sign-out` carry
  *   `signedIn` only. Cookies never cross this boundary.
+ *
+ * ## Grok CLI login (Settings → Account)
+ *
+ * Independent of `AuthStatus`, which reports only the *active* dictation
+ * bearer. `get-cli-status` / `start-grok-cli-login` / `cancel-grok-cli-login`
+ * / `renew-cli-login` never include a token. Sign-in opens Terminal.app for
+ * `grok login`; this app does not embed that TUI or write `auth.json`.
  */
 
 import type { InsertTier } from './helper-protocol.js';
@@ -173,6 +179,27 @@ export interface HistoryEntry {
    * assurance every row before it carried.
    */
   readonly unconfirmedTail?: boolean;
+  /**
+   * Sidecar recording, relative to the app userData directory
+   * (`recordings/<id>.wav`). Never an absolute path.
+   *
+   * Optional, and old rows must keep loading — same rule as `verified`.
+   * Absent (or cleared after the one-day audio sweep) means Retry is not
+   * offered. The transcript row stays; audio is a sidecar, not the history.
+   */
+  readonly audioRelPath?: string;
+  /**
+   * Esc ended this take before transcription finished. Optional for the same
+   * reason as `verified`: absent means the row predates the field, or the
+   * take was not cancelled.
+   */
+  readonly cancelled?: boolean;
+  /**
+   * Why transcription failed, when the row exists so the user can Retry.
+   * Optional; absent on successful rows and on everything written before
+   * this field existed.
+   */
+  readonly transcribeError?: string;
 }
 
 /* ------------------------------------------------------------------ *
@@ -229,10 +256,9 @@ export type RendererToMain =
    *  is now pointed. */
   | { type: 'retry-insert' }
   /**
-   * Run the insertion ladder against arbitrary text — an older history row, or
-   * a transcript the user edited in the Scratchpad. Added in Phase 5; see the
-   * header. Like `retry-insert` it targets wherever the user is pointing now,
-   * so the frontmost check is deliberately not applied.
+   * Run the insertion ladder against arbitrary text — an older history row.
+   * Added in Phase 5; see the header. Like `retry-insert` it targets wherever
+   * the user is pointing now, so the frontmost check is deliberately not applied.
    */
   | { type: 'insert-text'; text: string }
   /**
@@ -256,7 +282,7 @@ export type RendererToMain =
   | { type: 'set-language-mode'; mode: LanguageMode }
   | {
       type: 'open-window';
-      window: 'settings' | 'history' | 'scratchpad' | 'signin' | 'stats' | 'grok-com-signin';
+      window: 'settings' | 'history' | 'signin' | 'stats' | 'grok-com-signin';
     }
   /** PCM16 mono @16 kHz, 100 ms / 3200-byte chunks. */
   | { type: 'capture-chunk'; sessionId: string; pcm: ArrayBuffer; sentAtMs?: number }
@@ -337,6 +363,13 @@ export type InvokeRequest =
    */
   | { type: 'get-stats' }
   | { type: 'purge-history' }
+  /**
+   * Re-run STT on a history row that still has audio. Updates that row's
+   * `text` and does **not** insert — History is a focused window, so a
+   * ladder insert would land in Grok Dictate itself. Copy stays the paste
+   * action from this window.
+   */
+  | { type: 'retry-transcription'; id: string }
   | { type: 'get-snapshot' }
   | { type: 'get-auth-status' }
   | { type: 'set-api-key'; key: string }
@@ -344,6 +377,10 @@ export type InvokeRequest =
   | { type: 'get-grok-com-status' }
   | { type: 'grok-com-sign-out' }
   | { type: 'grok-com-passkey-signin' }
+  | { type: 'get-cli-status' }
+  | { type: 'start-grok-cli-login' }
+  | { type: 'cancel-grok-cli-login' }
+  | { type: 'renew-cli-login' }
   | { type: 'open-external'; url: string };
 
 export interface AppSnapshot {
@@ -362,6 +399,7 @@ export type InvokeResponse =
   | { type: 'snapshot'; snapshot: AppSnapshot }
   | { type: 'auth-status'; status: AuthStatus }
   | { type: 'grok-com-status'; signedIn: boolean }
+  | { type: 'cli-status'; status: CliAuthStatus; binaryFound: boolean }
   | { type: 'ok' }
   | { type: 'error'; error: AppError };
 
@@ -382,6 +420,15 @@ export type AuthStatus =
   | { state: 'signed-in'; source: AuthSource; expiresAt: string | null }
   | { state: 'signed-out' }
   | { state: 'expired'; source: 'grok-cli'; expiresAt: string };
+
+/**
+ * The Grok CLI file on its own, regardless of whether dictation is currently
+ * using an API key. `expiresAt` is ISO-8601. The token is never included.
+ */
+export type CliAuthStatus =
+  | { state: 'signed-in'; expiresAt: string }
+  | { state: 'expired'; expiresAt: string }
+  | { state: 'signed-out' };
 
 /**
  * The complete API the preload script exposes on `window.grokDictate`. Phase 3

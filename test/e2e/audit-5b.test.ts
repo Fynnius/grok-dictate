@@ -84,8 +84,8 @@ describe('§5b — the pasteboard is written deliberately and never read', () =>
    * is still the only user-initiated write and still reaches the pasteboard by
    * exactly one path:
    *
-   *   a click in the HUD / History / Scratchpad
-   *     → `{type:'copy'}` on RENDERER_TO_MAIN_CHANNEL
+   *   a click in the HUD / History, or a tray History-submenu row
+   *     → `{type:'copy'}` on RENDERER_TO_MAIN_CHANNEL, or `copyPlainText`
    *     → `orchestrator.copyToClipboard`
    *     → `NativeHelperPort.copy`
    *     → `{"type":"copy"}` to the helper
@@ -106,7 +106,7 @@ describe('§5b — the pasteboard is written deliberately and never read', () =>
     expect(callers.map(rel)).toEqual(['src/main/state/orchestrator.ts']);
   });
 
-  it('reaches the orchestrator from exactly one place, the `copy` IPC message', () => {
+  it('reaches the orchestrator from exactly one place, `copyPlainText`', () => {
     const callers = sourceFiles().filter((file) => /copyToClipboard\(/.test(code(file)));
     // The definition and the single call site.
     expect(callers.map(rel).sort()).toEqual([
@@ -117,8 +117,10 @@ describe('§5b — the pasteboard is written deliberately and never read', () =>
     const root = code(resolve(ROOT, 'src/main/index.ts'));
     const matches = root.match(/copyToClipboard\(/g) ?? [];
     expect(matches).toHaveLength(1);
-    // …and it sits under `case 'copy':`, not under any other message.
-    expect(root).toMatch(/case 'copy':[\s\S]{0,200}?copyToClipboard\(message\.text\)/);
+    // Both sanctioned entry points — the `copy` IPC message and a tray
+    // History-submenu click — share this one function.
+    expect(root).toMatch(/copyPlainText = \(text\) => \{[\s\S]{0,80}?copyToClipboard\(text\)/);
+    expect(root).toMatch(/case 'copy':[\s\S]{0,250}?copyPlainText\(message\.text\)/);
   });
 
   it('emits no clipboard effect from the state machine at all', () => {
@@ -134,7 +136,7 @@ describe('§5b — the pasteboard is written deliberately and never read', () =>
   it('sends the `copy` helper command from exactly one place', () => {
     // The *helper command* — `{v:1,type:'copy'}` on the wire — as opposed to
     // the `{type:'copy'}` IPC message the renderers send when the user clicks,
-    // which is the sanctioned entry point and appears in three views.
+    // which is the sanctioned entry point and appears in the HUD and History.
     const senders = sourceFiles().filter((file) => /v: 1,\s*type: 'copy'/.test(code(file)));
     expect(senders.map(rel)).toEqual(['src/main/native/helper-client.ts']);
   });
@@ -186,12 +188,16 @@ describe('§5b — the pasteboard is written deliberately and never read', () =>
     expect(offenders).toEqual([]);
   });
 
-  it('offers no clipboard action anywhere in the tray menu', () => {
+  it("the tray menu's only clipboard action is copy-history", () => {
     // The menu is built as data precisely so this is assertable
     // (`src/main/tray/menu.test.ts` proves it over the built menu); here we
     // pin that no *new* action kind can quietly become a clipboard write.
+    // `copy-history` is the sanctioned History-submenu click; the text is
+    // resolved at click time, not stored on the action.
     const menu = code(resolve(ROOT, 'src/main/tray/menu.ts'));
-    expect(menu).not.toMatch(/copy/i);
+    expect(menu).toMatch(/kind: 'copy-history'/);
+    expect(menu).not.toMatch(/clipboard|pasteboard/i);
+    expect(menu.replaceAll('copy-history', '')).not.toMatch(/copy/i);
   });
 });
 
@@ -322,9 +328,11 @@ describe('§5b — the bearer token cannot leave the auth module except as a hea
     const fields = [...entry.matchAll(/^\s*readonly (\w+)\??/gm)].map((m) => m[1]);
     // `verified` and `unconfirmedTail` were added by the 2026-08-09 incident,
     // and both are booleans about what happened to the text rather than new
-    // places to put one. The property this list defends is unchanged: a
-    // history row holds a transcript, timing, the target app and the outcome —
-    // and nothing with anywhere to hide a credential.
+    // places to put one. `audioRelPath` is a userData-relative sidecar path,
+    // `cancelled` / `transcribeError` mark a take that can be retried — still
+    // not a place to hide a credential. The property this list defends is
+    // unchanged: a history row holds a transcript, timing, the target app and
+    // the outcome — and nothing with anywhere to hide a credential.
     expect(fields).toEqual([
       'id',
       'at',
@@ -337,6 +345,9 @@ describe('§5b — the bearer token cannot leave the auth module except as a hea
       'inserted',
       'verified',
       'unconfirmedTail',
+      'audioRelPath',
+      'cancelled',
+      'transcribeError',
     ]);
   });
 

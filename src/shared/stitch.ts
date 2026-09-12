@@ -21,6 +21,8 @@
  * | `at the end of the day, you You have like…`  | the seam word transcribed twice|
  * | `I-I see only in my In my Stats terminal`    | same, two words                |
  * | `explain to me Thanks.`                      | trailing silence hallucinated  |
+ * | `…anymore. , the run from before…`           | pause punctuated as `.` and `,`|
+ * | `…like, normal? , and I want you…`           | same, after a question         |
  *
  * The fixes below are the ones that are **decidable without a language model**.
  * Each is a separate, individually testable rule, and each errs towards leaving
@@ -48,6 +50,16 @@
  * 3. **Undo the sentence-start capital** when the previous segment did not end a
  *    sentence — but only for closed-class words (`and`, `do`, `in`, `because`),
  *    never for anything that could be a name or an acronym.
+ * 4. **Drop the extra comma after a sentence end.** `. ,` / `? ,` / `! ,` is
+ *    never valid in English or German. The recogniser emits it for a pause —
+ *    both inside one `speech_final` (measured: `finals=1` on a 17 s turn that
+ *    still contained `. ,`) and at a seam (segment A ends with `.`, B starts
+ *    with `,`). Keep the sentence-end, drop the comma, and capitalise a
+ *    closed-class word that is now at a sentence start. `e.g.,` and `"done.",`
+ *    have no space between the period and the comma and are left alone. The
+ *    same pass pulls a space off punctuation that hugs the word before it
+ *    (`please , quickly`, `now . All`), which `joinSeam` already did at a
+ *    seam and the recogniser also emits inside one segment.
  *
  * Everything here is pure, synchronous and dependency-free so that the whole of
  * it is a unit test rather than something you need a microphone to check.
@@ -228,7 +240,7 @@ export function stitchSegments(segments: readonly string[], repairSeams = true):
   if (parts.length === 0) return '';
   if (!repairSeams) return parts.join(' ').trim();
 
-  const kept = dropEdgeFillers(parts);
+  const kept = dropEdgeFillers(parts.map(tidyPunctuation));
   let out = kept[0] ?? '';
   for (let i = 1; i < kept.length; i++) {
     out = joinSeam(out, kept[i] ?? '');
@@ -268,12 +280,19 @@ function isFillerSegment(segment: string): boolean {
 }
 
 /* ------------------------------------------------------------------ *
- * Rules 2 and 3 — one seam
+ * Rules 2, 3 and 4 — one seam
  * ------------------------------------------------------------------ */
 
 function joinSeam(prev: string, next: string): string {
   const prevWords = splitWords(prev);
   let nextWords = splitWords(next);
+
+  // Rule 4 at a seam. Strip the leading comma *before* overlap, so
+  // `"the."` + `", the next"` can still de-duplicate on `the`.
+  if (/[.?!]$/u.test(prev)) {
+    nextWords = stripLeadingComma(nextWords);
+    if (nextWords.length === 0) return prev;
+  }
 
   // Rule 2. The overlap is dropped from the *incoming* segment rather than the
   // settled one: the text already accumulated carries punctuation that has
@@ -325,6 +344,39 @@ function overlapLength(prevWords: readonly string[], nextWords: readonly string[
 
 function isContinuationWord(word: string): boolean {
   return CONTINUATION_WORDS.has(normaliseWord(word));
+}
+
+/**
+ * A comma that is the first token, or glued to it (`",and"`).
+ *
+ * Only called when the previous segment already ended a sentence, so this is
+ * dropping the illegal half of `. ,` / `? ,`, not a real list comma.
+ */
+function stripLeadingComma(words: readonly string[]): string[] {
+  if (words.length === 0) return [];
+  const first = words[0] ?? '';
+  if (!first.startsWith(',')) return [...words];
+  const rest = first.replace(/^,+/u, '').trim();
+  return rest.length > 0 ? [rest, ...words.slice(1)] : words.slice(1);
+}
+
+/**
+ * Punctuation the recogniser gets wrong *inside* one `speech_final`.
+ *
+ * `. ,` with a space is the measured artefact; `e.g.,` and `"done.",` have
+ * no space and must not be touched. Hugging spaces onto `,.;:!?` is the
+ * intra-segment half of `HUGS_PREVIOUS`.
+ */
+function tidyPunctuation(text: string): string {
+  const withoutIllegalComma = text.replace(
+    /([.?!])\s+,(\s*)(\S*)/gu,
+    (_all, end: string, space: string, word: string) => {
+      if (word.length === 0) return end;
+      const next = isContinuationWord(word) ? capitalise(word) : word;
+      return `${end}${space.length > 0 ? space : ' '}${next}`;
+    },
+  );
+  return withoutIllegalComma.replace(/ +([,.;:!?)\]}»…])/gu, '$1');
 }
 
 /**

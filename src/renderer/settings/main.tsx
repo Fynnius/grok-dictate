@@ -1,5 +1,5 @@
 /**
- * OWNER: **Phase 4**. The three panel windows, in one renderer entry.
+ * OWNER: **Phase 4**. The panel windows, in one renderer entry.
  *
  * Which view renders is decided by the URL hash, which `src/main/ui/panels.ts`
  * sets when it opens the window. See `panel-target.ts` for why they share an
@@ -9,7 +9,6 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { HistoryView } from './HistoryView.js';
-import { ScratchpadView } from './ScratchpadView.js';
 import { SettingsView } from './SettingsView.js';
 import { StatsView } from './StatsView.js';
 import './panels.css';
@@ -24,8 +23,6 @@ function viewFromHash(hash: string): React.JSX.Element {
   switch (hash.replace(/^#\/?/, '')) {
     case 'history':
       return <HistoryView />;
-    case 'scratchpad':
-      return <ScratchpadView />;
     case 'stats':
       return <StatsView />;
     default:

@@ -9,7 +9,7 @@ function statusCopy(status: AuthStatus): { kind: 'ok' | 'warn' | 'idle'; text: s
   if (status.state === 'expired') {
     return {
       kind: 'warn',
-      text: 'Your Grok CLI login has expired. Paste an API key, or run `grok` in a terminal.',
+      text: 'Your Grok CLI login has expired. Paste an API key here, or sign in under Settings → Account.',
     };
   }
   if (status.state === 'signed-out') return { kind: 'idle', text: '' };
@@ -58,7 +58,7 @@ export function SignInView(): React.JSX.Element {
   };
 
   const copy = status === null ? null : statusCopy(status);
-  const alreadyIn = status?.state === 'signed-in';
+  const alreadyIn = status?.state === 'signed-in' && status.source === 'api-key';
 
   return (
     <main className="panel signin">
@@ -67,8 +67,8 @@ export function SignInView(): React.JSX.Element {
       </header>
       <div className="panel-body">
         <p className="signin-lead">
-          Grok Dictate sends audio to xAI&apos;s streaming speech-to-text API. Paste an API key from
-          your xAI console — or use an existing Grok CLI login.
+          This window stores an xAI API key. Paste one from your xAI console. grok.com and the Grok
+          CLI are the other two sign-in methods — they live in Settings → Account.
         </p>
 
         {copy !== null && copy.kind !== 'idle' ? (
@@ -117,11 +117,12 @@ export function SignInView(): React.JSX.Element {
 
         <div className="alt">
           <p>
-            Already signed in to the Grok CLI? Grok Dictate reads <code>~/.grok/auth.json</code> and
-            will not ask again.
+            The key is stored in the macOS Keychain via Electron safeStorage. It is never logged.
           </p>
           <p>
-            The key is stored in the macOS Keychain via Electron safeStorage. It is never logged.{' '}
+            Already using the Grok CLI? Settings → Account can run <code>grok login</code>, and Grok
+            Dictate will read <code>~/.grok/auth.json</code>. STT 2 Fast needs a grok.com login,
+            also under Account.{' '}
             <a href={XAI_STT_DOCS_URL} onClick={(event) => openConsole(event, XAI_STT_DOCS_URL)}>
               Speech-to-text docs
             </a>

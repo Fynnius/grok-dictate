@@ -9,17 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **In-app grok.com sign-in** (Settings → Dictation → grok.com). STT 2 Fast talks to grok.com's website STT socket using a session that lives in its own Electron partition (`persist:grok-com`), not the system browser's cookies and not the xAI API key. Signing out in Settings clears that partition only.
+- **Settings → Account** is three independent logins at the top of the pane: xAI API key, grok.com, and Grok CLI. Each row shows its own signed-in / expired / signed-out state. **Sign in with Grok CLI** opens Terminal.app and runs `grok login`, then watches `~/.grok/auth.json` until it is usable. It never writes that file, so there is no CLI Sign out. **Keep the Grok CLI login signed in** moved here from General.
+- **History submenu** in the menu bar: the last five transcripts, click to copy, plus Open History…. Same shape as Language.
+- **Retry a recording from History.** Esc and session errors now keep the audio (and a history row) instead of throwing it away. History offers Retry while that wav is still on disk. Retry transcribes in place and does not insert — Copy is still the paste action from that window.
+- **In-app grok.com sign-in** (Settings → Account → grok.com). STT 2 Fast talks to grok.com's website STT socket using a session that lives in its own Electron partition (`persist:grok-com`), not the system browser's cookies and not the xAI API key. Signing out in Settings clears that partition only.
 - **Passkeys (Chrome)** for that grok.com session. Electron cannot show iCloud Keychain passkeys (it is not Safari, and Apple Associated Domains cannot be claimed for grok.com). The button opens Chrome/Edge/Brave, where those passkeys work, then copies only grok.com / x.ai cookies back. The in-app window still works for a password sign-in.
 
 ### Changed
 
+- **Transcripts stay until you delete them.** The old days-spinner is gone. Audio sidecars expire after one day, and Retry disappears with them. Stats are over all history on disk.
+- Settings groups are one topic each. grok.com is no longer mixed into Dictation.
 - **Microphone processing is off by default.** Chromium echo cancellation, noise suppression and auto-gain were always requested, which is what a phone call wants and not what a recogniser wants. The Grok CLI captures raw, and this app mutes other audio while you talk, so there is usually nothing to cancel. Settings → Dictation → Microphone processing turns the three flags back on together. Native capture ignores the setting — it is already raw.
 - **Dictation captures through a native Core Audio process** (`grok-dictate-capture`) instead of Chromium `getUserMedia`, when that binary is present. Same 16 kHz mono PCM16, same 100 ms chunks, microphone still opens only when you press. The hidden capture window is created only as a fallback if the binary is missing.
 - **Settings → Dictation → Speech model.** _Standard_ (the default) still uses the xAI API with the stored API key / Grok CLI login. _STT 2 Fast_ is `grok-stt-2-fast`, the model grok.com composer dictate uses; it needs the grok.com sign-in above, not the public `api.x.ai` socket.
 
+### Removed
+
+- **Scratchpad.** Menu, HUD button, window, and hash route.
+- **Audio cues** from the menu bar. The setting is still in Settings → General.
+
 ### Fixed
 
+- **Dictation no longer inserts `. ,` or `? ,`.** A pause is punctuated by the recogniser as both a sentence end and a comma — inside one `speech_final`, not only at a segment join. Seam repair keeps the sentence-end, drops the comma, and capitalises a closed-class word that follows. Off with **Settings → Dictation → Repair segment joins**, like the other stitch rules.
+- The Account row no longer says Sign in when you are already signed in via the Grok CLI.
 - **The first word of a hold is no longer cut off waiting for the microphone.** Every Fn press used to construct a new `AVAudioEngine`, `prepare()` it, and `stop()` it at release — and `stop()` throws away the prepare, so the next press paid a cold HAL open (a few hundred milliseconds of speech that never became a sample). The graph is now prepared at launch and **paused** between holds; the orange indicator still only lights while hardware is running. The start cue waits until the device is actually open, so it means "we are listening" rather than "we saw the key".
 - **The capture process no longer aborts on the first hold.** `AVAudioEngine.prepare()` was called before the input node existed, which raises an `NSException` Swift cannot catch (`inputNode != nullptr || outputNode != nullptr`). The node is created first, and those exceptions are caught so a graph error is a recoverable HUD message rather than a dead process.
 

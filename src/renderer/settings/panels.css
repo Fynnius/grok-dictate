@@ -484,6 +484,11 @@ button.icon:focus-visible {
   user-select: text;
 }
 
+.row-text.placeholder {
+  color: var(--secondary);
+  font-style: italic;
+}
+
 .row-side {
   display: flex;
   flex-direction: column;
@@ -525,28 +530,11 @@ button.icon:focus-visible {
   color: var(--ok);
 }
 
-/* ------------------------------------------------------------- scratchpad -- */
-
-/* No visible chrome: the window is the text (braindump §11.1.7). The window
-   frame already signals focus, so the textarea carries no border and no ring. */
-.pad {
-  width: 100%;
-  height: 100%;
-  resize: none;
-  border: none;
-  background: transparent;
-  padding: 2px 0;
-  line-height: 1.6;
-}
-
-.pad:focus-visible {
-  outline: none;
-  border: none;
-  box-shadow: none;
-}
-
-.scratchpad .panel-body {
-  display: flex;
+.rows .row-retry {
+  align-self: center;
+  flex: none;
+  font-size: 11px;
+  padding: 2px 8px;
 }
 
 /* --------------------------------------------------------------- settings -- */

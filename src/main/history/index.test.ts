@@ -5,6 +5,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -12,7 +13,14 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { HistoryEntry } from '@contracts/events.js';
 import { addLogSink, clearLogSinks, createLogger, type LogRecord } from '@shared/logger.js';
-import { createHistoryStore, historyJournalPath, historyPath } from './index.js';
+import { parseWav } from '@shared/wav.js';
+import {
+  AUDIO_RETENTION_MS,
+  createHistoryStore,
+  historyJournalPath,
+  historyPath,
+  recordingsDir,
+} from './index.js';
 
 const log = createLogger('test');
 
@@ -219,6 +227,183 @@ describe('createHistoryStore', () => {
       expect((await createHistoryStore(dir, log).list(null, 10)).map((e) => e.id)).toEqual([
         'good',
       ]);
+    });
+
+    it('loads rows written before audioRelPath, cancelled and transcribeError existed', async () => {
+      const old = {
+        id: 'pre-audio',
+        at: new Date('2026-08-01T09:00:00.000Z').toISOString(),
+        text: 'no sidecar fields',
+        durationSec: 1,
+        language: 'en',
+        frontmostBundleId: null,
+        frontmostName: null,
+        tier: 'ax',
+        inserted: true,
+      };
+      writeFileSync(historyPath(dir), JSON.stringify([old]), 'utf8');
+      const store = createHistoryStore(dir, log);
+      expect(await store.count()).toBe(1);
+      const [row] = await store.list(null, 1);
+      expect(row?.audioRelPath).toBeUndefined();
+      expect(row?.cancelled).toBeUndefined();
+      expect(row?.transcribeError).toBeUndefined();
+      expect(records.some((r) => r.msg.includes('malformed'))).toBe(false);
+    });
+
+    it('keeps a row whose optional sidecar fields were written as null', async () => {
+      writeFileSync(
+        historyPath(dir),
+        JSON.stringify([
+          {
+            id: 'null-sidecars',
+            at: new Date('2026-08-01T09:00:00.000Z').toISOString(),
+            text: 'still a transcript',
+            durationSec: 1,
+            language: 'en',
+            frontmostBundleId: null,
+            frontmostName: null,
+            tier: 'ax',
+            inserted: true,
+            audioRelPath: null,
+            cancelled: null,
+            transcribeError: null,
+          },
+        ]),
+        'utf8',
+      );
+      const store = createHistoryStore(dir, log);
+      expect(await store.count()).toBe(1);
+      expect((await store.list(null, 1))[0]?.text).toBe('still a transcript');
+    });
+
+    it('round-trips audioRelPath, cancelled and transcribeError, and drops a wrong type', async () => {
+      const store = createHistoryStore(dir, log);
+      await store.append(
+        entry({
+          id: 'c',
+          cancelled: true,
+          audioRelPath: 'recordings/c.wav',
+          transcribeError: 'the socket died',
+        }),
+      );
+      const [row] = await createHistoryStore(dir, log).list(null, 1);
+      expect(row).toMatchObject({
+        id: 'c',
+        cancelled: true,
+        audioRelPath: 'recordings/c.wav',
+        transcribeError: 'the socket died',
+      });
+
+      writeFileSync(
+        historyPath(dir),
+        JSON.stringify([entry({ id: 'good' }), { ...entry({ id: 'bad' }), audioRelPath: 1 }]),
+        'utf8',
+      );
+      expect((await createHistoryStore(dir, log).list(null, 10)).map((e) => e.id)).toEqual([
+        'good',
+      ]);
+    });
+  });
+
+  describe('audio sidecars', () => {
+    const pcm = new Uint8Array(3200).fill(7);
+
+    it('writes a 16 kHz wav and reads it back', () => {
+      const store = createHistoryStore(dir, log);
+      const rel = store.archiveAudio('take-1', pcm);
+      expect(rel).toBe('recordings/take-1.wav');
+      const bytes = store.readAudio(rel ?? '');
+      expect(bytes).not.toBeNull();
+      const parsed = parseWav(bytes ?? Buffer.alloc(0));
+      expect(parsed.ok).toBe(true);
+      if (!parsed.ok) return;
+      expect(parsed.value.pcm.length).toBe(3200);
+    });
+
+    it('refuses an empty buffer and an unsafe id', () => {
+      const store = createHistoryStore(dir, log);
+      expect(store.archiveAudio('take-1', new Uint8Array(0))).toBeNull();
+      expect(store.archiveAudio('../escape', pcm)).toBeNull();
+      expect(store.readAudio('/tmp/nope.wav')).toBeNull();
+    });
+
+    it('deletes files older than one day and clears audioRelPath, keeping the row', async () => {
+      const now = Date.parse('2026-09-12T12:00:00.000Z');
+      const store = createHistoryStore(dir, log);
+      const rel = store.archiveAudio('old', pcm);
+      expect(rel).toBe('recordings/old.wav');
+      await store.append(
+        entry({
+          id: 'old',
+          at: new Date(now - AUDIO_RETENTION_MS - 1000).toISOString(),
+          audioRelPath: 'recordings/old.wav',
+        }),
+      );
+      expect(store.archiveAudio('fresh', pcm)).toBe('recordings/fresh.wav');
+      await store.append(
+        entry({
+          id: 'fresh',
+          at: new Date(now).toISOString(),
+          audioRelPath: 'recordings/fresh.wav',
+        }),
+      );
+
+      expect(await store.sweepAudio(now)).toBe(1);
+      const rows = await store.list(null, 10);
+      expect(rows.find((r) => r.id === 'old')?.audioRelPath).toBeUndefined();
+      expect(rows.find((r) => r.id === 'old')?.text).toBeTruthy();
+      expect(rows.find((r) => r.id === 'fresh')?.audioRelPath).toBe('recordings/fresh.wav');
+      expect(existsSync(join(recordingsDir(dir), 'old.wav'))).toBe(false);
+      expect(existsSync(join(recordingsDir(dir), 'fresh.wav'))).toBe(true);
+    });
+
+    it('clears audioRelPath when the file is already gone', async () => {
+      const store = createHistoryStore(dir, log);
+      await store.append(entry({ id: 'ghost', audioRelPath: 'recordings/ghost.wav' }));
+      expect(await store.sweepAudio()).toBe(0);
+      expect((await store.get('ghost'))?.audioRelPath).toBeUndefined();
+    });
+
+    it('deletes expired orphan wavs that no row points at', async () => {
+      const store = createHistoryStore(dir, log);
+      const rel = store.archiveAudio('orphan', pcm);
+      expect(rel).not.toBeNull();
+      const abs = join(recordingsDir(dir), 'orphan.wav');
+      const old = new Date(Date.now() - AUDIO_RETENTION_MS - 1000);
+      utimesSync(abs, old, old);
+      expect(await store.sweepAudio()).toBe(1);
+      expect(existsSync(abs)).toBe(false);
+    });
+
+    it('removes recordings on purge', async () => {
+      const store = createHistoryStore(dir, log);
+      store.archiveAudio('x', pcm);
+      await store.append(entry({ id: 'x', audioRelPath: 'recordings/x.wav' }));
+      await store.purge();
+      expect(existsSync(recordingsDir(dir))).toBe(false);
+    });
+
+    it('updates a row and can clear optional fields', async () => {
+      const store = createHistoryStore(dir, log);
+      await store.append(
+        entry({
+          id: 'u',
+          cancelled: true,
+          transcribeError: 'nope',
+          audioRelPath: 'recordings/u.wav',
+        }),
+      );
+      const next = await store.update('u', {
+        text: 'hello',
+        cancelled: null,
+        transcribeError: null,
+        audioRelPath: null,
+      });
+      expect(next).toMatchObject({ id: 'u', text: 'hello' });
+      expect(next?.cancelled).toBeUndefined();
+      expect(next?.transcribeError).toBeUndefined();
+      expect(next?.audioRelPath).toBeUndefined();
     });
   });
 

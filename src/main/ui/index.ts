@@ -64,12 +64,16 @@ export function createUiServices(deps: UiServiceDeps): UiServices {
       const { app, config, history, panels } = deps;
 
       syncLaunchAtLogin(app, config.get(), log);
-      void history.sweep(config.get().historyRetentionDays);
+      // Transcripts stay until the user deletes them. Audio sidecars expire
+      // after one day; rows lose Retry when the file goes.
+      void history.sweep(0);
+      void history.sweepAudio();
 
       unsubscribes.push(
         config.onChange((next) => {
           syncLaunchAtLogin(app, next, log);
-          void history.sweep(next.historyRetentionDays);
+          void history.sweep(0);
+          void history.sweepAudio();
           panels.broadcast({ type: 'config-updated', config: next });
         }),
         history.onChange((count) => {
@@ -78,7 +82,8 @@ export function createUiServices(deps: UiServiceDeps): UiServices {
       );
 
       sweepTimer = setInterval(() => {
-        void history.sweep(config.get().historyRetentionDays);
+        void history.sweep(0);
+        void history.sweepAudio();
       }, SWEEP_INTERVAL_MS);
       sweepTimer.unref?.();
     },

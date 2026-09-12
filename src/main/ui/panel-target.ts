@@ -1,14 +1,14 @@
 /**
  * OWNER: **Phase 4**. Where a panel window's HTML comes from.
  *
- * ## Why three windows share one renderer entry
+ * ## Why the panel windows share one renderer entry
  *
- * Settings, History and Scratchpad are three windows, but they load **one**
+ * Settings, History and Stats are separate windows, but they load **one**
  * Vite entry (`src/renderer/settings/`) and select a view from the URL hash.
  * The reason is boundary, not taste: the entry list lives in
  * `electron.vite.config.ts`, which Phase 1 owns and froze
  * (IMPLEMENTATION-PLAN.md §2), so Phase 4 cannot add `history` and
- * `scratchpad` entries of its own. Recorded as a cross-boundary request in
+ * `stats` entries of its own. Recorded as a cross-boundary request in
  * docs/phase-4-report.md — Phase 5 can split them with no change to the
  * renderer code, since each view is already a separate component.
  *
@@ -20,9 +20,9 @@
  * the result.
  */
 
-export type PanelName = 'settings' | 'history' | 'scratchpad' | 'stats';
+export type PanelName = 'settings' | 'history' | 'stats';
 
-export const PANEL_NAMES: readonly PanelName[] = ['settings', 'history', 'scratchpad', 'stats'];
+export const PANEL_NAMES: readonly PanelName[] = ['settings', 'history', 'stats'];
 
 /** The single renderer entry all three panels share. */
 export const PANEL_ENTRY = 'settings';
@@ -86,17 +86,6 @@ export function panelWindowSpec(panel: PanelName): PanelWindowSpec {
         minWidth: 520,
         minHeight: 360,
         title: 'Grok Dictate — History',
-      };
-    case 'scratchpad':
-      // : a *real focusable window* holding the last
-      // transcript, so the text can be selected and edited rather than only
-      // looked at. That is the whole difference from the HUD pill.
-      return {
-        width: 560,
-        height: 380,
-        minWidth: 360,
-        minHeight: 220,
-        title: 'Grok Dictate — Scratchpad',
       };
     case 'stats':
       return {

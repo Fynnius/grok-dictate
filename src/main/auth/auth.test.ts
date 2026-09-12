@@ -465,6 +465,75 @@ describe('DictateAuth', () => {
       await build({ renewer, cli: { path } }).renewIfExpiringSoon();
       expect(calls()).toBe(0);
     });
+
+    it('renewCliNow asks the CLI even when an API key is the active source', async () => {
+      write(authDocument({ expires_at: new Date(NOW - 1000).toISOString() }));
+      const { renewer, calls } = stubRenewer(() => {
+        write(authDocument({ expires_at: new Date(NOW + 3 * 60 * 60 * 1000).toISOString() }));
+      });
+      const auth = build({ renewer });
+      await auth.setApiKey('xai-a-perfectly-good-api-key');
+
+      const cli = await auth.renewCliNow();
+      expect(calls()).toBe(1);
+      expect(cli.state).toBe('signed-in');
+      const status = await auth.status();
+      expect(status.state).toBe('signed-in');
+      if (status.state !== 'signed-in') return;
+      expect(status.source).toBe('api-key');
+    });
+
+    it('renewCliNow still runs when auto-renew is off', async () => {
+      write(authDocument({ expires_at: new Date(NOW - 1000).toISOString() }));
+      const { renewer, calls } = stubRenewer(() => {
+        write(authDocument({ expires_at: new Date(NOW + 3 * 60 * 60 * 1000).toISOString() }));
+      });
+      const cli = await build({ renewer, autoRenew: () => false }).renewCliNow();
+      expect(calls()).toBe(1);
+      expect(cli.state).toBe('signed-in');
+    });
+  });
+
+  describe('cliStatus is independent of the active dictation source', () => {
+    it('reports a valid CLI file even when a stored API key is what dictation uses', async () => {
+      write(authDocument());
+      const auth = new DictateAuth(createLogger('test'), {
+        store: new CredentialStore(join(dir, 'credentials.json'), box(), createLogger('test')),
+        cli: { path, now: () => NOW },
+      });
+      await auth.setApiKey('xai-from-the-sign-in-window');
+      expect(await auth.status()).toEqual({
+        state: 'signed-in',
+        source: 'api-key',
+        expiresAt: null,
+      });
+      const cli = await auth.cliStatus();
+      expect(cli.state).toBe('signed-in');
+      if (cli.state !== 'signed-in') return;
+      expect(cli.expiresAt).toBe(new Date(NOW + 2 * 60 * 60 * 1000).toISOString());
+    });
+
+    it('reports expired when the CLI file is past it, even with an API key stored', async () => {
+      const expiry = new Date(NOW - 1000);
+      write(authDocument({ expires_at: expiry.toISOString() }));
+      const auth = new DictateAuth(createLogger('test'), {
+        store: new CredentialStore(join(dir, 'credentials.json'), box(), createLogger('test')),
+        cli: { path, now: () => NOW },
+      });
+      await auth.setApiKey('xai-from-the-sign-in-window');
+      expect(await auth.cliStatus()).toEqual({
+        state: 'expired',
+        expiresAt: expiry.toISOString(),
+      });
+    });
+
+    it('reports signed-out when there is no CLI file', async () => {
+      const auth = new DictateAuth(createLogger('test'), {
+        store: new CredentialStore(join(dir, 'credentials.json'), box(), createLogger('test')),
+        cli: { path: join(dir, 'missing.json'), now: () => NOW },
+      });
+      await expect(auth.cliStatus()).resolves.toEqual({ state: 'signed-out' });
+    });
   });
 });
 

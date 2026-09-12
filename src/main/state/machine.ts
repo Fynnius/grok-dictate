@@ -32,9 +32,9 @@ export type SessionEvent =
   | { type: 'TOGGLE'; ts: number }
   | { type: 'RETRY_INSERT' }
   /**
-   * Insert arbitrary text — an older history row, or a Scratchpad edit. Same
-   * shape as `RETRY_INSERT` but the text comes from the caller rather than from
-   * `lastTranscript`. Added in Phase 5; see `contracts/events.ts`.
+   * Insert arbitrary text — an older history row. Same shape as `RETRY_INSERT`
+   * but the text comes from the caller rather than from `lastTranscript`. Added
+   * in Phase 5; see `contracts/events.ts`.
    */
   | { type: 'INSERT_TEXT'; text: string }
   | { type: 'CANCEL' }
@@ -104,6 +104,12 @@ export type Effect =
   | { type: 'tray'; state: SessionState; secureInput: boolean }
   | { type: 'cue'; cue: AudioCue }
   | { type: 'history_append'; entry: HistoryDraft }
+  /**
+   * Snapshot the utterance PCM before `cancel_capture` frees it. The
+   * orchestrator writes the wav (if any) and attaches `audioRelPath` on the
+   * following `history_append`. Always emit this *before* `cancel_capture`.
+   */
+  | { type: 'archive_audio'; sessionId: string }
   | { type: 'log'; level: LogLevel; message: string; fields?: Record<string, unknown> }
   /**
    * Mute system output. Capture has already been asked to start; the
@@ -249,7 +255,7 @@ export const INITIAL_SNAPSHOT: Snapshot = { state: 'idle', ctx: INITIAL_CONTEXT 
  * The join is not a `' '` — one hold routinely produces several `speech_final`
  * segments (4.9 on average across 67 measured dictations), each re-transcribed
  * with no knowledge of the one before it, and the joins are where the text goes
- * wrong. `src/shared/stitch.ts` documents the three artefacts and what is done
+ * wrong. `src/shared/stitch.ts` documents the artefacts and what is done
  * about them.
  */
 export function committedText(ctx: SessionContext): string {
@@ -290,6 +296,50 @@ function salvage(ctx: SessionContext): { text: string; unconfirmedTail: boolean 
     text: stitchSegments([...ctx.committed, interim], ctx.repairSeams),
     unconfirmedTail: true,
   };
+}
+
+/** Archive (if this turn still has a session) then append. Order is load-bearing. */
+function appendHistory(ctx: SessionContext, entry: HistoryDraft): Effect[] {
+  const effects: Effect[] = [];
+  if (ctx.sessionId !== null) {
+    effects.push({ type: 'archive_audio', sessionId: ctx.sessionId });
+  }
+  effects.push({ type: 'history_append', entry });
+  return effects;
+}
+
+function cancelToIdle(ctx: SessionContext): Step {
+  const sessionId = ctx.sessionId ?? '';
+  const { text, unconfirmedTail } = salvage(ctx);
+  return step(
+    'idle',
+    {
+      ...ctx,
+      sessionId: null,
+      committed: [],
+      interim: '',
+      pendingStart: false,
+      level: 0,
+      lastTranscript: text.length > 0 ? text : ctx.lastTranscript,
+    },
+    [
+      ...appendHistory(ctx, {
+        text,
+        durationSec: ctx.durationSec,
+        frontmostBundleId: ctx.targetBundleId,
+        frontmostName: ctx.targetName,
+        tier: 'none',
+        inserted: false,
+        unconfirmedTail,
+        cancelled: true,
+      }),
+      { type: 'cancel_capture', sessionId },
+      { type: 'abort_stt', sessionId },
+      ...unmuteEffect(ctx),
+      { type: 'hud', view: { kind: 'hidden' } },
+      { type: 'tray', state: 'idle', secureInput: ctx.secureInput },
+    ],
+  );
 }
 
 function recordingView(ctx: SessionContext): HudView {
@@ -557,8 +607,7 @@ function finishInsert(
   // dispatched appends to `committed` only (see `reduceInserting`), and the
   // pill, the history row and ⌃⌘V should all carry the whole transcript rather
   // than the prefix that happened to be typed. An ad-hoc insert (⌃⌘V, a history
-  // row, a Scratchpad edit) has no segments at all and falls back to the text it
-  // was handed.
+  // row) has no segments at all and falls back to the text it was handed.
   const text = ctx.committed.length > 0 ? committedText(ctx) : (ctx.inserting ?? '');
   const effects: Effect[] = [];
 
@@ -573,9 +622,8 @@ function finishInsert(
     // ladder acted on; `ctx` holds the press-time app and is the fallback for
     // a helper that declined before resolving one, or never answered at all.
     const landedIn = outcome.frontmost ?? null;
-    effects.push({
-      type: 'history_append',
-      entry: {
+    effects.push(
+      ...appendHistory(ctx, {
         text,
         durationSec: ctx.durationSec,
         frontmostBundleId: landedIn?.bundleId ?? ctx.targetBundleId,
@@ -588,8 +636,8 @@ function finishInsert(
         // asserting something the app was never in a position to know
         // (2026-08-09 incident, BUG-1).
         verified: outcome.verified ?? null,
-      },
-    });
+      }),
+    );
   }
 
   const cleared: SessionContext = {
@@ -631,8 +679,8 @@ function finishInsert(
 }
 
 /**
- * Insert text that is not the product of the turn we are in — `Ctrl+Cmd+V`, a
- * history row, or a Scratchpad edit.
+ * Insert text that is not the product of the turn we are in — `Ctrl+Cmd+V`, or
+ * a history row.
  *
  * §6: these target wherever the user is pointing **now**, so `targetBundleId`
  * is deliberately `null` and the helper's frontmost check is disabled
@@ -724,26 +772,26 @@ function beginInsert(ctx: SessionContext, extraFinal: string | null, env: Machin
  */
 function toIdleWithError(ctx: SessionContext, error: AppError): Step {
   const effects: Effect[] = [];
+  const { text: salvaged, unconfirmedTail } = salvage(ctx);
+  effects.push(
+    ...appendHistory(ctx, {
+      text: salvaged,
+      durationSec: ctx.durationSec,
+      frontmostBundleId: ctx.targetBundleId,
+      frontmostName: ctx.targetName,
+      tier: 'none',
+      inserted: false,
+      unconfirmedTail,
+      transcribeError: error.message,
+    }),
+  );
   if (ctx.sessionId !== null) {
     effects.push({ type: 'cancel_capture', sessionId: ctx.sessionId });
     effects.push({ type: 'abort_stt', sessionId: ctx.sessionId });
   }
   effects.push(...unmuteEffect(ctx));
 
-  const { text: salvaged, unconfirmedTail } = salvage(ctx);
   if (salvaged.length > 0) {
-    effects.push({
-      type: 'history_append',
-      entry: {
-        text: salvaged,
-        durationSec: ctx.durationSec,
-        frontmostBundleId: ctx.targetBundleId,
-        frontmostName: ctx.targetName,
-        tier: 'none',
-        inserted: false,
-        unconfirmedTail,
-      },
-    });
     effects.push({
       type: 'hud',
       view: {
@@ -1010,17 +1058,7 @@ function reduceRecording(snapshot: Snapshot, event: PostSecureEvent, env: Machin
         : ignored(snapshot, 'already recording', event);
 
     case 'CANCEL':
-      return step(
-        'idle',
-        { ...ctx, sessionId: null, committed: [], interim: '', pendingStart: false, level: 0 },
-        [
-          { type: 'cancel_capture', sessionId },
-          { type: 'abort_stt', sessionId },
-          ...unmuteEffect(ctx),
-          { type: 'hud', view: { kind: 'hidden' } },
-          { type: 'tray', state: 'idle', secureInput: ctx.secureInput },
-        ],
-      );
+      return cancelToIdle(ctx);
 
     case 'FRONTMOST':
       return step(
@@ -1162,16 +1200,7 @@ function reduceProcessing(snapshot: Snapshot, event: PostSecureEvent, env: Machi
       );
 
     case 'CANCEL':
-      return step(
-        'idle',
-        { ...ctx, sessionId: null, committed: [], interim: '', pendingStart: false },
-        [
-          { type: 'abort_stt', sessionId },
-          ...unmuteEffect(ctx),
-          { type: 'hud', view: { kind: 'hidden' } },
-          { type: 'tray', state: 'idle', secureInput: ctx.secureInput },
-        ],
-      );
+      return cancelToIdle(ctx);
 
     // §5: queue the press rather than dropping it.
     case 'PTT_DOWN':
@@ -1358,18 +1387,15 @@ function reduceBlocked(snapshot: Snapshot, event: PostSecureEvent, env: MachineE
           blockedNoticeShown: false,
         },
         [
-          {
-            type: 'history_append',
-            entry: {
-              text,
-              durationSec: event.durationSec,
-              frontmostBundleId: ctx.targetBundleId,
-              frontmostName: ctx.targetName,
-              tier: 'none',
-              inserted: false,
-              unconfirmedTail,
-            },
-          },
+          ...appendHistory(withDuration, {
+            text,
+            durationSec: event.durationSec,
+            frontmostBundleId: ctx.targetBundleId,
+            frontmostName: ctx.targetName,
+            tier: 'none',
+            inserted: false,
+            unconfirmedTail,
+          }),
           {
             type: 'hud',
             view: {
@@ -1403,21 +1429,17 @@ function reduceBlocked(snapshot: Snapshot, event: PostSecureEvent, env: MachineE
       const { text, unconfirmedTail } = salvage(ctx);
       const effects: Effect[] = [
         { type: 'log', level: 'warn', message: `error while blocked: ${event.error.message}` },
+        ...appendHistory(ctx, {
+          text,
+          durationSec: ctx.durationSec,
+          frontmostBundleId: ctx.targetBundleId,
+          frontmostName: ctx.targetName,
+          tier: 'none',
+          inserted: false,
+          unconfirmedTail,
+          transcribeError: event.error.message,
+        }),
       ];
-      if (text.length > 0) {
-        effects.push({
-          type: 'history_append',
-          entry: {
-            text,
-            durationSec: ctx.durationSec,
-            frontmostBundleId: ctx.targetBundleId,
-            frontmostName: ctx.targetName,
-            tier: 'none',
-            inserted: false,
-            unconfirmedTail,
-          },
-        });
-      }
       return step(
         'blocked',
         {

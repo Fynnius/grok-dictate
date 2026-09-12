@@ -242,6 +242,91 @@ describe('rule 3 in reverse: a lower-case word promoted to a sentence start', ()
   });
 });
 
+/* ------------------------------------------------------------------ *
+ * Rule 4 — sentence-end then a comma
+ * ------------------------------------------------------------------ */
+
+describe('rule 4: a pause punctuated as both a sentence end and a comma', () => {
+  it('repairs ". ," inside a single segment', () => {
+    // history.json, finals=1 (the recogniser emitted this in one speech_final):
+    // "…not working anymore. , the run from before…"
+    expect(stitchSegments(["it's not working anymore. , the run from before is gone"])).toBe(
+      "it's not working anymore. The run from before is gone",
+    );
+  });
+
+  it('repairs "? ," the same way, keeping the question mark', () => {
+    // Dropping the question mark would lose that they asked. Drop the comma.
+    expect(stitchSegments(['is that like, normal? , and I want you to look'])).toBe(
+      'is that like, normal? And I want you to look',
+    );
+  });
+
+  it('repairs the same pair at a seam, where HUGS_PREVIOUS would have glued ".,"', () => {
+    expect(
+      stitchSegments([
+        'there are unnecessary things like audio cues.',
+        ', or things which do not belong',
+      ]),
+    ).toBe('there are unnecessary things like audio cues. Or things which do not belong');
+  });
+
+  it('keeps a trailing "yeah" that followed the illegal comma', () => {
+    // The reporting user does say "yeah" at the end of a sentence. Dropping the
+    // comma must not take the word with it.
+    expect(stitchSegments(['I want to retry the transcription. , yeah.'])).toBe(
+      'I want to retry the transcription. Yeah.',
+    );
+  });
+
+  it('leaves a real list comma alone', () => {
+    expect(stitchSegments(['Yes, and then we ship it.'])).toBe('Yes, and then we ship it.');
+  });
+
+  it('leaves two finished sentences alone', () => {
+    expect(stitchSegments(['OK.', 'Next sentence.'])).toBe('OK. Next sentence.');
+  });
+
+  it('does not treat an abbreviation comma as the artefact', () => {
+    expect(stitchSegments(['See e.g., the logs from last night.'])).toBe(
+      'See e.g., the logs from last night.',
+    );
+  });
+
+  it('does not strip a comma after a closing quote', () => {
+    expect(stitchSegments(['He said "we are done.", and left.'])).toBe(
+      'He said "we are done.", and left.',
+    );
+  });
+
+  it('still hugs a comma onto an unfinished previous segment', () => {
+    expect(stitchSegments(['we shipped it', ', which was overdue'])).toBe(
+      'we shipped it, which was overdue',
+    );
+  });
+
+  it('hugs a space off punctuation inside one segment too', () => {
+    expect(stitchSegments(['So I want you to please , quickly give me a roadmap'])).toBe(
+      'So I want you to please, quickly give me a roadmap',
+    );
+    expect(stitchSegments(['this is a pretty useful thing now . All the text is dictated'])).toBe(
+      'this is a pretty useful thing now. All the text is dictated',
+    );
+  });
+
+  it('leaves ". ," alone when seam repair is off', () => {
+    expect(stitchSegments(["it's not working anymore. , the run from before is gone"], false)).toBe(
+      "it's not working anymore. , the run from before is gone",
+    );
+  });
+
+  it('does not lower a name after dropping the comma', () => {
+    expect(stitchSegments(['we sent it to Berlin. , Berlin still has it'])).toBe(
+      'we sent it to Berlin. Berlin still has it',
+    );
+  });
+});
+
 describe('several rules on one turn', () => {
   it('de-duplicates and then de-capitalises the word underneath', () => {
     // The overlap hides the real first word; rule 3 has to run on what is left.
