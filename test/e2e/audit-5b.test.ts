@@ -20,26 +20,29 @@
  * who has not read .
  */
 
-import { readFileSync } from 'node:fs';
-import { relative, resolve } from 'node:path';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { globSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const ROOT = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 
+/** `fs.globSync` is Node 22+. CI is `.nvmrc` 20. */
+function globUnder(dir: string, exts: readonly string[]): string[] {
+  return readdirSync(resolve(ROOT, dir), { recursive: true, encoding: 'utf8' })
+    .filter((name) => exts.some((ext) => name.endsWith(ext)))
+    .map((name) => join(dir, name));
+}
+
 /** Every hand-written source file in the application, tests excluded. */
 function sourceFiles(options: { includeTests?: boolean } = {}): string[] {
-  const patterns = [
-    'src/**/*.ts',
-    'src/**/*.tsx',
-    'contracts/**/*.ts',
-    'mocks/**/*.mjs',
-    'mocks/**/*.ts',
-    'scripts/**/*.ts',
-    'native/Sources/**/*.swift',
+  const files = [
+    ...globUnder('src', ['.ts', '.tsx']),
+    ...globUnder('contracts', ['.ts']),
+    ...globUnder('mocks', ['.mjs', '.ts']),
+    ...globUnder('scripts', ['.ts']),
+    ...globUnder('native/Sources', ['.swift']),
   ];
-  const files = patterns.flatMap((pattern) => globSync(pattern, { cwd: ROOT }));
   return files
     .filter((file) => options.includeTests === true || !/\.test\.tsx?$/.test(file))
     .map((file) => resolve(ROOT, file))
