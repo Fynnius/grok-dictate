@@ -26,6 +26,14 @@
  * One flag, `insertMethod`, for the same reason and by the same rule: pasting
  * replaces what the user had on their clipboard, and anything that discards
  * something of the user's gets a switch. Default `auto`.
+ *
+ * ## 2026-09-19 speech model / transport split
+ *
+ * Dictation talks to one of two sockets. That is `sttTransport`, not a model
+ * id. The public xAI API catalog (`grok-voice-transcribe-2.0` /
+ * `grok-voice-transcribe-1.0`) is `sttModel`. grok.com STT 2 Fast is the
+ * grok.com transport, not a third catalog entry. Legacy `grok-stt` configs
+ * pin Transcribe 2.0; legacy `grok-stt-2-fast` becomes transport `grok-com`.
  */
 
 import { z } from 'zod';
@@ -50,16 +58,55 @@ export const LanguageModeSchema = z.enum(LANGUAGE_MODES);
 export type LanguageMode = (typeof LANGUAGE_MODES)[number];
 
 /**
- * STT model sent as the `model` query parameter on `wss://api.x.ai/v1/stt`.
+ * Which socket a hold talks to.
  *
- * `grok-stt` is the public default. Omit it on the wire so existing sessions
- * are bit-identical. `grok-stt-2-fast` is what grok.com composer dictate uses
- * (`web_streaming_dictation_config.model`).
+ * `api` is `wss://api.x.ai/v1/stt` with the stored API key / env / Grok CLI
+ * bearer. `grok-com` is `wss://grok.com/ws/v1/stt` with grok.com cookies and
+ * a fixed model (`GROK_COM_STT_MODEL`). These are not versions of each other.
  */
-export const STT_MODELS = ['grok-stt', 'grok-stt-2-fast'] as const;
-export const SttModelSchema = z.enum(STT_MODELS);
-export type SttModel = (typeof STT_MODELS)[number];
-export const DEFAULT_STT_MODEL: SttModel = 'grok-stt';
+export const STT_TRANSPORTS = ['api', 'grok-com'] as const;
+export const SttTransportSchema = z.enum(STT_TRANSPORTS);
+export type SttTransport = (typeof STT_TRANSPORTS)[number];
+export const DEFAULT_STT_TRANSPORT: SttTransport = 'api';
+
+/**
+ * Public xAI Speech-to-Text catalog (docs 2026-09-18).
+ *
+ * Always sent as the `model` query parameter — we do not omit it and hope
+ * the server default stays put. `grok-stt-2-fast` is not in this list: it
+ * only exists on grok.com.
+ */
+export const API_STT_MODELS = ['grok-voice-transcribe-2.0', 'grok-voice-transcribe-1.0'] as const;
+export type ApiSttModel = (typeof API_STT_MODELS)[number];
+export const DEFAULT_STT_MODEL: ApiSttModel = 'grok-voice-transcribe-2.0';
+export const GROK_COM_STT_MODEL = 'grok-stt-2-fast';
+
+/** Wire model id: a catalog slug, grok.com Fast, or a user-kept unknown string. */
+export type SttModel = string;
+
+export const API_STT_MODEL_LABELS: Record<ApiSttModel, string> = {
+  'grok-voice-transcribe-2.0': 'Transcribe 2.0',
+  'grok-voice-transcribe-1.0': 'Transcribe 1.0',
+};
+
+const LEGACY_STT_MODELS = new Set(['grok-stt', 'grok-stt-2-fast']);
+
+export function isKnownApiSttModel(model: string): model is ApiSttModel {
+  return (API_STT_MODELS as readonly string[]).includes(model);
+}
+
+export function isGrokComSttModel(model: string): boolean {
+  return model === GROK_COM_STT_MODEL;
+}
+
+export function sttModelLabel(model: string): string {
+  if (isKnownApiSttModel(model)) return API_STT_MODEL_LABELS[model];
+  if (isGrokComSttModel(model)) return 'STT 2 Fast';
+  return model;
+}
+
+/** `sttModel` is a free string so an unknown slug is kept, not rewritten. */
+export const SttModelSchema = z.string().min(1).max(128);
 
 /** The 25-code xAI STT catalog. */
 export const STT_LANGUAGE_CATALOG = [
@@ -110,14 +157,18 @@ export const AppConfigSchema = z.object({
   languageMode: LanguageModeSchema.default('auto'),
 
   /**
-   * Which Grok STT model the streaming socket asks for.
-   *
-   * `grok-stt` (default) omits the `model` query parameter — the public API
-   * default, and what this app has always sent. `grok-stt-2-fast` is the
-   * model grok.com composer dictate uses; it is not in the public STT docs
-   * yet, but the website sends it on the same protocol.
+   * Which socket a hold talks to. Independent of which API model is pinned
+   * — grok.com STT 2 Fast is this field, not `sttModel`.
    */
-  sttModel: SttModelSchema.default('grok-stt'),
+  sttTransport: SttTransportSchema.default('api'),
+
+  /**
+   * xAI API model slug, sent as the `model` query parameter on
+   * `wss://api.x.ai/v1/stt`. Ignored on the grok.com transport, which always
+   * sends `GROK_COM_STT_MODEL`. Unknown slugs are kept and sent as-is so a
+   * hand-edit survives until the next catalog update.
+   */
+  sttModel: SttModelSchema.default(DEFAULT_STT_MODEL),
 
   /**
    * Server-side custom dictionary: max 100 terms × 50 chars.
@@ -288,7 +339,12 @@ export const DEFAULT_CONFIG: AppConfig = AppConfigSchema.parse({});
  * changing the user's settings.
  */
 export function parseConfig(raw: unknown): { config: AppConfig; issues: string[] } {
-  const parsed = AppConfigSchema.safeParse(raw);
+  const source =
+    raw !== null && typeof raw === 'object' && !Array.isArray(raw)
+      ? migrateSttFields(raw as Record<string, unknown>)
+      : raw;
+
+  const parsed = AppConfigSchema.safeParse(source);
   if (parsed.success) return { config: parsed.data, issues: [] };
 
   const issues = parsed.error.issues.map(
@@ -296,15 +352,40 @@ export function parseConfig(raw: unknown): { config: AppConfig; issues: string[]
   );
 
   // Retry field-by-field so one bad value does not discard the whole file.
-  const source = raw !== null && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  const record =
+    source !== null && typeof source === 'object' && !Array.isArray(source)
+      ? (source as Record<string, unknown>)
+      : {};
   const salvaged: Record<string, unknown> = {};
   for (const key of Object.keys(AppConfigSchema.shape)) {
-    if (!(key in source)) continue;
+    if (!(key in record)) continue;
     const fieldSchema = AppConfigSchema.shape[key as keyof typeof AppConfigSchema.shape];
-    const fieldResult = fieldSchema.safeParse(source[key]);
+    const fieldResult = fieldSchema.safeParse(record[key]);
     if (fieldResult.success) salvaged[key] = fieldResult.data;
   }
   return { config: AppConfigSchema.parse(salvaged), issues };
+}
+
+/**
+ * Lift a config written before transport and model were separate fields.
+ *
+ * `grok-stt-2-fast` was a picker value that meant "talk to grok.com". It is
+ * now `sttTransport: 'grok-com'`. `grok-stt` meant "omit model and follow the
+ * API default"; that is now an explicit pin of Transcribe 2.0.
+ *
+ * Unknown `sttModel` strings are left alone — rewriting them to the default
+ * is how a hand-edited new slug became unselectable.
+ */
+function migrateSttFields(source: Record<string, unknown>): Record<string, unknown> {
+  const next: Record<string, unknown> = { ...source };
+  const model = next.sttModel;
+  if (next.sttTransport === undefined) {
+    next.sttTransport = model === GROK_COM_STT_MODEL ? 'grok-com' : 'api';
+  }
+  if (typeof model === 'string' && LEGACY_STT_MODELS.has(model)) {
+    next.sttModel = DEFAULT_STT_MODEL;
+  }
+  return next;
 }
 
 /**
@@ -349,10 +430,29 @@ export function isCatalogLanguage(code: string): boolean {
 }
 
 /**
- * Value for the `model` query parameter, or `null` to omit it.
- * `grok-stt` is omitted so the default URL stays bit-identical to today.
+ * Value for the `model` query parameter. Always a concrete slug — omitting
+ * it used to track an invisible server default, which is how Transcribe 2.0
+ * shipped without a name in this app.
  */
-export function resolveWireSttModel(model: SttModel): string | null {
-  if (model === 'grok-stt') return null;
+export function resolveWireSttModel(model: string | null | undefined): string {
+  if (model === null || model === undefined || model.length === 0 || model === 'grok-stt') {
+    return DEFAULT_STT_MODEL;
+  }
+  if (model === GROK_COM_STT_MODEL) return GROK_COM_STT_MODEL;
   return model;
+}
+
+/**
+ * Wire model for a hold, from the split transport + catalog settings.
+ *
+ * grok.com always sends Fast. The API path sends the pinned slug, and
+ * refuses to send Fast at `api.x.ai` (that 404s).
+ */
+export function resolveTurnSttModel(config: {
+  readonly sttTransport: SttTransport;
+  readonly sttModel: string;
+}): string {
+  if (config.sttTransport === 'grok-com') return GROK_COM_STT_MODEL;
+  if (config.sttModel === GROK_COM_STT_MODEL) return DEFAULT_STT_MODEL;
+  return resolveWireSttModel(config.sttModel);
 }

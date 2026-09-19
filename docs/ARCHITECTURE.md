@@ -43,7 +43,9 @@ wires the real implementations. Tests wire mocks from `mocks/`.
 2. `XAI_API_KEY`
 3. `~/.grok/auth.json` from the Grok CLI
 
-grok.com is a separate session (`persist:grok-com`) used only by STT 2 Fast.
+grok.com is a separate session (`persist:grok-com`) used only when
+Settings → Dictation via is grok.com (STT 2 Fast). The xAI API path pins
+`grok-voice-transcribe-2.0` by default (1.0 remains selectable).
 
 There is no token-refresh path in this app. Refreshing a Grok CLI token from a
 second client can rotate it out from under the CLI. To keep a CLI login alive,

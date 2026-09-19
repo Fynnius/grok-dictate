@@ -27,7 +27,8 @@ describe('errorFromSttHandshake', () => {
     expect(error.message).toBe(
       "The speech model 'grok-stt-2-fast' is not available on the xAI API.",
     );
-    expect(error.hint).toContain('Standard');
+    expect(error.hint).toMatch(/Transcribe 2\.0/);
+    expect(error.hint).toMatch(/grok\.com/);
   });
 
   it('keeps the generic refusal for a 500 with no body', () => {

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Settings → Dictation splits “where it talks” from “which model”.** _Dictation via_ is xAI API or grok.com. The API path pins [Voice Transcribe 2.0](https://docs.x.ai/developers/model-capabilities/audio/speech-to-text) (1.0 stays selectable). grok.com is still STT 2 Fast, not a third API slug. Existing `grok-stt` configs become a 2.0 pin; existing Fast configs become Dictation via grok.com. Unknown model slugs are kept and sent, not rewritten to the default.
+
 ## [0.4.0] — 2026-09-12
 
 The microphone opens through Core Audio, grok.com STT 2 Fast is a real option, and a cancelled take is no longer gone.

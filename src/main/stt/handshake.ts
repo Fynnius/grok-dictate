@@ -40,7 +40,7 @@ export function errorFromSttHandshake(
     return appError(
       'auth_expired',
       `grok.com rejected the login (HTTP ${String(status)}).`,
-      'Sign in to grok.com again. Settings → Speech model → Sign in to grok.com.',
+      'Sign in to grok.com again. Settings → Account → grok.com.',
     );
   }
 
@@ -51,7 +51,7 @@ export function errorFromSttHandshake(
       model === undefined
         ? 'That speech model is not available on the xAI API.'
         : `The speech model '${model}' is not available on the xAI API.`,
-      'STT 2 Fast is what grok.com uses internally. Switch Speech model back to Standard — the public API does not offer it yet.',
+      'Pick Transcribe 2.0 or 1.0 under Settings → Dictation, or switch Dictation via to grok.com for STT 2 Fast.',
     );
   }
 

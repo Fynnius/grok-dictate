@@ -66,15 +66,15 @@ describe('buildSttUrl', () => {
     expect(url.startsWith('ws://127.0.0.1:5555/v1/stt?')).toBe(true);
   });
 
-  it('omits `model` when it is missing (public default, bit-identical URL)', () => {
+  it('pins Transcribe 2.0 when `model` is missing', () => {
     const url = buildSttUrl({ apiBase: base, language: null, endpointingMs: 400, keyterms: [] });
     expect(url.startsWith('wss://api.x.ai/v1/stt?')).toBe(true);
     const q = query(url);
-    expect(q.has('model')).toBe(false);
+    expect(q.get('model')).toBe('grok-voice-transcribe-2.0');
     expect(q.has('vad_threshold')).toBe(false);
   });
 
-  it('omits `model` for `grok-stt`', () => {
+  it('pins Transcribe 2.0 for legacy `grok-stt`', () => {
     const url = buildSttUrl({
       apiBase: base,
       language: null,
@@ -84,8 +84,20 @@ describe('buildSttUrl', () => {
     });
     expect(url.startsWith('wss://api.x.ai/v1/stt?')).toBe(true);
     const q = query(url);
-    expect(q.has('model')).toBe(false);
+    expect(q.get('model')).toBe('grok-voice-transcribe-2.0');
     expect(q.has('vad_threshold')).toBe(false);
+  });
+
+  it('sends `grok-voice-transcribe-1.0` on the API socket', () => {
+    const url = buildSttUrl({
+      apiBase: base,
+      language: null,
+      endpointingMs: 400,
+      keyterms: [],
+      model: 'grok-voice-transcribe-1.0',
+    });
+    expect(url.startsWith('wss://api.x.ai/v1/stt?')).toBe(true);
+    expect(query(url).get('model')).toBe('grok-voice-transcribe-1.0');
   });
 
   it('routes grok-stt-2-fast to grok.com /ws/v1/stt with vad_threshold, not endpointing=20', () => {

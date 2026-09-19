@@ -18,8 +18,13 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import type { AppConfig, LanguageMode, SttModel } from '@contracts/config.js';
-import { DEFAULT_CONFIG } from '@contracts/config.js';
+import type { ApiSttModel, AppConfig, LanguageMode, SttTransport } from '@contracts/config.js';
+import {
+  API_STT_MODEL_LABELS,
+  DEFAULT_CONFIG,
+  isKnownApiSttModel,
+  sttModelLabel,
+} from '@contracts/config.js';
 import type { AuthStatus, CliAuthStatus } from '@contracts/events.js';
 import { KEYTERM_MAX_COUNT, KEYTERM_MAX_LENGTH } from '@shared/constants.js';
 import { request } from './ipc.js';
@@ -35,9 +40,14 @@ const LANGUAGE_OPTIONS: readonly (readonly [LanguageMode, string])[] = [
   ['en', 'English'],
 ];
 
-const STT_MODEL_OPTIONS: readonly (readonly [SttModel, string])[] = [
-  ['grok-stt', 'Standard'],
-  ['grok-stt-2-fast', 'STT 2 Fast'],
+const STT_TRANSPORT_OPTIONS: readonly (readonly [SttTransport, string])[] = [
+  ['api', 'xAI API'],
+  ['grok-com', 'grok.com'],
+];
+
+const API_STT_MODEL_OPTIONS: readonly (readonly [ApiSttModel, string])[] = [
+  ['grok-voice-transcribe-2.0', API_STT_MODEL_LABELS['grok-voice-transcribe-2.0']],
+  ['grok-voice-transcribe-1.0', API_STT_MODEL_LABELS['grok-voice-transcribe-1.0']],
 ];
 
 /**
@@ -201,7 +211,7 @@ export function SettingsView(): React.JSX.Element {
           <div className="card-row">
             <span className="row-label">
               grok.com
-              <InfoTip text="STT 2 Fast talks to grok.com with this login, not the xAI API key. The in-app window cannot use macOS iCloud passkeys — Electron is not Safari. Passkeys (Chrome) opens a real Chrome window where those passkeys work, then copies only grok.com cookies back here." />
+              <InfoTip text="Used when Dictation via is grok.com (STT 2 Fast). Not the xAI API key. The in-app window cannot use macOS iCloud passkeys — Electron is not Safari. Passkeys (Chrome) opens a real Chrome window where those passkeys work, then copies only grok.com cookies back here." />
             </span>
             <span className="control">
               {grokComSignedIn === null ? (
@@ -313,7 +323,7 @@ export function SettingsView(): React.JSX.Element {
             />
           </div>
         </div>
-        <p className="card-caption">{dictationSourceCaption(auth)}</p>
+        <p className="card-caption">{apiCredentialCaption(auth)}</p>
       </div>
 
       <div className="group">
@@ -335,18 +345,60 @@ export function SettingsView(): React.JSX.Element {
           </div>
           <div className="card-row">
             <span className="row-label">
-              Speech model
-              <InfoTip text="Standard uses the xAI API. STT 2 Fast needs the grok.com login under Account." />
+              Dictation via
+              <InfoTip text="The xAI API uses your API key or Grok CLI login and bills streaming STT. grok.com uses the website session and STT 2 Fast, the model grok.com composer dictate uses — not a version of the API models." />
             </span>
             <span className="control">
               <Segmented
-                options={STT_MODEL_OPTIONS}
-                value={config.sttModel ?? 'grok-stt'}
-                onChange={(model) => save({ sttModel: model })}
-                ariaLabel="Speech recognition model"
+                options={STT_TRANSPORT_OPTIONS}
+                value={config.sttTransport}
+                onChange={(transport) => save({ sttTransport: transport })}
+                ariaLabel="Dictation via"
               />
+              {config.sttTransport === 'api' && auth !== null && auth.state !== 'signed-in' ? (
+                <>
+                  <span className="chip">No login</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      api.send({ type: 'open-window', window: 'signin' });
+                    }}
+                  >
+                    Sign in…
+                  </button>
+                </>
+              ) : null}
+              {config.sttTransport === 'grok-com' && grokComSignedIn === false ? (
+                <>
+                  <span className="chip">Not signed in</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      api.send({ type: 'open-window', window: 'grok-com-signin' });
+                    }}
+                  >
+                    Sign in…
+                  </button>
+                </>
+              ) : null}
             </span>
           </div>
+          {config.sttTransport === 'api' ? (
+            <div className="card-row">
+              <span className="row-label">
+                Speech model
+                <InfoTip text="Voice Transcribe 2.0 is xAI's current API model — twice as accurate as 1.0 at the same price. Pin 1.0 only if you need the previous one. The slug is sent on every hold; the app no longer follows an unnamed server default." />
+              </span>
+              <span className="control">
+                <Segmented
+                  options={API_STT_MODEL_OPTIONS}
+                  value={config.sttModel as ApiSttModel}
+                  onChange={(model) => save({ sttModel: model })}
+                  ariaLabel="Speech recognition model"
+                />
+              </span>
+            </div>
+          ) : null}
           <div className="card-row">
             <span className="row-label">
               Endpointing
@@ -425,6 +477,7 @@ export function SettingsView(): React.JSX.Element {
             </span>
           </div>
         </div>
+        <p className="card-caption">{dictationHoldCaption(config, auth, grokComSignedIn)}</p>
       </div>
 
       <div className="group">
@@ -524,23 +577,51 @@ export function SettingsView(): React.JSX.Element {
   );
 }
 
-function dictationSourceCaption(auth: AuthStatus | null): string {
-  const grokCom = 'grok.com is only for STT 2 Fast.';
-  if (auth === null) return `Checking which login dictation will use… ${grokCom}`;
+function apiCredentialCaption(auth: AuthStatus | null): string {
+  if (auth === null) return 'Checking which xAI API login is available…';
   if (auth.state === 'signed-out') {
-    return `Dictation has no login yet. Add an xAI API key or a Grok CLI login. ${grokCom}`;
+    return 'No xAI API key or Grok CLI login yet. The xAI API path needs one of those.';
   }
   if (auth.state === 'expired') {
-    return `Dictation will use the Grok CLI login once it is renewed. ${grokCom}`;
+    return 'The Grok CLI login is expired. Renew it above, or add an xAI API key.';
   }
   switch (auth.source) {
     case 'api-key':
-      return `Dictation will use the xAI API key. ${grokCom}`;
+      return 'The xAI API path will use the xAI API key.';
     case 'environment':
-      return `Dictation will use XAI_API_KEY from the environment. ${grokCom}`;
+      return 'The xAI API path will use XAI_API_KEY from the environment.';
     case 'grok-cli':
-      return `Dictation will use the Grok CLI login. ${grokCom}`;
+      return 'The xAI API path will use the Grok CLI login.';
   }
+}
+
+function dictationHoldCaption(
+  config: AppConfig,
+  auth: AuthStatus | null,
+  grokComSignedIn: boolean | null,
+): string {
+  if (config.sttTransport === 'grok-com') {
+    if (grokComSignedIn === null) return 'Checking the grok.com login…';
+    if (grokComSignedIn) return 'This hold will use grok.com STT 2 Fast.';
+    return 'This hold needs the grok.com login under Account.';
+  }
+
+  const model = sttModelLabel(config.sttModel);
+  const unknown = isKnownApiSttModel(config.sttModel)
+    ? ''
+    : ' That slug is not in the known catalog — pick Transcribe 2.0 or 1.0 to replace it.';
+
+  if (auth === null) return `This hold will use ${model} on the xAI API.${unknown}`;
+  if (auth.state !== 'signed-in') {
+    return `This hold will use ${model} once you add an xAI API key or a Grok CLI login.${unknown}`;
+  }
+  const source =
+    auth.source === 'api-key'
+      ? 'your API key'
+      : auth.source === 'environment'
+        ? 'XAI_API_KEY from the environment'
+        : 'the Grok CLI login';
+  return `This hold will use ${model} on ${source}.${unknown}`;
 }
 
 function formatExpiryClock(iso: string): string {

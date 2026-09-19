@@ -1,6 +1,6 @@
 /**
  * The STT WebSocket query contract (`wss://api.x.ai/v1/stt`, or
- * `wss://grok.com/ws/v1/stt` for `grok-stt-2-fast`).
+ * `wss://grok.com/ws/v1/stt` for grok.com STT 2 Fast).
  *
  * Pure, so every decision the spikes settled is a unit test rather than a thing
  * you have to run a socket to check.
@@ -15,8 +15,8 @@
  * | `endpointing`      | config, 400 ms | `config.rs:36-48`; spike 2                |
  * | `language`         | omitted for `auto` | spike 1 + 3, docs/spike-results.md    |
  * | `keyterm`          | repeated       | spike 5                                   |
- * | `model`            | omitted by default | grok.com `web_streaming_dictation_config` |
- * | `vad_threshold`    | 0.3, 2-fast only | website `web_streaming_dictation_config` |
+ * | `model`            | pinned catalog slug | xAI STT docs; grok.com Fast on that transport |
+ * | `vad_threshold`    | 0.3, grok.com only | website `web_streaming_dictation_config` |
  *
  * Two of those are the direct output of the Phase 1 spikes and would otherwise
  * be guesses:
@@ -33,15 +33,20 @@
  *     work identically, and repetition is chosen because a term containing a
  *     comma is unrepresentable in the CSV form.
  *
- *   - **`model` is omitted for `grok-stt`.** grok.com composer dictate sends
- *     `model=grok-stt-2-fast` from `web_streaming_dictation_config.model` on the
- *     same protocol. The public default is `grok-stt`; omitting it keeps existing
- *     sessions bit-identical. We do not copy grok.com's `endpointing=20` — that
- *     would wreck hold-to-talk. `grok-stt-2-fast` also switches host/path to
- *     `wss://grok.com/ws/v1/stt` (loopback `apiBase` stays, for tests).
+ *   - **`model` is always sent.** Omitting it used to mean "follow the API
+ *     default", which is how Transcribe 2.0 arrived without a name here. The
+ *     catalog slugs `grok-voice-transcribe-2.0` / `1.0` go to `api.x.ai`.
+ *     `grok-stt-2-fast` switches host/path to `wss://grok.com/ws/v1/stt`
+ *     (loopback `apiBase` stays, for tests). We do not copy grok.com's
+ *     `endpointing=20` — that would wreck hold-to-talk.
  */
 
-import { resolveWireSttModel, type SttModel } from '@contracts/config.js';
+import {
+  DEFAULT_STT_MODEL,
+  isGrokComSttModel,
+  resolveWireSttModel,
+  type SttModel,
+} from '@contracts/config.js';
 import type { SttTurnOptions } from '@contracts/ports.js';
 import {
   GROK_COM_STT_API_BASE,
@@ -100,9 +105,8 @@ export interface SttUrlOptions {
   /** `config.rs:36-48` sets this true; xAI's documented default is false. */
   readonly interimResults?: boolean;
   /**
-   * STT model id. Missing / `grok-stt` / `null` omit `model` on the wire.
-   * `grok-stt-2-fast` is grok.com composer dictate
-   * (`web_streaming_dictation_config.model`).
+   * STT model id. Missing / `grok-stt` pin Transcribe 2.0.
+   * `grok-stt-2-fast` is grok.com composer dictate.
    */
   readonly model?: SttModel | null;
 }
@@ -113,13 +117,13 @@ export function sttUrlOptions(apiBase: string, options: SttTurnOptions): SttUrlO
     language: options.language,
     endpointingMs: options.endpointingMs,
     keyterms: options.keyterms,
-    model: options.model ?? 'grok-stt',
+    model: options.model ?? DEFAULT_STT_MODEL,
   };
 }
 
 export function buildSttUrl(options: SttUrlOptions): string {
-  const model = resolveWireSttModel(options.model ?? 'grok-stt');
-  const grokComFast = model === 'grok-stt-2-fast';
+  const model = resolveWireSttModel(options.model);
+  const grokComFast = isGrokComSttModel(model);
   // Public `api.x.ai` 404s this model; grok.com composer dictate uses a
   // cookie-auth socket at `/ws/v1/stt`. Loopback `apiBase` is the test server.
   const origin =
@@ -138,9 +142,7 @@ export function buildSttUrl(options: SttUrlOptions): string {
   // `null` means "omit" — never the literal string `auto`, and never a
   // guessed code (spike 3: the parameter did not steer anything we could test).
   if (options.language !== null) url.searchParams.set('language', options.language);
-  // Missing / `grok-stt` omit `model` so the default URL stays bit-identical.
-  // `grok-stt-2-fast` is grok.com `web_streaming_dictation_config.model`.
-  if (model !== null) url.searchParams.set('model', model);
+  url.searchParams.set('model', model);
   if (grokComFast) url.searchParams.set('vad_threshold', String(GROK_COM_VAD_THRESHOLD));
 
   for (const term of selectKeyterms(options.keyterms).accepted) {

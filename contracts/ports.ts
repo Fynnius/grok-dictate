@@ -276,8 +276,9 @@ export interface SttTurnOptions {
    *  sends, `streaming.rs:82`). Chosen by spike 2. */
   readonly useFinalize: boolean;
   /**
-   * STT model id. `grok-stt` or omitted → no `model` query param (public
-   * default). `grok-stt-2-fast` → `model=grok-stt-2-fast` (grok.com dictate).
+   * Wire STT model id. Catalog slug on the xAI API; `grok-stt-2-fast` for
+   * grok.com dictate. The orchestrator resolves this from `sttTransport` +
+   * `sttModel` via `resolveTurnSttModel`.
    */
   readonly model?: SttModel;
 }

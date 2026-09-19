@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   AppConfigSchema,
   DEFAULT_CONFIG,
+  DEFAULT_STT_MODEL,
+  GROK_COM_STT_MODEL,
   parseConfig,
+  resolveTurnSttModel,
   resolveWireLanguage,
   resolveWireSttModel,
 } from './config.js';
@@ -13,21 +16,44 @@ describe('config defaults', () => {
     expect(DEFAULT_CONFIG.keyterms).toEqual([]);
   });
 
-  it('defaults `sttModel` to `grok-stt` so the wire URL stays bit-identical', () => {
-    expect(DEFAULT_CONFIG.sttModel).toBe('grok-stt');
+  it('defaults dictation to the xAI API with Transcribe 2.0 pinned', () => {
+    expect(DEFAULT_CONFIG.sttTransport).toBe('api');
+    expect(DEFAULT_CONFIG.sttModel).toBe(DEFAULT_STT_MODEL);
   });
 
-  it('keeps `grok-stt-2-fast` when the user asks for grok.com dictate', () => {
+  it('migrates legacy `grok-stt-2-fast` to the grok.com transport', () => {
     const { config, issues } = parseConfig({ sttModel: 'grok-stt-2-fast' });
     expect(issues).toEqual([]);
-    expect(config.sttModel).toBe('grok-stt-2-fast');
+    expect(config.sttTransport).toBe('grok-com');
+    expect(config.sttModel).toBe(DEFAULT_STT_MODEL);
   });
 
-  it('falls back to `grok-stt` for an sttModel it does not recognise', () => {
-    const { config, issues } = parseConfig({ sttModel: 'whisper', endpointingMs: 250 });
-    expect(issues.length).toBeGreaterThan(0);
-    expect(config.sttModel).toBe('grok-stt');
+  it('migrates legacy `grok-stt` to a Transcribe 2.0 pin on the API', () => {
+    const { config, issues } = parseConfig({ sttModel: 'grok-stt' });
+    expect(issues).toEqual([]);
+    expect(config.sttTransport).toBe('api');
+    expect(config.sttModel).toBe('grok-voice-transcribe-2.0');
+  });
+
+  it('keeps an unknown sttModel rather than rewriting it to the default', () => {
+    const { config, issues } = parseConfig({
+      sttModel: 'grok-voice-transcribe-3.0',
+      endpointingMs: 250,
+    });
+    expect(issues).toEqual([]);
+    expect(config.sttTransport).toBe('api');
+    expect(config.sttModel).toBe('grok-voice-transcribe-3.0');
     expect(config.endpointingMs).toBe(250);
+  });
+
+  it('keeps an explicit grok.com transport when the API model is already pinned', () => {
+    const { config, issues } = parseConfig({
+      sttTransport: 'grok-com',
+      sttModel: 'grok-voice-transcribe-1.0',
+    });
+    expect(issues).toEqual([]);
+    expect(config.sttTransport).toBe('grok-com');
+    expect(config.sttModel).toBe('grok-voice-transcribe-1.0');
   });
 
   it('defaults `useFinalize` to false on the evidence of spike 2', () => {
@@ -109,7 +135,8 @@ describe('config defaults', () => {
     const { config, issues } = parseConfig({ languageMode: 'de' });
     expect(issues).toEqual([]);
     expect(config.insertMethod).toBe('auto');
-    expect(config.sttModel).toBe('grok-stt');
+    expect(config.sttTransport).toBe('api');
+    expect(config.sttModel).toBe(DEFAULT_STT_MODEL);
     expect(config.micProcessing).toBe(false);
   });
 
@@ -174,11 +201,43 @@ describe('resolveWireLanguage', () => {
 });
 
 describe('resolveWireSttModel', () => {
-  it('omits `grok-stt` so the default URL stays bit-identical', () => {
-    expect(resolveWireSttModel('grok-stt')).toBeNull();
+  it('pins Transcribe 2.0 for missing, empty, or legacy `grok-stt`', () => {
+    expect(resolveWireSttModel(undefined)).toBe('grok-voice-transcribe-2.0');
+    expect(resolveWireSttModel(null)).toBe('grok-voice-transcribe-2.0');
+    expect(resolveWireSttModel('')).toBe('grok-voice-transcribe-2.0');
+    expect(resolveWireSttModel('grok-stt')).toBe('grok-voice-transcribe-2.0');
   });
 
-  it('sends `grok-stt-2-fast` (grok.com composer dictate)', () => {
-    expect(resolveWireSttModel('grok-stt-2-fast')).toBe('grok-stt-2-fast');
+  it('sends catalog slugs and grok.com Fast as written', () => {
+    expect(resolveWireSttModel('grok-voice-transcribe-2.0')).toBe('grok-voice-transcribe-2.0');
+    expect(resolveWireSttModel('grok-voice-transcribe-1.0')).toBe('grok-voice-transcribe-1.0');
+    expect(resolveWireSttModel(GROK_COM_STT_MODEL)).toBe(GROK_COM_STT_MODEL);
+    expect(resolveWireSttModel('grok-voice-transcribe-3.0')).toBe('grok-voice-transcribe-3.0');
+  });
+});
+
+describe('resolveTurnSttModel', () => {
+  it('sends Fast on the grok.com transport regardless of the stored API model', () => {
+    expect(
+      resolveTurnSttModel({
+        sttTransport: 'grok-com',
+        sttModel: 'grok-voice-transcribe-1.0',
+      }),
+    ).toBe(GROK_COM_STT_MODEL);
+  });
+
+  it('sends the pinned API slug on the api transport', () => {
+    expect(
+      resolveTurnSttModel({
+        sttTransport: 'api',
+        sttModel: 'grok-voice-transcribe-1.0',
+      }),
+    ).toBe('grok-voice-transcribe-1.0');
+  });
+
+  it('does not send Fast at api.x.ai even if the leftover slug is still in sttModel', () => {
+    expect(resolveTurnSttModel({ sttTransport: 'api', sttModel: GROK_COM_STT_MODEL })).toBe(
+      DEFAULT_STT_MODEL,
+    );
   });
 });

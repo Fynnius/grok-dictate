@@ -7,7 +7,7 @@
 
 Hold `Fn`, speak, release — the transcript is typed into whatever app has focus.
 
-Unofficial menu-bar dictation for macOS. Standard dictation uses the public [xAI streaming speech-to-text API](https://docs.x.ai/developers/model-capabilities/audio/speech-to-text) with an xAI API key or a Grok CLI login; STT 2 Fast uses grok.com. Not affiliated with, endorsed by, or sponsored by xAI.
+Unofficial menu-bar dictation for macOS. The xAI API path uses the public [streaming speech-to-text API](https://docs.x.ai/developers/model-capabilities/audio/speech-to-text) with an xAI API key or a Grok CLI login (Transcribe 2.0 by default, 1.0 pin-able). grok.com is a separate path for STT 2 Fast. Not affiliated with, endorsed by, or sponsored by xAI.
 
 <p align="center">
   <img src="docs/demo.gif" alt="Hold Fn to dictate — the transcript is typed at the cursor" width="800" />
@@ -28,7 +28,7 @@ It is never _read_. There is no snapshot and no restore, deliberately: reading t
 
 - macOS on Apple Silicon
 - Node.js 20 or newer (to build from source)
-- An [xAI API key](https://console.x.ai/team/default/api-keys), a logged-in [Grok CLI](https://docs.x.ai), **or** a grok.com login (STT 2 Fast)
+- An [xAI API key](https://console.x.ai/team/default/api-keys), a logged-in [Grok CLI](https://docs.x.ai), **or** a grok.com login if you want STT 2 Fast
 - Microphone, Accessibility, and Input Monitoring permissions
 
 ## Install
@@ -45,7 +45,7 @@ On macOS Sequoia and later you will see **“Grok Dictate Not Opened”** with o
 
 That is Apple’s supported path for an app that is not Developer ID signed and notarized. After the first exception, double-clicking works. Details: [docs/permissions.md](docs/permissions.md).
 
-On first launch a **Sign in** window opens for an xAI API key. If you already use the Grok CLI, Grok Dictate can reuse that login and skip the window. grok.com is a third method, under Settings → Account, and is what STT 2 Fast needs.
+On first launch a **Sign in** window opens for an xAI API key. If you already use the Grok CLI, Grok Dictate can reuse that login and skip the window. grok.com is a third method, under Settings → Account, and is what **Dictation via → grok.com** (STT 2 Fast) needs.
 
 ### From source
 
@@ -90,10 +90,10 @@ If `Fn` does nothing, the menu bar says so and offers a shortcut to the Accessib
 Three independent logins:
 
 1. An xAI API key pasted in the Sign in window (macOS Keychain via Electron `safeStorage`)
-2. A grok.com session (Settings → Account), used only by STT 2 Fast
+2. A grok.com session (Settings → Account), used only when Dictation via is grok.com
 3. A Grok CLI login in `~/.grok/auth.json` (`grok login`)
 
-Dictation uses a stored API key first, then `XAI_API_KEY`, then the Grok CLI file. grok.com is not on that list.
+The xAI API path uses a stored API key first, then `XAI_API_KEY`, then the Grok CLI file. grok.com is not on that list — Settings → Dictation via chooses the socket.
 
 This app never _itself_ refreshes a Grok CLI token — doing that from a second client can invalidate the CLI login. When the CLI token is close to expiry, Grok Dictate runs `grok models` and lets the CLI renew its own file.
 

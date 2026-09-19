@@ -41,7 +41,7 @@
 
 import type { ClientRequest, IncomingHttpHeaders, IncomingMessage } from 'node:http';
 import { WebSocket, type RawData } from 'ws';
-import { resolveWireSttModel } from '@contracts/config.js';
+import { DEFAULT_STT_MODEL, isGrokComSttModel, resolveWireSttModel } from '@contracts/config.js';
 import type {
   AuthPort,
   Bearer,
@@ -355,8 +355,8 @@ class SttTurnImpl implements SttTurn {
   /* ---------------- connect ---------------- */
 
   async #begin(): Promise<void> {
-    const wireModel = resolveWireSttModel(this.#options.model ?? 'grok-stt');
-    if (wireModel === 'grok-stt-2-fast') {
+    const wireModel = resolveWireSttModel(this.#options.model ?? DEFAULT_STT_MODEL);
+    if (isGrokComSttModel(wireModel)) {
       const cookieHeader = await this.#deps.grokCom?.getCookieHeader();
       if (this.#terminal) return;
       if (cookieHeader === undefined || cookieHeader === null || cookieHeader.length === 0) {
@@ -364,7 +364,7 @@ class SttTurnImpl implements SttTurn {
           appError(
             'auth_missing',
             'Sign in to grok.com to use STT 2 Fast.',
-            'Settings → Speech model → Sign in to grok.com.',
+            'Settings → Account → grok.com.',
           ),
         );
         return;
@@ -418,7 +418,7 @@ class SttTurnImpl implements SttTurn {
       // only tuning parameters and keyterms.
       url,
       attempt: this.#attempt,
-      model: resolveWireSttModel(this.#options.model ?? 'grok-stt'),
+      model: resolveWireSttModel(this.#options.model ?? DEFAULT_STT_MODEL),
       auth: auth.kind,
     });
 

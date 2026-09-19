@@ -36,7 +36,7 @@
  * - Panel `'stats'` and `get-stats` invoke: aggregates only, no transcripts.
  * - `open-window` accepts `'stats'`.
  *
- * ## grok.com session (STT 2 Fast)
+ * ## grok.com session (Dictation via grok.com / STT 2 Fast)
  *
  * - `open-window` accepts `'grok-com-signin'`.
  * - `grok-com-updated` / `get-grok-com-status` / `grok-com-sign-out` carry

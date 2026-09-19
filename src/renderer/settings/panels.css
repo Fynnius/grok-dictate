@@ -585,6 +585,8 @@ button.icon:focus-visible {
 .card-row .control {
   display: inline-flex;
   align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 7px;
   flex: none;
 }

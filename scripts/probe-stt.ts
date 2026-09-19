@@ -19,6 +19,7 @@
  *   npx tsx scripts/probe-stt.ts --wav path/to/clip.wav --language de
  *   npx tsx scripts/probe-stt.ts --wav … --end finalize --endpointing 50
  *   npx tsx scripts/probe-stt.ts --wav … --keyterm kubectl --keyterm Vitest
+ *   npx tsx scripts/probe-stt.ts --wav … --model grok-voice-transcribe-2.0
  *   npx tsx scripts/probe-stt.ts --wav … --model grok-stt-2-fast
  *
  * Auth: `XAI_API_KEY`, or a logged-in Grok CLI (`~/.grok/auth.json`).

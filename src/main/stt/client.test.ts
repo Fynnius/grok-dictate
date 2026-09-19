@@ -211,6 +211,15 @@ describe('the connection', () => {
     expect(url.searchParams.get('endpointing')).toBe('50');
     expect(url.searchParams.get('language')).toBe('de');
     expect(url.searchParams.getAll('keyterm')).toEqual(['kubectl', 'Vitest']);
+    expect(url.searchParams.get('model')).toBe('grok-voice-transcribe-2.0');
+  });
+
+  it('sends grok-voice-transcribe-1.0 on the API socket when asked', async () => {
+    const { handlers } = start({ model: 'grok-voice-transcribe-1.0' });
+    await waitFor(() => handlers.ready > 0);
+    const url = new URL(server.requests[0]?.url ?? '', 'ws://x');
+    expect(url.searchParams.get('model')).toBe('grok-voice-transcribe-1.0');
+    expect(server.requests[0]?.headers.authorization).toMatch(/^Bearer /);
   });
 
   it('reports an auth failure through onError, with the hint intact', async () => {

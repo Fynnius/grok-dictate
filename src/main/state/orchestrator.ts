@@ -23,7 +23,7 @@ import type {
   TrayPort,
 } from '@contracts/ports.js';
 import type { AppSnapshot, HudView } from '@contracts/events.js';
-import { resolveWireLanguage } from '@contracts/config.js';
+import { resolveTurnSttModel, resolveWireLanguage } from '@contracts/config.js';
 import { BYTES_PER_SECOND, MAX_RECORDING_MS } from '@shared/constants.js';
 import { systemLanguageSubtag } from '@shared/env.js';
 import { sameHudView } from '@shared/hud-view.js';
@@ -334,7 +334,7 @@ export class Orchestrator {
             endpointingMs: cfg.endpointingMs,
             keyterms: cfg.keyterms,
             useFinalize: cfg.useFinalize,
-            model: cfg.sttModel,
+            model: resolveTurnSttModel(cfg),
           },
           {
             onReady: () => {

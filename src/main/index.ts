@@ -30,7 +30,7 @@ import {
   type MainToRenderer,
   type RendererToMain,
 } from '@contracts/events.js';
-import { AppConfigSchema, resolveWireLanguage } from '@contracts/config.js';
+import { AppConfigSchema, resolveTurnSttModel, resolveWireLanguage } from '@contracts/config.js';
 import { addLogSink, consoleSink, createLogger, setLogLevel } from '@shared/logger.js';
 import { appError } from '@shared/result.js';
 import { STATS_ROW_CAP, aggregateStats } from '@shared/stats.js';
@@ -429,7 +429,7 @@ function main(): void {
               endpointingMs: cfg.endpointingMs,
               keyterms: cfg.keyterms,
               useFinalize: cfg.useFinalize,
-              model: cfg.sttModel,
+              model: resolveTurnSttModel(cfg),
               repairSeams: cfg.repairSeams,
             });
             if (!result.ok) {
