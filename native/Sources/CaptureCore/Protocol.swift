@@ -74,8 +74,53 @@ public enum CaptureErrorCode: String, Sendable {
     case audioPermission = "audio_permission"
 }
 
+/// The input device `start()` actually opened, read from CoreAudio once the
+/// hardware is up. Diagnostic only — every field is independently optional
+/// because a property read can fail without the capture itself having
+/// failed, and the main process must still be able to correlate a slow
+/// `first_pcm_main` with *something* even when only one field came back.
+///
+/// `transport` is a pre-bucketed string (`"built_in"`, `"bluetooth"`,
+/// `"bluetooth_le"`, `"usb"`, `"aggregate"`, `"virtual"`, or `"unknown"` for
+/// anything CoreAudio reports outside that list) rather than the raw
+/// `kAudioDevicePropertyTransportType` code, so this module stays free of
+/// CoreAudio (see Package.swift) and the TypeScript side never has to know
+/// the FourCharCode values.
+public struct CaptureDeviceInfo: Sendable, Equatable {
+    public let name: String?
+    public let uid: String?
+    public let transport: String?
+    public let sampleRateHz: Double?
+
+    public init(name: String?, uid: String?, transport: String?, sampleRateHz: Double?) {
+        self.name = name
+        self.uid = uid
+        self.transport = transport
+        self.sampleRateHz = sampleRateHz
+    }
+}
+
+/// Bucketing for `kAudioDevicePropertyTransportType`, pulled out as a pure
+/// function (raw `UInt32` in, `String` out) so `CaptureCoreTests` can cover
+/// every case without linking CoreAudio. The raw values below are the
+/// `kAudioDeviceTransportType*` FourCharCodes from `CoreAudio/AudioHardwareBase.h`,
+/// restated as integers rather than imported.
+public enum CaptureDeviceTransportBucket {
+    public static func bucket(rawTransportType: UInt32) -> String {
+        switch rawTransportType {
+        case 1_651_274_862: return "built_in"  // 'bltn'
+        case 1_651_275_109: return "bluetooth"  // 'blue'
+        case 1_651_271_009: return "bluetooth_le"  // 'blea'
+        case 1_970_496_032: return "usb"  // 'usb '
+        case 1_735_554_416: return "aggregate"  // 'grup'
+        case 1_986_622_068: return "virtual"  // 'virt'
+        default: return "unknown"
+        }
+    }
+}
+
 public enum CaptureFrame: Sendable, Equatable {
-    case started(sessionId: String, actualSampleRate: Int)
+    case started(sessionId: String, actualSampleRate: Int, device: CaptureDeviceInfo? = nil)
     case chunk(sessionId: String, pcm: Data)
     case level(sessionId: String, level: Double)
     case drained(sessionId: String)
@@ -85,10 +130,13 @@ public enum CaptureFrame: Sendable, Equatable {
     public func encoded() -> String {
         var fields: [(String, String)] = []
         switch self {
-        case let .started(sessionId, actualSampleRate):
+        case let .started(sessionId, actualSampleRate, device):
             fields.append(("type", Self.json("started")))
             fields.append(("sessionId", Self.json(sessionId)))
             fields.append(("actualSampleRate", String(actualSampleRate)))
+            if let device, let encodedDevice = Self.jsonDevice(device) {
+                fields.append(("device", encodedDevice))
+            }
         case let .chunk(sessionId, pcm):
             fields.append(("type", Self.json("chunk")))
             fields.append(("sessionId", Self.json(sessionId)))
@@ -141,6 +189,39 @@ public enum CaptureFrame: Sendable, Equatable {
             return "0"
         }
         return literal
+    }
+
+    /// Unclamped, unlike `jsonNumber` (built for the 0...1 level). A
+    /// non-finite rate should not happen — callers already guard it — but a
+    /// bad read must still produce valid JSON rather than corrupt the line.
+    private static func jsonRawNumber(_ value: Double) -> String {
+        guard value.isFinite else { return "0" }
+        guard
+            let data = try? JSONSerialization.data(
+                withJSONObject: value,
+                options: [.fragmentsAllowed]
+            ),
+            let literal = String(data: data, encoding: .utf8)
+        else {
+            return "0"
+        }
+        return literal
+    }
+
+    /// `nil` when every field of `device` is `nil`, so a device that
+    /// CoreAudio could not describe at all does not add an empty `{}` to the
+    /// line.
+    private static func jsonDevice(_ device: CaptureDeviceInfo) -> String? {
+        var fields: [(String, String)] = []
+        if let name = device.name { fields.append(("name", json(name))) }
+        if let uid = device.uid { fields.append(("uid", json(uid))) }
+        if let transport = device.transport { fields.append(("transport", json(transport))) }
+        if let sampleRateHz = device.sampleRateHz {
+            fields.append(("sampleRateHz", jsonRawNumber(sampleRateHz)))
+        }
+        guard !fields.isEmpty else { return nil }
+        let body = fields.map { "\(json($0.0)):\($0.1)" }.joined(separator: ",")
+        return "{\(body)}"
     }
 }
 

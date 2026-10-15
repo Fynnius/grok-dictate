@@ -48,6 +48,66 @@ struct CaptureProtocolTests {
         #expect(object["type"] as? String == "started")
         #expect(object["sessionId"] as? String == "s1")
         #expect(object["actualSampleRate"] as? Int == 16_000)
+        // No device was supplied: backward compatible with a decoder that
+        // has never heard of the field, so it is left off entirely rather
+        // than sent as `null`.
+        #expect(object["device"] == nil)
+    }
+
+    @Test("started carries the device when CoreAudio could describe it")
+    func startedWithDevice() throws {
+        let device = CaptureDeviceInfo(
+            name: "AirPods Pro",
+            uid: "BuiltInMicrophoneDevice",
+            transport: "bluetooth",
+            sampleRateHz: 48_000
+        )
+        let line = CaptureFrame.started(
+            sessionId: "s1", actualSampleRate: 16_000, device: device
+        ).encoded()
+        let object = try decode(line)
+        let encodedDevice = try #require(object["device"] as? [String: Any])
+        #expect(encodedDevice["name"] as? String == "AirPods Pro")
+        #expect(encodedDevice["uid"] as? String == "BuiltInMicrophoneDevice")
+        #expect(encodedDevice["transport"] as? String == "bluetooth")
+        #expect((encodedDevice["sampleRateHz"] as? NSNumber)?.doubleValue == 48_000)
+    }
+
+    @Test("a device with every field nil is omitted rather than sent as {}")
+    func startedWithEmptyDevice() throws {
+        let device = CaptureDeviceInfo(name: nil, uid: nil, transport: nil, sampleRateHz: nil)
+        let line = CaptureFrame.started(
+            sessionId: "s1", actualSampleRate: 16_000, device: device
+        ).encoded()
+        let object = try decode(line)
+        #expect(object["device"] == nil)
+    }
+
+    @Test("a device with only some fields known omits the rest")
+    func startedWithPartialDevice() throws {
+        let device = CaptureDeviceInfo(name: nil, uid: "uid-1", transport: nil, sampleRateHz: nil)
+        let line = CaptureFrame.started(
+            sessionId: "s1", actualSampleRate: 16_000, device: device
+        ).encoded()
+        let object = try decode(line)
+        let encodedDevice = try #require(object["device"] as? [String: Any])
+        #expect(encodedDevice["uid"] as? String == "uid-1")
+        #expect(encodedDevice["name"] == nil)
+        #expect(encodedDevice["transport"] == nil)
+        #expect(encodedDevice["sampleRateHz"] == nil)
+    }
+
+    @Test("transport types bucket to the categories W0 cares about, and anything else is unknown")
+    func transportBucketing() {
+        #expect(CaptureDeviceTransportBucket.bucket(rawTransportType: 1_651_274_862) == "built_in")
+        #expect(CaptureDeviceTransportBucket.bucket(rawTransportType: 1_651_275_109) == "bluetooth")
+        #expect(CaptureDeviceTransportBucket.bucket(rawTransportType: 1_651_271_009) == "bluetooth_le")
+        #expect(CaptureDeviceTransportBucket.bucket(rawTransportType: 1_970_496_032) == "usb")
+        #expect(CaptureDeviceTransportBucket.bucket(rawTransportType: 1_735_554_416) == "aggregate")
+        #expect(CaptureDeviceTransportBucket.bucket(rawTransportType: 1_986_622_068) == "virtual")
+        // Thunderbolt, FireWire, PCI, DisplayPort, AVB, and anything future.
+        #expect(CaptureDeviceTransportBucket.bucket(rawTransportType: 0) == "unknown")
+        #expect(CaptureDeviceTransportBucket.bucket(rawTransportType: UInt32.max) == "unknown")
     }
 
     @Test("chunk round-trips PCM as base64")

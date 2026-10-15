@@ -108,7 +108,16 @@ final class CaptureApp {
                     self.emit(.level(sessionId: sessionId, level: chunk.level))
                 }
             }
-            emit(.started(sessionId: sessionId, actualSampleRate: sampleRate))
+            // After `engine.start()`, not before: the point is which device is
+            // actually open for this take, and a route change between prepare
+            // and start must be reflected.
+            emit(
+                .started(
+                    sessionId: sessionId,
+                    actualSampleRate: sampleRate,
+                    device: InputDeviceInfo.current()
+                )
+            )
         } catch let error as CaptureEngine.OpenError {
             self.sessionId = nil
             emit(
