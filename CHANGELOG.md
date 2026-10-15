@@ -10,6 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Settings → Dictation splits “where it talks” from “which model”.** _Dictation via_ is xAI API or grok.com. The API path pins [Voice Transcribe 2.0](https://docs.x.ai/developers/model-capabilities/audio/speech-to-text) (1.0 stays selectable). grok.com is still STT 2 Fast, not a third API slug. Existing `grok-stt` configs become a 2.0 pin; existing Fast configs become Dictation via grok.com. Unknown model slugs are kept and sent, not rewritten to the default.
+- **Secure Input says who is holding it.** When a password field, a password manager or Terminal's Secure Keyboard Entry turns Secure Input on, macOS disables every event tap and `Fn` goes dead. The tray row and the pill used to say only "Blocked"; they now name the app — "Secure Input is on in Terminal" — when macOS reports it, and point at Terminal ▸ Secure Keyboard Entry when that is the culprit.
+- **Each take logs which microphone it opened** — name, transport (built-in, Bluetooth, USB, …) and sample rate — on the `device_open` and `summary` timing lines. About one hold in five took 2–4 s from `Fn` to the first audio, and speech in that gap is never recorded; this is what will say whether a Bluetooth headset switching profiles is the cause.
+- Electron 43.7.11 (Chromium security fixes; the grok.com session runs inside it), Vite 8 / electron-vite 6, and the rest of the toolchain to current minors. TypeScript 7, Vitest 5 and jsdom 30 are held back: typescript-eslint does not support TS 7 yet, and the other two need Node 22.
+
+### Fixed
+
+- **A dictation in the last minute of a Grok CLI login no longer fails.** Grok CLI 1.0.52 only refreshes a token once it has actually expired, so the app's renewal four minutes early did nothing — while logging "renewed automatically" each time — and the app then refused the still-valid token for its final 60 s. Renewal now runs at expiry, only an expiry that actually moved counts as a renewal, and a token that has not expired is used: the bearer is only presented once, when the socket connects.
+- **The Swift helper builds on Xcode 27.** `native/build.sh` and `native/test.sh` failed on a new weak-capture diagnostic; `native/test.sh` also runs outside the iCloud-synced tree now, where `codesign` refused its test bundles.
 
 ## [0.4.0] — 2026-09-12
 
