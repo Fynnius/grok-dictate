@@ -14,6 +14,12 @@
 /// property read is independently best-effort: a device that cannot be
 /// described at all yields `nil` from `current()`, never a thrown error —
 /// this must not be able to turn a successful `start()` into a failed one.
+///
+/// Deliberately does not query the device's name or UID: `main.log` gets
+/// pasted into public GitHub issues, and a Bluetooth UID embeds the device's
+/// MAC address while a name is often personal ("Fynn's AirPods"). The
+/// transport bucket and nominal sample rate answer the diagnostic question
+/// without that risk.
 import AudioToolbox
 import CaptureCore
 import CoreAudio
@@ -23,8 +29,6 @@ enum InputDeviceInfo {
     static func current() -> CaptureDeviceInfo? {
         guard let device = defaultInputDevice() else { return nil }
         return CaptureDeviceInfo(
-            name: stringProperty(device, selector: kAudioObjectPropertyName),
-            uid: stringProperty(device, selector: kAudioDevicePropertyDeviceUID),
             transport: transportBucket(device),
             sampleRateHz: nominalSampleRate(device)
         )
@@ -41,22 +45,6 @@ enum InputDeviceInfo {
         let status = AudioObjectGetPropertyData(
             AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &device)
         return status == noErr && device != kAudioObjectUnknown ? device : nil
-    }
-
-    private static func stringProperty(_ device: AudioDeviceID, selector: AudioObjectPropertySelector) -> String? {
-        var address = AudioObjectPropertyAddress(
-            mSelector: selector,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        var value: Unmanaged<CFString>?
-        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
-        let status = AudioObjectGetPropertyData(device, &address, 0, nil, &size, &value)
-        guard status == noErr, let value else { return nil }
-        // GetPropertyData copies the CFString into our slot without
-        // transferring +1; unretained is the matching take (same pattern as
-        // `grok-dictate-helper/OutputMute.swift`'s `coreAudioUID`).
-        return value.takeUnretainedValue() as String
     }
 
     private static func nominalSampleRate(_ device: AudioDeviceID) -> Double? {

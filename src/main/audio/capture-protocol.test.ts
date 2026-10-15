@@ -43,7 +43,7 @@ describe('capture protocol', () => {
         type: 'started',
         sessionId: 's1',
         actualSampleRate: 16_000,
-        device: { name: 'AirPods Pro', uid: 'uid-1', transport: 'bluetooth', sampleRateHz: 48_000 },
+        device: { transport: 'bluetooth', sampleRateHz: 48_000 },
       }),
     );
     expect(started).toEqual({
@@ -52,7 +52,32 @@ describe('capture protocol', () => {
         type: 'started',
         sessionId: 's1',
         actualSampleRate: 16_000,
-        device: { name: 'AirPods Pro', uid: 'uid-1', transport: 'bluetooth', sampleRateHz: 48_000 },
+        device: { transport: 'bluetooth', sampleRateHz: 48_000 },
+      },
+    });
+  });
+
+  it('ignores name and uid from an older binary rather than parsing or carrying them', () => {
+    const started = parseCaptureFrame(
+      JSON.stringify({
+        type: 'started',
+        sessionId: 's1',
+        actualSampleRate: 16_000,
+        device: {
+          name: "Fynn's AirPods",
+          uid: 'uid-with-a-mac-address',
+          transport: 'bluetooth',
+          sampleRateHz: 48_000,
+        },
+      }),
+    );
+    expect(started).toEqual({
+      ok: true,
+      value: {
+        type: 'started',
+        sessionId: 's1',
+        actualSampleRate: 16_000,
+        device: { transport: 'bluetooth', sampleRateHz: 48_000 },
       },
     });
   });
@@ -63,7 +88,7 @@ describe('capture protocol', () => {
         type: 'started',
         sessionId: 's1',
         actualSampleRate: 16_000,
-        device: { uid: 'uid-1', transport: 'thunderbolt' },
+        device: { sampleRateHz: 48_000, transport: 'thunderbolt' },
       }),
     );
     expect(partial).toEqual({
@@ -72,7 +97,7 @@ describe('capture protocol', () => {
         type: 'started',
         sessionId: 's1',
         actualSampleRate: 16_000,
-        device: { uid: 'uid-1', transport: 'unknown' },
+        device: { sampleRateHz: 48_000, transport: 'unknown' },
       },
     });
 
@@ -119,7 +144,7 @@ describe('capture protocol', () => {
         type: 'started',
         sessionId: 's1',
         actualSampleRate: 16_000,
-        device: { name: 'MacBook Pro Microphone', transport: 'built_in' },
+        device: { transport: 'built_in' },
       }),
     );
     expect(frame.ok).toBe(true);
@@ -128,7 +153,7 @@ describe('capture protocol', () => {
       type: 'capture-started',
       sessionId: 's1',
       actualSampleRate: 16_000,
-      device: { name: 'MacBook Pro Microphone', transport: 'built_in' },
+      device: { transport: 'built_in' },
     });
   });
 

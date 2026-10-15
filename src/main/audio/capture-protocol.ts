@@ -166,14 +166,17 @@ const KNOWN_TRANSPORTS = new Set<CaptureDeviceTransport>([
  * the whole `started` frame, it is diagnostic. `undefined` when `device` is
  * absent, not an object, or an object with nothing usable inside it — the
  * caller then omits the key entirely rather than carrying an empty `{}`.
+ *
+ * Only reads `transport` and `sampleRateHz` — `CaptureDeviceInfo` deliberately
+ * has no `name` or `uid` (see `contracts/events.ts`). An older binary may
+ * still send those keys; they fall through unread rather than being parsed
+ * and logged.
  */
 function parseDeviceField(object: Record<string, unknown>): CaptureDeviceInfo | undefined {
   const raw = object['device'];
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
   const record = raw as Record<string, unknown>;
 
-  const name = stringField(record, 'name');
-  const uid = stringField(record, 'uid');
   const rawTransport = stringField(record, 'transport');
   const transport =
     rawTransport === null
@@ -186,8 +189,6 @@ function parseDeviceField(object: Record<string, unknown>): CaptureDeviceInfo | 
   // `exactOptionalPropertyTypes`: an absent field must be left out of the
   // object, not set to `undefined`, so each one is spread in conditionally.
   const device: CaptureDeviceInfo = {
-    ...(name !== null ? { name } : {}),
-    ...(uid !== null ? { uid } : {}),
     ...(transport !== null ? { transport } : {}),
     ...(sampleRateHz !== null ? { sampleRateHz } : {}),
   };

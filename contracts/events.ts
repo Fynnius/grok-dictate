@@ -363,10 +363,14 @@ export type CaptureDeviceTransport =
  * `grok-dictate-capture`'s `started` frame. Every field is independently
  * optional — a CoreAudio property read can fail on its own without the
  * capture itself having failed.
+ *
+ * Deliberately has no `name` or `uid`: `main.log` gets pasted into public
+ * GitHub issues, a Bluetooth device's UID embeds its MAC address, and a
+ * device name is often personal ("Fynn's AirPods"). `transport` +
+ * `sampleRateHz` fully serve the diagnostic purpose (was a slow
+ * `first_pcm_main` a Bluetooth HFP switch?) without that risk.
  */
 export interface CaptureDeviceInfo {
-  readonly name?: string;
-  readonly uid?: string;
   readonly transport?: CaptureDeviceTransport;
   readonly sampleRateHz?: number;
 }

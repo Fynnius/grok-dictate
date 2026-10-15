@@ -80,6 +80,12 @@ public enum CaptureErrorCode: String, Sendable {
 /// failed, and the main process must still be able to correlate a slow
 /// `first_pcm_main` with *something* even when only one field came back.
 ///
+/// Deliberately has no `name` or `uid`: `main.log` gets pasted into public
+/// GitHub issues, a Bluetooth device's UID embeds its MAC address, and a
+/// device name is often personal ("Fynn's AirPods"). `transport` +
+/// `sampleRateHz` fully answer the question this exists for (was a slow
+/// `first_pcm_main` a Bluetooth HFP switch?) without carrying that risk.
+///
 /// `transport` is a pre-bucketed string (`"built_in"`, `"bluetooth"`,
 /// `"bluetooth_le"`, `"usb"`, `"aggregate"`, `"virtual"`, or `"unknown"` for
 /// anything CoreAudio reports outside that list) rather than the raw
@@ -87,14 +93,10 @@ public enum CaptureErrorCode: String, Sendable {
 /// CoreAudio (see Package.swift) and the TypeScript side never has to know
 /// the FourCharCode values.
 public struct CaptureDeviceInfo: Sendable, Equatable {
-    public let name: String?
-    public let uid: String?
     public let transport: String?
     public let sampleRateHz: Double?
 
-    public init(name: String?, uid: String?, transport: String?, sampleRateHz: Double?) {
-        self.name = name
-        self.uid = uid
+    public init(transport: String?, sampleRateHz: Double?) {
         self.transport = transport
         self.sampleRateHz = sampleRateHz
     }
@@ -213,8 +215,6 @@ public enum CaptureFrame: Sendable, Equatable {
     /// line.
     private static func jsonDevice(_ device: CaptureDeviceInfo) -> String? {
         var fields: [(String, String)] = []
-        if let name = device.name { fields.append(("name", json(name))) }
-        if let uid = device.uid { fields.append(("uid", json(uid))) }
         if let transport = device.transport { fields.append(("transport", json(transport))) }
         if let sampleRateHz = device.sampleRateHz {
             fields.append(("sampleRateHz", jsonRawNumber(sampleRateHz)))

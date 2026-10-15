@@ -57,8 +57,6 @@ struct CaptureProtocolTests {
     @Test("started carries the device when CoreAudio could describe it")
     func startedWithDevice() throws {
         let device = CaptureDeviceInfo(
-            name: "AirPods Pro",
-            uid: "BuiltInMicrophoneDevice",
             transport: "bluetooth",
             sampleRateHz: 48_000
         )
@@ -67,15 +65,17 @@ struct CaptureProtocolTests {
         ).encoded()
         let object = try decode(line)
         let encodedDevice = try #require(object["device"] as? [String: Any])
-        #expect(encodedDevice["name"] as? String == "AirPods Pro")
-        #expect(encodedDevice["uid"] as? String == "BuiltInMicrophoneDevice")
         #expect(encodedDevice["transport"] as? String == "bluetooth")
         #expect((encodedDevice["sampleRateHz"] as? NSNumber)?.doubleValue == 48_000)
+        // No name or UID: a Bluetooth UID embeds the device's MAC address
+        // and main.log gets pasted into public GitHub issues.
+        #expect(encodedDevice["name"] == nil)
+        #expect(encodedDevice["uid"] == nil)
     }
 
     @Test("a device with every field nil is omitted rather than sent as {}")
     func startedWithEmptyDevice() throws {
-        let device = CaptureDeviceInfo(name: nil, uid: nil, transport: nil, sampleRateHz: nil)
+        let device = CaptureDeviceInfo(transport: nil, sampleRateHz: nil)
         let line = CaptureFrame.started(
             sessionId: "s1", actualSampleRate: 16_000, device: device
         ).encoded()
@@ -85,16 +85,14 @@ struct CaptureProtocolTests {
 
     @Test("a device with only some fields known omits the rest")
     func startedWithPartialDevice() throws {
-        let device = CaptureDeviceInfo(name: nil, uid: "uid-1", transport: nil, sampleRateHz: nil)
+        let device = CaptureDeviceInfo(transport: nil, sampleRateHz: 48_000)
         let line = CaptureFrame.started(
             sessionId: "s1", actualSampleRate: 16_000, device: device
         ).encoded()
         let object = try decode(line)
         let encodedDevice = try #require(object["device"] as? [String: Any])
-        #expect(encodedDevice["uid"] as? String == "uid-1")
-        #expect(encodedDevice["name"] == nil)
+        #expect((encodedDevice["sampleRateHz"] as? NSNumber)?.doubleValue == 48_000)
         #expect(encodedDevice["transport"] == nil)
-        #expect(encodedDevice["sampleRateHz"] == nil)
     }
 
     @Test("transport types bucket to the categories W0 cares about, and anything else is unknown")

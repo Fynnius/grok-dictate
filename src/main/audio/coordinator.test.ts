@@ -402,8 +402,6 @@ describe('messages from the renderer', () => {
     audio.start('s1', handlers);
 
     const device = {
-      name: 'AirPods Pro',
-      uid: 'uid-1',
       transport: 'bluetooth' as const,
       sampleRateHz: 48_000,
     };

@@ -162,10 +162,13 @@ function isSafeKey(key: string): boolean {
  * (`contracts/events.ts`'s `CaptureDeviceInfo`, restated loosely here so this
  * module does not import `@contracts` for one shape). Every field optional —
  * CoreAudio can fail to report any of them independently.
+ *
+ * Deliberately has no `name` or `uid`: `main.log` gets pasted into public
+ * GitHub issues, a Bluetooth UID embeds the device's MAC address, and a
+ * device name is often personal. See `CaptureDeviceInfo` in
+ * `contracts/events.ts`.
  */
 export interface TimingDeviceInfo {
-  readonly name?: string;
-  readonly uid?: string;
   readonly transport?: string;
   readonly sampleRateHz?: number;
 }
@@ -173,16 +176,11 @@ export interface TimingDeviceInfo {
 /**
  * `device_open`'s extra fields, and what `TimingSession.summaryFields` folds
  * in under the same keys — one mapping so the per-event line and the summary
- * line can never drift apart. `device_name` can still be dropped by
- * `looksLikeTranscript` if a device's own name happens to look sentence-like;
- * that is accepted as a side effect of a transcript-safety rule that was not
- * written with device names in mind, not something this channel works around.
+ * line can never drift apart.
  */
 export function deviceTimingFields(device: TimingDeviceInfo | null | undefined): TimingFields {
   if (device === null || device === undefined) return {};
   return {
-    device_name: device.name,
-    device_uid: device.uid,
     device_transport: device.transport,
     device_sample_rate_hz: device.sampleRateHz,
   };

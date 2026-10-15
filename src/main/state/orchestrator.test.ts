@@ -600,8 +600,6 @@ describe('W0 timing channel', () => {
     audio.buffer = new Uint8Array(64).fill(1);
     orchestrator.dispatch({ type: 'PTT_DOWN', ts: 1 });
     audio.handlers?.onStarted(16_000, {
-      name: 'AirPods Pro',
-      uid: 'uid-1',
       transport: 'bluetooth',
       sampleRateHz: 48_000,
     });
@@ -610,14 +608,10 @@ describe('W0 timing channel', () => {
 
     const joined = lines.join('\n');
     const deviceOpenLine = lines.find((l) => l.includes('event=device_open'));
-    expect(deviceOpenLine).toContain('device_name=AirPods_Pro');
-    expect(deviceOpenLine).toContain('device_uid=uid-1');
     expect(deviceOpenLine).toContain('device_transport=bluetooth');
     expect(deviceOpenLine).toContain('device_sample_rate_hz=48000');
 
     const summaryLine = lines.find((l) => l.includes('event=summary'));
-    expect(summaryLine).toContain('device_name=AirPods_Pro');
-    expect(summaryLine).toContain('device_uid=uid-1');
     expect(summaryLine).toContain('device_transport=bluetooth');
     expect(summaryLine).toContain('device_sample_rate_hz=48000');
     expect(joined).not.toContain('secret');

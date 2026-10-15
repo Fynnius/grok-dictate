@@ -240,8 +240,9 @@ export interface AudioHandlers {
   /** Fired once the device is genuinely open. `actualSampleRate` exists to
    *  check assumption 10.4 — that the AudioContext really runs at 16 kHz and
    *  is not double-resampling. `device` is the native adapter's diagnostic
-   *  (CoreAudio name/UID/transport/rate) for the 2026-09 slow-`device_open`
-   *  investigation; the Chromium fallback never has one. */
+   *  (CoreAudio transport/rate — deliberately no name or UID, see
+   *  `CaptureDeviceInfo`) for the 2026-09 slow-`device_open` investigation;
+   *  the Chromium fallback never has one. */
   onStarted(actualSampleRate: number, device?: CaptureDeviceInfo): void;
 }
 

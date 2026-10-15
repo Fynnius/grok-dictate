@@ -103,14 +103,10 @@ describe('formatTimingLine', () => {
   it('folds the device set on device_open into the summary line', () => {
     const session = new TimingSession('s1', 1_000);
     session.device = {
-      name: 'AirPods Pro',
-      uid: 'uid-1',
       transport: 'bluetooth',
       sampleRateHz: 48_000,
     };
     const summary = formatTimingLine('s1', 'summary', 0, session.summaryFields(1_000));
-    expect(summary).toContain('device_name=AirPods_Pro');
-    expect(summary).toContain('device_uid=uid-1');
     expect(summary).toContain('device_transport=bluetooth');
     expect(summary).toContain('device_sample_rate_hz=48000');
   });
@@ -129,10 +125,8 @@ describe('deviceTimingFields', () => {
   });
 
   it('maps each field under a device_ prefix, missing fields included as undefined', () => {
-    expect(deviceTimingFields({ uid: 'uid-1' })).toEqual({
-      device_name: undefined,
-      device_uid: 'uid-1',
-      device_transport: undefined,
+    expect(deviceTimingFields({ transport: 'bluetooth' })).toEqual({
+      device_transport: 'bluetooth',
       device_sample_rate_hz: undefined,
     });
   });

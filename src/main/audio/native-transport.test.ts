@@ -155,10 +155,10 @@ describe('NativeCaptureTransport', () => {
       type: 'started',
       sessionId: 's1',
       actualSampleRate: 16_000,
-      device: { name: 'AirPods Pro', transport: 'bluetooth' },
+      device: { transport: 'bluetooth' },
     });
 
-    expect(handlers.devices).toEqual([{ name: 'AirPods Pro', transport: 'bluetooth' }]);
+    expect(handlers.devices).toEqual([{ transport: 'bluetooth' }]);
   });
 
   it('leaves device undefined when the frame does not carry one', () => {
