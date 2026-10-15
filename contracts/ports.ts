@@ -28,7 +28,7 @@
  */
 
 import type { AppConfig, HotkeyBindings, SttModel } from './config.js';
-import type { HistoryEntry, HudView, SessionState } from './events.js';
+import type { CaptureDeviceInfo, HistoryEntry, HudView, SessionState } from './events.js';
 import type { InsertDeclineReason, InsertRoute, InsertTier } from './helper-protocol.js';
 import type { AppError, Result } from '../src/shared/result.js';
 
@@ -229,8 +229,10 @@ export interface AudioHandlers {
   onDrained(): void;
   /** Fired once the device is genuinely open. `actualSampleRate` exists to
    *  check assumption 10.4 — that the AudioContext really runs at 16 kHz and
-   *  is not double-resampling. */
-  onStarted(actualSampleRate: number): void;
+   *  is not double-resampling. `device` is the native adapter's diagnostic
+   *  (CoreAudio name/UID/transport/rate) for the 2026-09 slow-`device_open`
+   *  investigation; the Chromium fallback never has one. */
+  onStarted(actualSampleRate: number, device?: CaptureDeviceInfo): void;
 }
 
 export interface AudioSourcePort {

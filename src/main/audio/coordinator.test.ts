@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { MainToRenderer, RendererToMain } from '@contracts/events.js';
+import type { CaptureDeviceInfo, MainToRenderer, RendererToMain } from '@contracts/events.js';
 import type { AudioHandlers } from '@contracts/ports.js';
 import { CHUNK_BYTES, SAMPLE_RATE_HZ } from '@shared/constants.js';
 import {
@@ -17,6 +17,7 @@ class Recorder implements AudioHandlers {
   readonly levels: number[] = [];
   readonly errors: AppError[] = [];
   readonly started: number[] = [];
+  readonly devices: (CaptureDeviceInfo | undefined)[] = [];
   drained = 0;
 
   onDrained(): void {
@@ -31,8 +32,9 @@ class Recorder implements AudioHandlers {
   onError(error: AppError): void {
     this.errors.push(error);
   }
-  onStarted(actualSampleRate: number): void {
+  onStarted(actualSampleRate: number, device?: CaptureDeviceInfo): void {
     this.started.push(actualSampleRate);
+    this.devices.push(device);
   }
 }
 
@@ -387,10 +389,33 @@ describe('messages from the renderer', () => {
     audio.handleRendererMessage({ type: 'capture-level', sessionId: 's1', level: 0.42 });
     expect(handlers.started).toEqual([16_000]);
     expect(handlers.levels).toEqual([0.42]);
+    expect(handlers.devices).toEqual([undefined]);
 
     const error = appError('audio_device', 'gone', 'plug it back in');
     audio.handleRendererMessage({ type: 'capture-error', sessionId: 's1', error });
     expect(handlers.errors).toEqual([error]);
+  });
+
+  it('forwards the native adapter device info from capture-started to onStarted', () => {
+    const audio = coordinator();
+    const handlers = new Recorder();
+    audio.start('s1', handlers);
+
+    const device = {
+      name: 'AirPods Pro',
+      uid: 'uid-1',
+      transport: 'bluetooth' as const,
+      sampleRateHz: 48_000,
+    };
+    audio.handleRendererMessage({
+      type: 'capture-started',
+      sessionId: 's1',
+      actualSampleRate: 16_000,
+      device,
+    });
+
+    expect(handlers.started).toEqual([16_000]);
+    expect(handlers.devices).toEqual([device]);
   });
 
   it('drops everything from a superseded session', () => {

@@ -158,6 +158,37 @@ function isSafeKey(key: string): boolean {
 }
 
 /**
+ * The input device the native capture adapter reported on `device_open`
+ * (`contracts/events.ts`'s `CaptureDeviceInfo`, restated loosely here so this
+ * module does not import `@contracts` for one shape). Every field optional —
+ * CoreAudio can fail to report any of them independently.
+ */
+export interface TimingDeviceInfo {
+  readonly name?: string;
+  readonly uid?: string;
+  readonly transport?: string;
+  readonly sampleRateHz?: number;
+}
+
+/**
+ * `device_open`'s extra fields, and what `TimingSession.summaryFields` folds
+ * in under the same keys — one mapping so the per-event line and the summary
+ * line can never drift apart. `device_name` can still be dropped by
+ * `looksLikeTranscript` if a device's own name happens to look sentence-like;
+ * that is accepted as a side effect of a transcript-safety rule that was not
+ * written with device names in mind, not something this channel works around.
+ */
+export function deviceTimingFields(device: TimingDeviceInfo | null | undefined): TimingFields {
+  if (device === null || device === undefined) return {};
+  return {
+    device_name: device.name,
+    device_uid: device.uid,
+    device_transport: device.transport,
+    device_sample_rate_hz: device.sampleRateHz,
+  };
+}
+
+/**
  * A string long enough and word-like enough that putting it on a timing line
  * would be logging what the user said. Lengths and short codes (`ax`, `en`)
  * pass; a sentence does not.
@@ -183,6 +214,8 @@ export class TimingSession {
   partials = 0;
   finals = 0;
   textLen = 0;
+  /** Set from `device_open`'s payload, folded into the summary line. */
+  device: TimingDeviceInfo | null = null;
 
   constructor(sessionId: string, startedAt: number) {
     this.sessionId = sessionId;
@@ -213,6 +246,7 @@ export class TimingSession {
       partials: this.partials,
       finals: this.finals,
       text_len: this.textLen,
+      ...deviceTimingFields(this.device),
     };
     for (const { event, elapsedMs } of this.marks) {
       if (event === 'summary') continue;

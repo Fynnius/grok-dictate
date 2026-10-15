@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import type { RendererToMain } from '@contracts/events.js';
+import type { CaptureDeviceInfo, RendererToMain } from '@contracts/events.js';
 import type { AudioHandlers } from '@contracts/ports.js';
 import { CHUNK_BYTES, SAMPLE_RATE_HZ } from '@shared/constants.js';
 import { createLogger } from '@shared/logger.js';
@@ -12,6 +12,7 @@ class Recorder implements AudioHandlers {
   readonly levels: number[] = [];
   readonly errors: AppError[] = [];
   readonly started: number[] = [];
+  readonly devices: (CaptureDeviceInfo | undefined)[] = [];
   drained = 0;
 
   onDrained(): void {
@@ -26,8 +27,9 @@ class Recorder implements AudioHandlers {
   onError(error: AppError): void {
     this.errors.push(error);
   }
-  onStarted(actualSampleRate: number): void {
+  onStarted(actualSampleRate: number, device?: CaptureDeviceInfo): void {
     this.started.push(actualSampleRate);
+    this.devices.push(device);
   }
 }
 
@@ -141,6 +143,33 @@ describe('NativeCaptureTransport', () => {
     expect(handlers.chunks).toHaveLength(1);
     expect(handlers.chunks[0]?.byteLength).toBe(CHUNK_BYTES);
     expect(handlers.levels).toEqual([0.4]);
+  });
+
+  it('carries the native adapter device from the child process frame to onStarted', () => {
+    const child = new FakeChild();
+    const { coordinator } = wire(() => child);
+    const handlers = new Recorder();
+    coordinator.start('s1', handlers);
+
+    child.emitFrame({
+      type: 'started',
+      sessionId: 's1',
+      actualSampleRate: 16_000,
+      device: { name: 'AirPods Pro', transport: 'bluetooth' },
+    });
+
+    expect(handlers.devices).toEqual([{ name: 'AirPods Pro', transport: 'bluetooth' }]);
+  });
+
+  it('leaves device undefined when the frame does not carry one', () => {
+    const child = new FakeChild();
+    const { coordinator } = wire(() => child);
+    const handlers = new Recorder();
+    coordinator.start('s1', handlers);
+
+    child.emitFrame({ type: 'started', sessionId: 's1', actualSampleRate: 16_000 });
+
+    expect(handlers.devices).toEqual([undefined]);
   });
 
   it('stop waits for drained from the process, not a local timer', () => {

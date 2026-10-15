@@ -590,6 +590,54 @@ describe('W0 timing channel', () => {
     expect(joined).not.toContain('secret words');
     expect(joined).not.toContain('must not leak');
   });
+
+  it('carries the native adapter device on device_open and folds it into the summary', () => {
+    const lines: string[] = [];
+    addLogSink((_line, record) => {
+      if (record.msg.startsWith('timing ')) lines.push(record.msg);
+    });
+    const { orchestrator, audio } = harness({ announceStart: false });
+    audio.buffer = new Uint8Array(64).fill(1);
+    orchestrator.dispatch({ type: 'PTT_DOWN', ts: 1 });
+    audio.handlers?.onStarted(16_000, {
+      name: 'AirPods Pro',
+      uid: 'uid-1',
+      transport: 'bluetooth',
+      sampleRateHz: 48_000,
+    });
+    orchestrator.dispatch({ type: 'PTT_UP', ts: 2 });
+    audio.drain();
+
+    const joined = lines.join('\n');
+    const deviceOpenLine = lines.find((l) => l.includes('event=device_open'));
+    expect(deviceOpenLine).toContain('device_name=AirPods_Pro');
+    expect(deviceOpenLine).toContain('device_uid=uid-1');
+    expect(deviceOpenLine).toContain('device_transport=bluetooth');
+    expect(deviceOpenLine).toContain('device_sample_rate_hz=48000');
+
+    const summaryLine = lines.find((l) => l.includes('event=summary'));
+    expect(summaryLine).toContain('device_name=AirPods_Pro');
+    expect(summaryLine).toContain('device_uid=uid-1');
+    expect(summaryLine).toContain('device_transport=bluetooth');
+    expect(summaryLine).toContain('device_sample_rate_hz=48000');
+    expect(joined).not.toContain('secret');
+  });
+
+  it('omits device_ fields from the summary when the adapter reported nothing', () => {
+    const lines: string[] = [];
+    addLogSink((_line, record) => {
+      if (record.msg.startsWith('timing ')) lines.push(record.msg);
+    });
+    const { orchestrator, audio } = harness();
+    audio.buffer = new Uint8Array(64).fill(1);
+    orchestrator.dispatch({ type: 'PTT_DOWN', ts: 1 });
+    orchestrator.dispatch({ type: 'PTT_UP', ts: 2 });
+    audio.drain();
+
+    const summaryLine = lines.find((l) => l.includes('event=summary'));
+    expect(summaryLine).toBeDefined();
+    expect(summaryLine).not.toContain('device_');
+  });
 });
 
 describe('STT model from config', () => {

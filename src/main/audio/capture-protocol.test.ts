@@ -37,6 +37,101 @@ describe('capture protocol', () => {
     expect(error.value).toMatchObject({ type: 'error', code: 'audio_permission' });
   });
 
+  it('parses a started frame with a full device', () => {
+    const started = parseCaptureFrame(
+      JSON.stringify({
+        type: 'started',
+        sessionId: 's1',
+        actualSampleRate: 16_000,
+        device: { name: 'AirPods Pro', uid: 'uid-1', transport: 'bluetooth', sampleRateHz: 48_000 },
+      }),
+    );
+    expect(started).toEqual({
+      ok: true,
+      value: {
+        type: 'started',
+        sessionId: 's1',
+        actualSampleRate: 16_000,
+        device: { name: 'AirPods Pro', uid: 'uid-1', transport: 'bluetooth', sampleRateHz: 48_000 },
+      },
+    });
+  });
+
+  it('tolerates a partial device, an unknown transport, and a missing device', () => {
+    const partial = parseCaptureFrame(
+      JSON.stringify({
+        type: 'started',
+        sessionId: 's1',
+        actualSampleRate: 16_000,
+        device: { uid: 'uid-1', transport: 'thunderbolt' },
+      }),
+    );
+    expect(partial).toEqual({
+      ok: true,
+      value: {
+        type: 'started',
+        sessionId: 's1',
+        actualSampleRate: 16_000,
+        device: { uid: 'uid-1', transport: 'unknown' },
+      },
+    });
+
+    const missing = parseCaptureFrame(
+      '{"type":"started","sessionId":"s1","actualSampleRate":16000}',
+    );
+    expect(missing).toEqual({
+      ok: true,
+      value: { type: 'started', sessionId: 's1', actualSampleRate: 16_000 },
+    });
+    if (!missing.ok) return;
+    expect('device' in missing.value).toBe(false);
+
+    const garbage = parseCaptureFrame(
+      JSON.stringify({
+        type: 'started',
+        sessionId: 's1',
+        actualSampleRate: 16_000,
+        device: 'not an object',
+      }),
+    );
+    expect(garbage).toEqual({
+      ok: true,
+      value: { type: 'started', sessionId: 's1', actualSampleRate: 16_000 },
+    });
+
+    const empty = parseCaptureFrame(
+      JSON.stringify({
+        type: 'started',
+        sessionId: 's1',
+        actualSampleRate: 16_000,
+        device: {},
+      }),
+    );
+    expect(empty).toEqual({
+      ok: true,
+      value: { type: 'started', sessionId: 's1', actualSampleRate: 16_000 },
+    });
+  });
+
+  it('carries device through to the capture-started renderer message', () => {
+    const frame = parseCaptureFrame(
+      JSON.stringify({
+        type: 'started',
+        sessionId: 's1',
+        actualSampleRate: 16_000,
+        device: { name: 'MacBook Pro Microphone', transport: 'built_in' },
+      }),
+    );
+    expect(frame.ok).toBe(true);
+    if (!frame.ok) return;
+    expect(captureFrameToRenderer(frame.value)).toEqual({
+      type: 'capture-started',
+      sessionId: 's1',
+      actualSampleRate: 16_000,
+      device: { name: 'MacBook Pro Microphone', transport: 'built_in' },
+    });
+  });
+
   it('treats malformed and unknown lines as failures, not throws', () => {
     expect(parseCaptureFrame('this is not json').ok).toBe(false);
     expect(parseCaptureFrame('[1,2,3]').ok).toBe(false);

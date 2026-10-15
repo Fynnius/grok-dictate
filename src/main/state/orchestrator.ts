@@ -33,6 +33,7 @@ import { CUE_SPECS } from '../sound/cues.js';
 import { assessSilenceGate, MIN_PTT_HOLD_MS, pcmDurationMs } from '@shared/silence-gate.js';
 import {
   TimingSession,
+  deviceTimingFields,
   formatTimingLine,
   timingEnabled,
   type TimingEvent,
@@ -275,7 +276,7 @@ export class Orchestrator {
           onLevel: (level) => this.dispatch({ type: 'LEVEL', sessionId, level }),
           onError: (error) => this.dispatch({ type: 'SESSION_ERROR', sessionId, error }),
           onDrained: () => this.#onDrained(sessionId),
-          onStarted: (actualSampleRate) => {
+          onStarted: (actualSampleRate, device) => {
             // A late `capture-started` after cancel or release must not play
             // the start cue into a session that is already over.
             if (this.#snapshot.ctx.sessionId !== sessionId) return;
@@ -283,8 +284,13 @@ export class Orchestrator {
             this.#captureOpen = true;
             // Assumption 10.4: verify the context really runs at 16 kHz rather
             // than resampling twice (device → 48 k → 16 k).
-            this.#log.info('capture started', { actualSampleRate });
-            this.#mark('device_open');
+            this.#log.info('capture started', { actualSampleRate, device });
+            // `device` rides this one mark so a slow `device_open` can be
+            // correlated with what was open (2026-09 Bluetooth HFP
+            // investigation); carried on the timing session too so it
+            // reaches the summary line, not just this one event.
+            if (this.#timing !== null) this.#timing.device = device ?? null;
+            this.#mark('device_open', deviceTimingFields(device));
             this.#flushStartCue();
           },
         });

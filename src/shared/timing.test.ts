@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { TIMING_EVENTS, TimingSession, formatTimingLine, timingEnabled } from './timing.js';
+import {
+  TIMING_EVENTS,
+  TimingSession,
+  deviceTimingFields,
+  formatTimingLine,
+  timingEnabled,
+} from './timing.js';
 
 const ORIGINAL = process.env.GROK_DICTATE_TIMING;
 
@@ -92,6 +98,43 @@ describe('formatTimingLine', () => {
     expect(session.mark('first_pcm_main', 80).first).toBe(false);
     expect(session.marks).toHaveLength(1);
     expect(session.marks[0]?.elapsedMs).toBe(40);
+  });
+
+  it('folds the device set on device_open into the summary line', () => {
+    const session = new TimingSession('s1', 1_000);
+    session.device = {
+      name: 'AirPods Pro',
+      uid: 'uid-1',
+      transport: 'bluetooth',
+      sampleRateHz: 48_000,
+    };
+    const summary = formatTimingLine('s1', 'summary', 0, session.summaryFields(1_000));
+    expect(summary).toContain('device_name=AirPods_Pro');
+    expect(summary).toContain('device_uid=uid-1');
+    expect(summary).toContain('device_transport=bluetooth');
+    expect(summary).toContain('device_sample_rate_hz=48000');
+  });
+
+  it('omits device fields entirely when no device was ever reported', () => {
+    const session = new TimingSession('s1', 1_000);
+    const summary = formatTimingLine('s1', 'summary', 0, session.summaryFields(1_000));
+    expect(summary).not.toContain('device_');
+  });
+});
+
+describe('deviceTimingFields', () => {
+  it('returns an empty object for null or undefined', () => {
+    expect(deviceTimingFields(null)).toEqual({});
+    expect(deviceTimingFields(undefined)).toEqual({});
+  });
+
+  it('maps each field under a device_ prefix, missing fields included as undefined', () => {
+    expect(deviceTimingFields({ uid: 'uid-1' })).toEqual({
+      device_name: undefined,
+      device_uid: 'uid-1',
+      device_transport: undefined,
+      device_sample_rate_hz: undefined,
+    });
   });
 });
 

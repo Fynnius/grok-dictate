@@ -6,7 +6,11 @@
  * learns which process produced the PCM.
  */
 
-import type { RendererToMain } from '@contracts/events.js';
+import type {
+  CaptureDeviceInfo,
+  CaptureDeviceTransport,
+  RendererToMain,
+} from '@contracts/events.js';
 import { appError, err, ok, type Result } from '@shared/result.js';
 import type { AppError } from '@shared/result.js';
 
@@ -16,7 +20,7 @@ export type AppToCapture =
   | { type: 'cancel'; sessionId: string };
 
 export type CaptureToApp =
-  | { type: 'started'; sessionId: string; actualSampleRate: number }
+  | { type: 'started'; sessionId: string; actualSampleRate: number; device?: CaptureDeviceInfo }
   | { type: 'chunk'; sessionId: string; pcm: string }
   | { type: 'level'; sessionId: string; level: number }
   | { type: 'drained'; sessionId: string }
@@ -60,7 +64,10 @@ export function parseCaptureFrame(line: string): Result<CaptureToApp> {
           appError('helper_protocol', 'started is missing sessionId or actualSampleRate', null),
         );
       }
-      return ok({ type: 'started', sessionId, actualSampleRate });
+      const device = parseDeviceField(object);
+      return device === undefined
+        ? ok({ type: 'started', sessionId, actualSampleRate })
+        : ok({ type: 'started', sessionId, actualSampleRate, device });
     }
     case 'chunk': {
       const sessionId = stringField(object, 'sessionId');
@@ -109,11 +116,18 @@ export function parseCaptureFrame(line: string): Result<CaptureToApp> {
 export function captureFrameToRenderer(frame: CaptureToApp): RendererToMain | null {
   switch (frame.type) {
     case 'started':
-      return {
-        type: 'capture-started',
-        sessionId: frame.sessionId,
-        actualSampleRate: frame.actualSampleRate,
-      };
+      return frame.device === undefined
+        ? {
+            type: 'capture-started',
+            sessionId: frame.sessionId,
+            actualSampleRate: frame.actualSampleRate,
+          }
+        : {
+            type: 'capture-started',
+            sessionId: frame.sessionId,
+            actualSampleRate: frame.actualSampleRate,
+            device: frame.device,
+          };
     case 'chunk': {
       const pcm = decodeBase64(frame.pcm);
       if (pcm === null) return null;
@@ -134,6 +148,50 @@ export function captureFrameToRenderer(frame: CaptureToApp): RendererToMain | nu
 
 export function captureError(frame: Extract<CaptureToApp, { type: 'error' }>): AppError {
   return appError(frame.code, frame.message, frame.hint.length > 0 ? frame.hint : null);
+}
+
+/** `started`'s `device`, documented in `contracts/events.ts`. */
+const KNOWN_TRANSPORTS = new Set<CaptureDeviceTransport>([
+  'built_in',
+  'bluetooth',
+  'bluetooth_le',
+  'usb',
+  'aggregate',
+  'virtual',
+  'unknown',
+]);
+
+/**
+ * Tolerant like every other field here: a malformed `device` must not fail
+ * the whole `started` frame, it is diagnostic. `undefined` when `device` is
+ * absent, not an object, or an object with nothing usable inside it — the
+ * caller then omits the key entirely rather than carrying an empty `{}`.
+ */
+function parseDeviceField(object: Record<string, unknown>): CaptureDeviceInfo | undefined {
+  const raw = object['device'];
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const record = raw as Record<string, unknown>;
+
+  const name = stringField(record, 'name');
+  const uid = stringField(record, 'uid');
+  const rawTransport = stringField(record, 'transport');
+  const transport =
+    rawTransport === null
+      ? null
+      : KNOWN_TRANSPORTS.has(rawTransport as CaptureDeviceTransport)
+        ? (rawTransport as CaptureDeviceTransport)
+        : 'unknown';
+  const sampleRateHz = numberField(record, 'sampleRateHz');
+
+  // `exactOptionalPropertyTypes`: an absent field must be left out of the
+  // object, not set to `undefined`, so each one is spread in conditionally.
+  const device: CaptureDeviceInfo = {
+    ...(name !== null ? { name } : {}),
+    ...(uid !== null ? { uid } : {}),
+    ...(transport !== null ? { transport } : {}),
+    ...(sampleRateHz !== null ? { sampleRateHz } : {}),
+  };
+  return Object.keys(device).length === 0 ? undefined : device;
 }
 
 function stringField(object: Record<string, unknown>, key: string): string | null {

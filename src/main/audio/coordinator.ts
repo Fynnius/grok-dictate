@@ -21,7 +21,12 @@
  * than something reached in normal use.
  */
 
-import type { CaptureTrackSettings, MainToRenderer, RendererToMain } from '@contracts/events.js';
+import type {
+  CaptureDeviceInfo,
+  CaptureTrackSettings,
+  MainToRenderer,
+  RendererToMain,
+} from '@contracts/events.js';
 import type { AudioHandlers, AudioSourcePort } from '@contracts/ports.js';
 import { CHUNK_BYTES, MAX_UTTERANCE_BUFFER_BYTES, SAMPLE_RATE_HZ } from '@shared/constants.js';
 import type { Logger } from '@shared/logger.js';
@@ -281,7 +286,12 @@ export class CaptureCoordinator implements AudioSourcePort {
       return true;
     }
     if (message.type === 'capture-started') {
-      this.#onStarted(message.sessionId, message.actualSampleRate, message.trackSettings);
+      this.#onStarted(
+        message.sessionId,
+        message.actualSampleRate,
+        message.trackSettings,
+        message.device,
+      );
       return true;
     }
     if (message.type === 'capture-error') {
@@ -323,6 +333,7 @@ export class CaptureCoordinator implements AudioSourcePort {
     sessionId: string,
     actualSampleRate: number,
     trackSettings?: CaptureTrackSettings,
+    device?: CaptureDeviceInfo,
   ): void {
     const session = this.#forSession(sessionId);
     if (session === null) return;
@@ -354,7 +365,7 @@ export class CaptureCoordinator implements AudioSourcePort {
       return;
     }
     session.started = true;
-    session.handlers.onStarted(actualSampleRate);
+    session.handlers.onStarted(actualSampleRate, device);
   }
 
   #onError(sessionId: string, error: AppError): void {

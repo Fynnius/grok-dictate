@@ -324,11 +324,46 @@ export type RendererToMain =
        */
       trackSettings?: CaptureTrackSettings;
       /**
+       * The input device `grok-dictate-capture` actually opened for this
+       * take, read from CoreAudio. Absent on the Chromium fallback (no
+       * CoreAudio in a renderer) and whenever the native adapter could not
+       * describe the device at all — never sent as an empty object.
+       *
+       * Diagnostic only, to correlate a slow `device_open` → `first_pcm_main`
+       * (docs/report-latency-ux-2026-08-22.md §W3) with the device in use —
+       * a Bluetooth headset switching to HFP is the suspected cause, and the
+       * log never recorded which device was open to confirm it.
+       */
+      device?: CaptureDeviceInfo;
+      /**
        * Renderer `Date.now()` at send. Optional diagnostic; W0 stamps the
        * canonical `device_open` mark when main *receives* this frame.
        */
       sentAtMs?: number;
     };
+
+/**
+ * `kAudioDevicePropertyTransportType`, bucketed by the native capture binary
+ * to the categories the 2026-09 latency investigation needs to tell apart.
+ * `'unknown'` covers both a transport outside this list (Thunderbolt,
+ * FireWire, PCI, DisplayPort, AVB, …) and a property CoreAudio could not
+ * report.
+ */
+export type CaptureDeviceTransport =
+  'built_in' | 'bluetooth' | 'bluetooth_le' | 'usb' | 'aggregate' | 'virtual' | 'unknown';
+
+/**
+ * The input device the native capture adapter opened, as reported by
+ * `grok-dictate-capture`'s `started` frame. Every field is independently
+ * optional — a CoreAudio property read can fail on its own without the
+ * capture itself having failed.
+ */
+export interface CaptureDeviceInfo {
+  readonly name?: string;
+  readonly uid?: string;
+  readonly transport?: CaptureDeviceTransport;
+  readonly sampleRateHz?: number;
+}
 
 /** The subset of `MediaTrackSettings` worth carrying across the IPC boundary. */
 export interface CaptureTrackSettings {
