@@ -39,6 +39,14 @@ mkdir -p "$OUTPUT_DIR"
 cp -f "$SCRATCH/$CONFIGURATION/grok-dictate-helper" "$HELPER_OUTPUT"
 cp -f "$SCRATCH/$CONFIGURATION/grok-dictate-capture" "$CAPTURE_OUTPUT"
 
+# Drop the debug symbol table before signing. Its entries are absolute paths
+# to this checkout's object files — the builder's home directory included — and
+# these binaries ship in a public release zip. Crash backtraces keep function
+# names; only file/line debug info goes.
+if [[ "$CONFIGURATION" == "release" ]]; then
+  strip -S "$HELPER_OUTPUT" "$CAPTURE_OUTPUT"
+fi
+
 # The AX API requires a signed binary (braindump §4.6). Ad-hoc is enough in
 # development. Note that an ad-hoc signature is a hash of the binary, so it
 # changes on every build — if TCC ever attributes the grant to *this* binary
