@@ -193,9 +193,9 @@ export class GrokAuthProvider implements AuthPort {
    * effect until Grok Dictate restarted.
    *
    * `options.marginMs` overrides the safety margin (default
-   * `TOKEN_EXPIRY_MARGIN_MS`). `DictateAuth` passes `0` once, to ask
-   * "has this literally expired" rather than "is it inside our buffer" — see
-   * the comment at its call site for why that distinction now matters.
+   * `TOKEN_EXPIRY_MARGIN_MS`). `DictateAuth` asks narrower questions with it —
+   * "has this literally expired" (`0`), "can it still survive a handshake and
+   * its retries" (`STALE_TOKEN_FLOOR_MS`).
    */
   async getBearer(options: { readonly marginMs?: number } = {}): Promise<Result<Bearer>> {
     let text: string;
@@ -352,25 +352,39 @@ const RENEW_CHECK_INTERVAL_MS = 60_000;
 /**
  * Renew this long before expiry.
  *
- * **Used to be four minutes, on the theory that the CLI has its own opinion
- * and it is five** (`DEFAULT_EARLY_INVALIDATION_SECS = 300`): ask inside that
- * window and the first spawn is the only spawn.
+ * **Four minutes, because the CLI has its own opinion and it is five.** Its
+ * `DEFAULT_EARLY_INVALIDATION_SECS` is 300: a token with more than five minutes
+ * of life left is "not expired", and `grok models` will start, decide there is
+ * nothing to do, and exit without contacting the IdP or writing anything. Asking
+ * at ten minutes would therefore spawn a process a minute for five minutes and
+ * renew nothing. Asking inside that window means the first spawn is the only
+ * spawn — on an awake Mac. `main.log` has 14 renewals made this way with
+ * 154–219 s left, including on `grok 1.0.52` (2026-10-12T18:45Z, 208 s left).
  *
- * **Zero, as of `grok 1.0.52`.** `main.log` shows that theory is dead:
- * 2026-10-03T02:46:48–02:50:49 and again 2026-10-11/12 are the same shape —
- * `grok models` exits 0 and leaves `expires_at` unchanged when asked
- * with three, two and roughly one minute left, and only the attempt made
- * *after* `expires_at` had actually passed produced a new token (see the
- * updated table in `renew.ts`). Every early attempt was a wasted spawn logged,
- * until the fix below, as a bogus "renewed automatically" — 37 of them between
- * 2026-09-12 and 2026-10-15. Asking before expiry on 1.0.52 cannot possibly
- * renew anything, so there is nothing left to be "early" about: the earliest
- * useful moment is also the only useful moment, and that is what this is now
- * sized to. `RENEW_CHECK_INTERVAL_MS` bounds how late the background check can
- * be; a dictation that lands in that gap is covered by the in-dictation path
- * in `getBearer` instead.
+ * **Asleep, it is not the only spawn.** In dark wake the CLI defers the refresh
+ * (`~/.grok/logs/unified.jsonl`: `auth.dark_wake.refresh_deferred`,
+ * 2026-10-13T21:52Z) and exits 0 with `auth.json` untouched, so a check a
+ * minute asks three or four times for nothing and the token can expire before
+ * the Mac is properly awake. `#renewAndReread` treats those runs as the no-ops
+ * they are, and `getBearer` covers a dictation that meets the result.
+ *
+ * Still comfortably clear of `TOKEN_EXPIRY_MARGIN_MS` (60 s, where this app
+ * starts refusing a token), so in normal running a dictation never meets an
+ * expired token and the in-dictation path above stays a fallback rather than the
+ * mechanism.
  */
-const RENEW_MARGIN_MS = 0;
+const RENEW_MARGIN_MS = 4 * 60_000;
+
+/**
+ * The least life a token inside `TOKEN_EXPIRY_MARGIN_MS` must have left for
+ * `getBearer` to hand it out anyway, when renewing it produced nothing new.
+ *
+ * The bearer goes out on the WebSocket handshake — and again on each rate-limit
+ * retry of that handshake in `stt/client.ts`, up to 3 retries of at most 8 s
+ * each. 30 s covers that budget, so a token served here cannot expire between
+ * the first handshake and the last retry.
+ */
+const STALE_TOKEN_FLOOR_MS = 30_000;
 
 /**
  * The auth the app actually uses: a stored xAI API key, then `XAI_API_KEY`,
@@ -430,24 +444,18 @@ export class DictateAuth implements AuthPort {
      */
     if (first.error.code !== 'auth_expired') return first;
 
-    /**
-     * Inside `TOKEN_EXPIRY_MARGIN_MS` but not actually expired: use it, and do
-     * not spawn the CLI first. On `grok 1.0.52` the CLI declines to refresh a
-     * token that is not yet due (see `renew.ts`), so a run here would cost the
-     * key press a second of latency and change nothing.
-     *
-     * Using it is safe: `stt/client.ts` presents the bearer exactly once, as the
-     * `Authorization` header on the WebSocket handshake, never again for the
-     * rest of the session. A token good for a few more seconds authenticates
-     * that handshake exactly as well as one good for an hour. `marginMs: 0`
-     * asks `GrokAuthProvider` "has this literally expired" instead of the
-     * padded question.
-     */
-    const stillGood = await this.#cli.getBearer({ marginMs: 0 });
-    if (stillGood.ok) return stillGood;
-
     const renewed = await this.#renewAndReread('a dictation started with an expired token');
-    return renewed ?? first;
+    if (renewed !== null) return renewed;
+
+    /**
+     * Renewing produced nothing new — the CLI deferred it (dark wake), timed
+     * out, or the network is down. A token inside `TOKEN_EXPIRY_MARGIN_MS` that
+     * still has `STALE_TOKEN_FLOOR_MS` left authenticates the handshake and its
+     * retries as well as one good for an hour, so use it rather than fail the
+     * dictation. `getBearer({ marginMs })` asks that narrower question.
+     */
+    const stillGood = await this.#cli.getBearer({ marginMs: STALE_TOKEN_FLOOR_MS });
+    return stillGood.ok ? stillGood : first;
   }
 
   /**
@@ -465,9 +473,10 @@ export class DictateAuth implements AuthPort {
     if (renewer === undefined) return null;
     if (!options.ignoreSetting && !this.#autoRenew()) return null;
 
-    // Captured before the run so a no-op (1.0.52's normal response to being
-    // asked early) can be told apart from an actual renewal below — on
-    // `expiresAt` alone, never on the exit code.
+    // Captured before the run so a no-op (the CLI deferring a refresh in dark
+    // wake, or being asked before its own five-minute window) can be told apart
+    // from an actual renewal below — on `expiresAt` alone, never on the exit
+    // code.
     const beforeExpiry = await this.#cli.peekExpiry();
 
     const outcome = await waitAtMost(renewer.renew(reason), RENEW_WAIT_IN_DICTATION_MS);
@@ -488,12 +497,12 @@ export class DictateAuth implements AuthPort {
 
     /**
      * A renewal counts as having happened only if `expires_at` actually moved
-     * later. Measured against `grok 1.0.52` (`main.log`,
-     * 2026-10-03T02:46:48–02:50:49 and 2026-10-11/12): `grok models` exits 0
-     * and leaves `expires_at` unchanged whenever it is asked before
-     * the token has really expired, so `exitCode === 0` and even
-     * `after.ok === true` are both consistent with nothing having happened —
-     * the old code logged exactly that as "renewed automatically" every time.
+     * later. In dark wake the CLI defers the refresh and exits 0 with
+     * `auth.json` untouched (`~/.grok/logs/unified.jsonl`,
+     * `auth.dark_wake.refresh_deferred`, 2026-10-13T21:52Z), so `exitCode === 0`
+     * and even `after.ok === true` are both consistent with nothing having
+     * happened. The old code logged exactly that as "renewed automatically" —
+     * 31 of the 78 such lines in `main.log` repeat an expiry already seen.
      */
     const renewedForReal =
       afterExpiry !== null &&
@@ -507,7 +516,7 @@ export class DictateAuth implements AuthPort {
       void this.refresh();
     } else if (after.ok) {
       // Ran, changed nothing, and the token is still usable under the normal
-      // margin: a run made too early. Not a failure — there was nothing to
+      // margin: a deferred or premature run. Not a failure — there was nothing to
       // fix — so the cooldown in `renew.ts` is left alone; penalising this
       // would only delay the renewal that matters, right after real expiry.
       this.#log.debug('the Grok CLI ran; the login did not need renewing yet', {

@@ -39,16 +39,12 @@
  * outside that window achieves nothing, which is what `RENEW_MARGIN_MS` in
  * `./index.ts` used to be sized against.
  *
- * **This changed under `grok 1.0.52`, and the row-one threshold above no
- * longer holds.** `main.log` (2026-10-03T02:46:48–02:50:49, repeated
- * 2026-10-11/12) shows `grok models` exiting 0 and leaving `expires_at`
- * unchanged when asked with three,
- * two and roughly one minute left; only the attempt made *after* the token's
- * real `expires_at` had passed produced a new token. 1.0.52 no longer
- * early-invalidates a token with minutes left; empirically it only refreshes
- * one that has actually expired. `./index.ts` no longer asks early (see
- * `RENEW_MARGIN_MS`), and treats a run that leaves the token unchanged as
- * the no-op it is rather than logging it as a successful renewal.
+ * **Asleep, row one also covers an expiring token.** In dark wake the CLI
+ * defers the refresh and exits 0 with `auth.json` untouched
+ * (`~/.grok/logs/unified.jsonl`: `auth.dark_wake.refresh_deferred`,
+ * 2026-10-13T21:52Z, `grok 1.0.52`). Awake, 1.0.52 still renews inside the
+ * five-minute window (`main.log`, 2026-10-12T18:45Z, 208 s left). `./index.ts`
+ * therefore judges a run by whether `expires_at` moved, never by its exit.
  *
  * ## The deletion, and why it is safe to live with
  *
