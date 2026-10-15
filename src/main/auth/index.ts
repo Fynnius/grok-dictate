@@ -86,7 +86,12 @@ interface ScopeEntry {
  * against every shape the file could degrade into, and so a test can prove that
  * no error path echoes the token.
  */
-export function parseAuthDocument(raw: unknown, path: string, nowMs: number): Result<Bearer> {
+export function parseAuthDocument(
+  raw: unknown,
+  path: string,
+  nowMs: number,
+  marginMs: number = TOKEN_EXPIRY_MARGIN_MS,
+): Result<Bearer> {
   const malformed = (what: string): Result<Bearer> =>
     err(
       appError(
@@ -115,14 +120,14 @@ export function parseAuthDocument(raw: unknown, path: string, nowMs: number): Re
       failures.push(scope);
       continue;
     }
-    const marginMs = parsed.expiresAt.getTime() - nowMs;
-    if (marginMs < TOKEN_EXPIRY_MARGIN_MS) {
+    const remainingMs = parsed.expiresAt.getTime() - nowMs;
+    if (remainingMs < marginMs) {
       return err(
         appError(
           'auth_expired',
           // §4 of the plan gives this exact standard: "token expired at 21:58 —
           // run `grok` to refresh" is correct; "STT failed" is a defect.
-          marginMs <= 0
+          remainingMs <= 0
             ? `The Grok token expired at ${formatLocalTime(parsed.expiresAt)}.`
             : `The Grok token expires at ${formatLocalTime(parsed.expiresAt)}, too soon to start a dictation.`,
           'Open the Sign in window and paste an xAI API key, or run `grok` in a terminal. Grok Dictate never refreshes the Grok CLI token itself.',
@@ -186,8 +191,13 @@ export class GrokAuthProvider implements AuthPort {
    * Read the file fresh every time. It is a few hundred bytes,
    * and caching would mean a `grok login` in another terminal did not take
    * effect until Grok Dictate restarted.
+   *
+   * `options.marginMs` overrides the IMPLEMENTATION-PLAN.md §3.3 safety margin
+   * (default `TOKEN_EXPIRY_MARGIN_MS`). `DictateAuth` passes `0` once, to ask
+   * "has this literally expired" rather than "is it inside our buffer" — see
+   * the comment at its call site for why that distinction now matters.
    */
-  async getBearer(): Promise<Result<Bearer>> {
+  async getBearer(options: { readonly marginMs?: number } = {}): Promise<Result<Bearer>> {
     let text: string;
     try {
       text = await readFile(this.#path, 'utf8');
@@ -241,7 +251,7 @@ export class GrokAuthProvider implements AuthPort {
       }
     }
 
-    const result = parseAuthDocument(parsed, this.#path, this.#now());
+    const result = parseAuthDocument(parsed, this.#path, this.#now(), options.marginMs);
     if (!result.ok) {
       // Logged with the code only. `AppError.cause` may carry a parser message,
       // and the logger redacts, but there is no reason to hand it over at all.
@@ -342,20 +352,25 @@ const RENEW_CHECK_INTERVAL_MS = 60_000;
 /**
  * Renew this long before expiry.
  *
- * **Four minutes, because the CLI has its own opinion and it is five.** Its
- * `DEFAULT_EARLY_INVALIDATION_SECS` is 300: a token with more than five minutes
- * of life left is "not expired", and `grok models` will start, decide there is
- * nothing to do, and exit without contacting the IdP or writing anything. Asking
- * at ten minutes would therefore spawn a process a minute for five minutes and
- * renew nothing. Asking inside that window means the first spawn is the only
- * spawn.
+ * **Used to be four minutes, on the theory that the CLI has its own opinion
+ * and it is five** (`DEFAULT_EARLY_INVALIDATION_SECS = 300`): ask inside that
+ * window and the first spawn is the only spawn.
  *
- * Still comfortably clear of `TOKEN_EXPIRY_MARGIN_MS` (60 s, where this app
- * starts refusing a token), so in normal running a dictation never meets an
- * expired token and the in-dictation path above stays a fallback rather than the
- * mechanism.
+ * **Zero, as of `grok 1.0.52`.** `main.log` shows that theory is dead:
+ * 2026-10-03T02:46:48–02:50:49 and again 2026-10-11/12 are the same shape —
+ * `grok models` exits 0 and leaves `auth.json` completely untouched when asked
+ * with three, two and roughly one minute left, and only the attempt made
+ * *after* `expires_at` had actually passed produced a new token (see the
+ * updated table in `renew.ts`). Every early attempt was a wasted spawn logged,
+ * until the fix below, as a bogus "renewed automatically" — 37 of them between
+ * 2026-09-12 and 2026-10-15. Asking before expiry on 1.0.52 cannot possibly
+ * renew anything, so there is nothing left to be "early" about: the earliest
+ * useful moment is also the only useful moment, and that is what this is now
+ * sized to. `RENEW_CHECK_INTERVAL_MS` bounds how late the background check can
+ * be; a dictation that lands in that gap is covered by the in-dictation path
+ * in `getBearer` instead.
  */
-const RENEW_MARGIN_MS = 4 * 60_000;
+const RENEW_MARGIN_MS = 0;
 
 /**
  * The auth the app actually uses: a stored xAI API key, then `XAI_API_KEY`,
@@ -416,7 +431,25 @@ export class DictateAuth implements AuthPort {
     if (first.error.code !== 'auth_expired') return first;
 
     const renewed = await this.#renewAndReread('a dictation started with an expired token');
-    return renewed ?? first;
+    if (renewed !== null) return renewed;
+
+    /**
+     * Still not usable under the normal margin — on `grok 1.0.52` this is the
+     * expected outcome whenever the token has less than `TOKEN_EXPIRY_MARGIN_MS`
+     * left but has not actually expired yet: the CLI correctly declines to
+     * refresh something that is not yet due (see `renew.ts`), so the renewal
+     * above was a confirmed no-op, not a failure.
+     *
+     * Refusing the token anyway would turn that no-op into a failed dictation,
+     * and that refusal buys nothing here: `stt/client.ts` presents the bearer
+     * exactly once, as the `Authorization` header on the WebSocket handshake,
+     * never again for the rest of the session. A token good for a few more
+     * seconds authenticates that handshake exactly as well as one good for an
+     * hour. So reject only a token that has actually expired — `marginMs: 0`
+     * asks `GrokAuthProvider` that literal question instead of the padded one.
+     */
+    const stillGood = await this.#cli.getBearer({ marginMs: 0 });
+    return stillGood.ok ? stillGood : first;
   }
 
   /**
@@ -434,6 +467,11 @@ export class DictateAuth implements AuthPort {
     if (renewer === undefined) return null;
     if (!options.ignoreSetting && !this.#autoRenew()) return null;
 
+    // Captured before the run so a no-op (1.0.52's normal response to being
+    // asked early) can be told apart from an actual renewal below — on
+    // `expiresAt` alone, never on the exit code.
+    const beforeExpiry = await this.#cli.peekExpiry();
+
     const outcome = await waitAtMost(renewer.renew(reason), RENEW_WAIT_IN_DICTATION_MS);
     if (outcome === null) {
       // Still running. Leave it be — killing it is the one thing `renew.ts` is
@@ -448,19 +486,55 @@ export class DictateAuth implements AuthPort {
     // The exit code is not evidence: `grok models` exits 0 while printing
     // "You are not authenticated." The file is the only source of truth.
     const after = await this.#cli.getBearer();
-    renewer.recordOutcome(after.ok);
-    if (!after.ok) {
-      this.#log.warn('the Grok CLI ran but the login is still not usable', {
-        code: after.error.code,
+    const afterExpiry = after.ok ? after.value.expiresAt : await this.#cli.peekExpiry();
+
+    /**
+     * A renewal counts as having happened only if `expires_at` actually moved
+     * later. Measured against `grok 1.0.52` (`main.log`,
+     * 2026-10-03T02:46:48–02:50:49 and 2026-10-11/12): `grok models` exits 0
+     * and leaves the file byte-for-byte unchanged whenever it is asked before
+     * the token has really expired, so `exitCode === 0` and even
+     * `after.ok === true` are both consistent with nothing having happened —
+     * the old code logged exactly that as "renewed automatically" every time.
+     */
+    const renewedForReal =
+      afterExpiry !== null &&
+      (beforeExpiry === null || afterExpiry.getTime() > beforeExpiry.getTime());
+
+    if (renewedForReal) {
+      renewer.recordOutcome(true);
+      this.#log.info('the Grok login was renewed automatically', {
+        expiresAt: afterExpiry.toISOString(),
       });
-      return null;
+      void this.refresh();
+    } else if (after.ok) {
+      // Ran, changed nothing, and the token is still usable under the normal
+      // margin: a run made too early. Not a failure — there was nothing to
+      // fix — so the cooldown in `renew.ts` is left alone; penalising this
+      // would only delay the renewal that matters, right after real expiry.
+      this.#log.debug('the Grok CLI ran; the login did not need renewing yet', {
+        expiresAt: after.value.expiresAt.toISOString(),
+      });
+    } else {
+      // Ran, changed nothing, and still unusable even under the normal margin.
+      // Only a genuine failure — worth the cooldown — if the token has
+      // actually expired; a run that merely lands inside
+      // `TOKEN_EXPIRY_MARGIN_MS` is the same benign no-op as above, it just
+      // also trips our own safety margin (see `getBearer`'s fallback).
+      const genuinelyExpired = !(await this.#cli.getBearer({ marginMs: 0 })).ok;
+      if (genuinelyExpired) {
+        renewer.recordOutcome(false);
+        this.#log.warn('the Grok CLI ran but the login is still not usable', {
+          code: after.error.code,
+        });
+      } else {
+        this.#log.debug('the Grok CLI ran; the login is inside the margin but not yet expired', {
+          code: after.error.code,
+        });
+      }
     }
 
-    this.#log.info('the Grok login was renewed automatically', {
-      expiresAt: after.value.expiresAt.toISOString(),
-    });
-    void this.refresh();
-    return after;
+    return after.ok ? after : null;
   }
 
   /**

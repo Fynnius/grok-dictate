@@ -450,13 +450,15 @@ describe('DictateAuth', () => {
       expect(calls()).toBe(0);
     });
 
-    it('renews ahead of expiry, inside the window the CLI will act on', async () => {
-      // Three minutes left: inside this app's four-minute margin, and inside the
-      // CLI's own five-minute one, so the spawn actually accomplishes something.
+    it('leaves a token with minutes left alone (grok 1.0.52 will not act on it anyway)', async () => {
+      // Three minutes left used to be inside this app's four-minute pre-emptive
+      // margin. On grok 1.0.52 (main.log, 2026-10-03/10-11/10-12) that spawn is
+      // provably a no-op — `expires_at` never moves until the token has really
+      // expired — so there is no reason to make it any more.
       write(authDocument({ expires_at: new Date(Date.now() + 3 * 60_000).toISOString() }));
       const { renewer, calls } = stubRenewer(() => undefined);
       await build({ renewer, cli: { path } }).renewIfExpiringSoon();
-      expect(calls()).toBe(1);
+      expect(calls()).toBe(0);
     });
 
     it('leaves a token with plenty of life alone', async () => {
@@ -464,6 +466,49 @@ describe('DictateAuth', () => {
       const { renewer, calls } = stubRenewer(() => undefined);
       await build({ renewer, cli: { path } }).renewIfExpiringSoon();
       expect(calls()).toBe(0);
+    });
+
+    it('renews the moment a token has actually expired', async () => {
+      write(authDocument({ expires_at: new Date(Date.now() - 1000).toISOString() }));
+      const { renewer, calls } = stubRenewer(() => {
+        write(authDocument({ expires_at: new Date(Date.now() + 6 * 60 * 60_000).toISOString() }));
+      });
+      await build({ renewer, cli: { path } }).renewIfExpiringSoon();
+      expect(calls()).toBe(1);
+    });
+
+    it('does not claim to have renewed when the CLI leaves a live token untouched (grok 1.0.52)', async () => {
+      // Reproduces main.log, 2026-10-03T02:46:48–02:50:49: `grok models` exits 0
+      // and leaves the same `expires_at` in place when asked before the token has
+      // really expired. The old code logged this as "the Grok login was renewed
+      // automatically" and fed `true` to `recordOutcome` every time.
+      write(authDocument({ expires_at: new Date(Date.now() + 3 * 60_000).toISOString() }));
+      const { renewer, calls, outcomes } = stubRenewer(() => undefined); // leaves the file as-is
+      const cli = await build({ renewer, cli: { path } }).renewCliNow();
+
+      expect(calls()).toBe(1);
+      expect(outcomes).toEqual([]); // neither a success nor a failure — a no-op
+      expect(logged.some((r) => r.msg === 'the Grok login was renewed automatically')).toBe(false);
+      expect(cli.state).toBe('signed-in');
+    });
+
+    it('serves a token inside the margin but not actually expired, rather than failing the dictation', async () => {
+      // Reproduces main.log, 2026-10-03T02:49:48–02:49:49: 23 s left, inside
+      // `TOKEN_EXPIRY_MARGIN_MS` (60 s). `grok models` runs and — correctly, on
+      // 1.0.52 — leaves the token exactly as it was, because it has not actually
+      // expired. The WebSocket in `stt/client.ts` only presents the bearer once,
+      // at connect, so this token is still safe to dictate with.
+      const original = new Date(Date.now() + 10_000).toISOString();
+      write(authDocument({ expires_at: original }));
+      const { renewer, calls, outcomes } = stubRenewer(() => undefined); // 1.0.52: no-op, too early
+      const bearer = await build({ renewer, cli: { path } }).getBearer();
+
+      expect(calls()).toBe(1);
+      expect(bearer.ok).toBe(true);
+      if (!bearer.ok) return;
+      expect(bearer.value.expiresAt.toISOString()).toBe(original);
+      expect(outcomes).toEqual([]); // not recorded as a success or a failure
+      expect(logged.some((r) => r.msg === 'the Grok login was renewed automatically')).toBe(false);
     });
 
     it('renewCliNow asks the CLI even when an API key is the active source', async () => {

@@ -37,7 +37,18 @@
  * threshold: `DEFAULT_EARLY_INVALIDATION_SECS = 300`, so it treats a token with
  * over five minutes left as fine and returns without an IdP call. Calling this
  * outside that window achieves nothing, which is what `RENEW_MARGIN_MS` in
- * `./index.ts` is sized against.
+ * `./index.ts` used to be sized against.
+ *
+ * **This changed under `grok 1.0.52`, and the row-one threshold above no
+ * longer holds.** `main.log` (2026-10-03T02:46:48–02:50:49, repeated
+ * 2026-10-11/12) shows `grok models` exiting 0 and leaving `auth.json`
+ * byte-for-byte unchanged — `expires_at` identical — when asked with three,
+ * two and roughly one minute left; only the attempt made *after* the token's
+ * real `expires_at` had passed produced a new token. 1.0.52 no longer
+ * early-invalidates a token with minutes left; empirically it only refreshes
+ * one that has actually expired. `./index.ts` no longer asks early (see
+ * `RENEW_MARGIN_MS`), and treats a run that leaves the token unchanged as
+ * the no-op it is rather than logging it as a successful renewal.
  *
  * ## The deletion, and why it is safe to live with
  *
