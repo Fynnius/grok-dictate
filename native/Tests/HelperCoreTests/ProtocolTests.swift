@@ -27,7 +27,7 @@ struct FrameEncodingTests {
         let frames: [HelperFrame] = [
             .ready(version: "0.1.0", caps: [.ax, .unicode]),
             .hotkey(action: .pttDown, timestampMs: 1_754_683_200_000),
-            .secureInput(enabled: true),
+            .secureInput(enabled: true, holder: nil),
             .frontmost(bundleId: "com.apple.Notes", name: "Notes", id: nil),
             .insertResult(
                 id: "abc", tier: .ax, ok: true, verified: true, error: nil, reason: nil,
@@ -63,6 +63,43 @@ struct FrameEncodingTests {
         #expect(HotkeyAction.pttUp.rawValue == "ptt_up")
         #expect(HotkeyAction.toggle.rawValue == "toggle")
         #expect(HotkeyAction.retryInsert.rawValue == "retry_insert")
+    }
+
+    @Test("secure_input omits holder when it is unknown")
+    func secureInputOmitsUnknownHolder() throws {
+        let object = try decode(.secureInput(enabled: false, holder: nil))
+        #expect(object["type"] as? String == "secure_input")
+        #expect(object["enabled"] as? Bool == false)
+        // Absent, not null (contract §1 rule 2: unknown fields are ignored on
+        // either side, and there is nothing to carry for an off/unresolved
+        // holder).
+        #expect(object["holder"] == nil)
+    }
+
+    @Test("secure_input names the holder when SecureInputMonitor resolved one")
+    func secureInputCarriesHolder() throws {
+        let object = try decode(
+            .secureInput(
+                enabled: true,
+                holder: SecureInputHolder(name: "1Password", bundleId: "com.1password.1password")
+            )
+        )
+        #expect(object["type"] as? String == "secure_input")
+        #expect(object["enabled"] as? Bool == true)
+        let holder = try #require(object["holder"] as? [String: Any])
+        #expect(holder["name"] as? String == "1Password")
+        #expect(holder["bundleId"] as? String == "com.1password.1password")
+    }
+
+    @Test("secure_input holder tolerates a holder with no bundle id")
+    func secureInputHolderWithoutBundleId() throws {
+        // A plain command-line tool (`ssh`, `sudo`) has no `NSApplication` and
+        // therefore no bundle identifier — `currentHolder()` falls back to
+        // `proc_name` alone.
+        let object = try decode(.secureInput(enabled: true, holder: SecureInputHolder(name: "sshd", bundleId: nil)))
+        let holder = try #require(object["holder"] as? [String: Any])
+        #expect(holder["name"] as? String == "sshd")
+        #expect(holder["bundleId"] == nil || holder["bundleId"] is NSNull)
     }
 
     @Test("unsolicited frontmost omits id; a reply carries it")

@@ -147,20 +147,13 @@ final class HelperApp {
         installTap()
         publishPermissionsIfChanged()
 
-        let secureInput = SecureInputMonitor { [weak self] enabled in
-            self?.emit(.secureInput(enabled: enabled))
+        let secureInput = SecureInputMonitor { [weak self] enabled, holder in
+            self?.emit(.secureInput(enabled: enabled, holder: holder))
             // Secure Input tears the tap down system-wide (§4.6), so the
             // hotkey's liveness changes with it.
             self?.publishPermissionsIfChanged()
             if enabled {
-                self?.emit(
-                    .log(
-                        level: .warn,
-                        message:
-                            "Secure Input is active — macOS blocks every third-party event tap "
-                            + "while it is, so the hotkey is dead until the app holding it lets go"
-                    )
-                )
+                self?.emit(.log(level: .warn, message: Self.secureInputWarnMessage(holder: holder)))
             }
         }
         secureInput.start(pollInterval: settings.secureInputPollInterval)
@@ -168,6 +161,18 @@ final class HelperApp {
 
         workspace.start(pollInterval: settings.secureInputPollInterval)
         startReadingStdin()
+    }
+
+    /// The existing Secure Input warn line, with the holder's name appended
+    /// when `SecureInputMonitor` could resolve one. Naming it is the whole
+    /// point of carrying a holder at all — a log line that says "something is
+    /// blocking you" and a log line that says "1Password is blocking you" are
+    /// the difference between a mystery and something to go and close.
+    private static func secureInputWarnMessage(holder: SecureInputHolder?) -> String {
+        let base = "Secure Input is active — macOS blocks every third-party event tap "
+            + "while it is, so the hotkey is dead until the app holding it lets go"
+        guard let name = holder?.name else { return base }
+        return "\(base) (held by \(name))"
     }
 
     /// Reported independently of the tap, because it is independent

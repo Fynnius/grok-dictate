@@ -112,12 +112,47 @@ public enum HelperCapability: String, Sendable {
     case unicode
 }
 
+/// Which process macOS reports as holding Secure Input, when the poll could
+/// resolve one — carried on `secure_input.holder` (contract; see
+/// `contracts/helper-protocol.ts`).
+///
+/// **Measured 2026-10-15, macOS 27.** `CGSessionCopyCurrentDictionary()` gains
+/// a `kCGSSessionSecureInputPID` key, set to the holder's pid, for exactly as
+/// long as `IsSecureEventInputEnabled()` is true — absent the rest of the
+/// time. Verified on this machine by toggling Terminal's own Secure Keyboard
+/// Entry: the key appeared with Terminal's pid and vanished the moment it was
+/// turned back off.
+///
+/// `nil` on the wire (the whole case, not a holder with blank fields) means
+/// "unknown" — Secure Input is off, or the pid could not be named — so the app
+/// falls back to today's generic copy. An older app simply does not parse the
+/// extra field (unknown-field tolerance, contract §1).
+public struct SecureInputHolder: Sendable, Equatable {
+    /// `NSRunningApplication(processIdentifier:)?.localizedName`, or the raw
+    /// process name (`proc_name`) for a holder with no `NSApplication` at all
+    /// — a plain command-line tool, not a GUI app. `nil` when neither
+    /// resolved, which the caller treats the same as no holder.
+    public let name: String?
+    /// `NSRunningApplication(processIdentifier:)?.bundleIdentifier`. `nil` for
+    /// a command-line holder, which has no bundle — and the one piece of
+    /// information precise enough to special-case Terminal's Secure Keyboard
+    /// Entry without matching on a localised name.
+    public let bundleId: String?
+
+    public init(name: String?, bundleId: String?) {
+        self.name = name
+        self.bundleId = bundleId
+    }
+}
+
 // MARK: - Helper → App
 
 public enum HelperFrame: Sendable, Equatable {
     case ready(version: String, caps: [HelperCapability])
     case hotkey(action: HotkeyAction, timestampMs: Int)
-    case secureInput(enabled: Bool)
+    /// `holder` is `nil` whenever it is not known — including every `enabled:
+    /// false` frame. See `SecureInputHolder`.
+    case secureInput(enabled: Bool, holder: SecureInputHolder?)
     /// `id` is `nil` for the unsolicited push emitted when the frontmost app
     /// changes, and set when answering a `get_frontmost` (contract §2).
     case frontmost(bundleId: String?, name: String?, id: String?)
@@ -170,9 +205,20 @@ public enum HelperFrame: Sendable, Equatable {
             fields.append(("type", Self.json("hotkey")))
             fields.append(("action", Self.json(action.rawValue)))
             fields.append(("ts", String(timestampMs)))
-        case let .secureInput(enabled):
+        case let .secureInput(enabled, holder):
             fields.append(("type", Self.json("secure_input")))
             fields.append(("enabled", enabled ? "true" : "false"))
+            // Omitted, not `null`, when unknown — same reasoning as
+            // `frontmost.id` above: the contract types it `.nullish()`, which
+            // parses either way, and a key that is simply absent is one fewer
+            // shape to read in a log line.
+            if let holder {
+                fields.append((
+                    "holder",
+                    "{\"name\":\(holder.name.map(Self.json) ?? "null"),"
+                        + "\"bundleId\":\(holder.bundleId.map(Self.json) ?? "null")}"
+                ))
+            }
         case let .frontmost(bundleId, name, id):
             fields.append(("type", Self.json("frontmost")))
             fields.append(("bundleId", bundleId.map(Self.json) ?? "null"))
