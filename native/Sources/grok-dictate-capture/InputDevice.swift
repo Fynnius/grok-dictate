@@ -17,7 +17,7 @@
 ///
 /// Deliberately does not query the device's name or UID: `main.log` gets
 /// pasted into public GitHub issues, and a Bluetooth UID embeds the device's
-/// MAC address while a name is often personal ("Fynn's AirPods"). The
+/// MAC address while a name is often personal ("Sam's AirPods"). The
 /// transport bucket and nominal sample rate answer the diagnostic question
 /// without that risk.
 import AudioToolbox

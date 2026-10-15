@@ -366,7 +366,7 @@ export type CaptureDeviceTransport =
  *
  * Deliberately has no `name` or `uid`: `main.log` gets pasted into public
  * GitHub issues, a Bluetooth device's UID embeds its MAC address, and a
- * device name is often personal ("Fynn's AirPods"). `transport` +
+ * device name is often personal ("Sam's AirPods"). `transport` +
  * `sampleRateHz` fully serve the diagnostic purpose (was a slow
  * `first_pcm_main` a Bluetooth HFP switch?) without that risk.
  */

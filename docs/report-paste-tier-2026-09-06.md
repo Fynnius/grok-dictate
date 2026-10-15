@@ -427,14 +427,13 @@ Accessibility was granted to the real launch terminal after §5 was written, so
 the app has now actually run. **Window:** 2026-09-12 (the 0.4.0 release) through
 2026-09-29, the last dictation on record — 57 dictations, 30 paste / 17 unicode
 / 10 cancelled (no tier). Targets: cmux 18, Claude 17, Terminal 16, Arc 4, Grok
-Dictate 1, Grok Bot 1. Source: `history.json` for counts, `main.log` for
+Dictate 1, other 1. Source: `history.json` for counts, `main.log` for
 per-chord receipts and timing; `main.log`'s own coverage starts at
-2026-09-12T10:27Z, so the sample's first two dictations (07:30–07:31 that
-morning) have no log line to check against — everything below is the other 55.
+2026-09-12T10:27Z, so the sample's first two dictations have no log line to check against — everything below is the other 55.
 
 **Q1 — closed, within a stated limit.** 29 of the 30 paste-tier rows in the
 covered window have a matching receipt line, correctly attributed: cmux 13,
-Terminal 10, Claude 5, Arc 1. (The 30th paste, into Arc at 07:31, predates log
+Terminal 10, Claude 5, Arc 1. (The 30th paste, into Arc, predates log
 coverage.) Exactly one chord in the whole window got no receipt, and it was the
 right one: into Grok Dictate's own window, which doesn't read the pasteboard.
 It waited out the 0.5 s timeout (511 ms), declined, and fell through to Unicode

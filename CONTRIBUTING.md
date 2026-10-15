@@ -39,7 +39,7 @@ npm run typecheck
 
 The state machine in `src/main/state/machine.ts` is a pure reducer. Prefer extending it with a new event and effect over reaching for Electron inside a test.
 
-Comments across the codebase cite `IMPLEMENTATION-PLAN.md`, `braindump`, and dated phase reports (e.g. `docs/phase-2-report.md`, `docs/phase-3-report.md`) by section number — `§4.2`, `HT-13`, and so on. These are pre-open-source planning documents, written while the project was still private, and were deliberately not carried into the public repository. They are not missing by accident and should not be restored here; they survive only on the local `archive/pre-oss` branch. Where a comment cites one of these, the comment itself still carries the fact the citation was backing up, so the pointer is a bonus for whoever has that branch, not a dependency for understanding the comment.
+Comments across the codebase cite `IMPLEMENTATION-PLAN.md`, `braindump`, and dated phase reports (e.g. `docs/phase-2-report.md`, `docs/phase-3-report.md`) by section number — `§4.2`, `HT-13`, and so on. These are pre-open-source planning documents, written while the project was still private, and were deliberately not carried into the public repository. They are not missing by accident and should not be restored here. Where a comment cites one of these, the comment itself still carries the fact the citation was backing up, so the pointer is provenance, not a dependency for understanding the comment.
 
 ## Rules that are load-bearing
 

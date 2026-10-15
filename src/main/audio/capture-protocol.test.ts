@@ -64,7 +64,7 @@ describe('capture protocol', () => {
         sessionId: 's1',
         actualSampleRate: 16_000,
         device: {
-          name: "Fynn's AirPods",
+          name: "Sam's AirPods",
           uid: 'uid-with-a-mac-address',
           transport: 'bluetooth',
           sampleRateHz: 48_000,

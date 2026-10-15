@@ -50,10 +50,9 @@ Do the work in a fresh worktree off `dev`, sibling to the main checkout. The
 repo has used this pattern before (`Grok_STT-injection-pacing`).
 
 ```bash
-git -C /Users/fynnauerbach/Documents/Programmieren/Grok_STT \
-    worktree add ../Grok_STT-paste-tier -b feat/paste-tier dev
+git worktree add ../Grok_STT-paste-tier -b feat/paste-tier dev
 
-cd /Users/fynnauerbach/Documents/Programmieren/Grok_STT-paste-tier
+cd ../Grok_STT-paste-tier
 npm install
 ./native/build.sh
 ```
@@ -752,9 +751,9 @@ report success.
 
 ## 14. Environment
 
-- **Worktree:** `/Users/fynnauerbach/Documents/Programmieren/Grok_STT-paste-tier`,
+- **Worktree:** `../Grok_STT-paste-tier`,
   branch `feat/paste-tier`, branched from `dev`.
-- **Main checkout:** `/Users/fynnauerbach/Documents/Programmieren/Grok_STT` — the
+- **Main checkout:** this repository — the
   user's own working copy on `dev`. Do not edit it; do all work in the worktree.
 - **Log:** `~/Library/Logs/grok-dictate/main.log` (NDJSON).
 - **History:** `~/Library/Application Support/grok-dictate/history.json`.

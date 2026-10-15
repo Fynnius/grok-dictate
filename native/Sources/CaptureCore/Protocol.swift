@@ -82,7 +82,7 @@ public enum CaptureErrorCode: String, Sendable {
 ///
 /// Deliberately has no `name` or `uid`: `main.log` gets pasted into public
 /// GitHub issues, a Bluetooth device's UID embeds its MAC address, and a
-/// device name is often personal ("Fynn's AirPods"). `transport` +
+/// device name is often personal ("Sam's AirPods"). `transport` +
 /// `sampleRateHz` fully answer the question this exists for (was a slow
 /// `first_pcm_main` a Bluetooth HFP switch?) without carrying that risk.
 ///
