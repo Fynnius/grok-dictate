@@ -18,6 +18,7 @@
   "compilerOptions": {
     "composite": true,
     "noEmit": true,
+    "tsBuildInfoFile": "./out/tsconfig.web.tsbuildinfo",
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "types": ["vite/client"],
     "jsx": "react-jsx"

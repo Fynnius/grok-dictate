@@ -15,6 +15,7 @@
   "compilerOptions": {
     "composite": true,
     "noEmit": true,
+    "tsBuildInfoFile": "./out/tsconfig.node.tsbuildinfo",
     "lib": ["ES2023"],
     "types": ["node"]
   }
