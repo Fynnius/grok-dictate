@@ -18,6 +18,7 @@
  */
 
 import type { App, GlobalShortcut } from 'electron';
+import type { AppConfig } from '@contracts/config.js';
 import type { SessionState } from '@contracts/events.js';
 import type { ConfigPort } from '@contracts/ports.js';
 import type { Logger } from '@shared/logger.js';
@@ -63,7 +64,13 @@ export function createUiServices(deps: UiServiceDeps): UiServices {
     ready(): void {
       const { app, config, history, panels } = deps;
 
-      syncLaunchAtLogin(app, config.get(), log);
+      // A dev run would register node_modules' bare Electron.app as the login
+      // item, which opens Electron's default window at login instead of the app.
+      const syncLogin = app.isPackaged
+        ? (next: AppConfig) => syncLaunchAtLogin(app, next, log)
+        : () => {};
+
+      syncLogin(config.get());
       // Transcripts stay until the user deletes them. Audio sidecars expire
       // after one day; rows lose Retry when the file goes.
       void history.sweep(0);
@@ -71,7 +78,7 @@ export function createUiServices(deps: UiServiceDeps): UiServices {
 
       unsubscribes.push(
         config.onChange((next) => {
-          syncLaunchAtLogin(app, next, log);
+          syncLogin(next);
           void history.sweep(0);
           void history.sweepAudio();
           panels.broadcast({ type: 'config-updated', config: next });
