@@ -15,6 +15,7 @@
 
 import { app, Menu, nativeImage, shell, Tray, type MenuItemConstructorOptions } from 'electron';
 import type { HudView, SessionState } from '@contracts/events.js';
+import { secureInputHoldersEqual, type SecureInputHolder } from '@contracts/helper-protocol.js';
 import type { ConfigPort, HelperPermissions, TrayPort } from '@contracts/ports.js';
 import type { Logger } from '@shared/logger.js';
 import type { HistoryStore } from '../history/index.js';
@@ -91,6 +92,7 @@ export function createTray(deps: TrayDeps): TrayPort {
   let tray: Tray | null = null;
   let state: SessionState = 'idle';
   let secureInput = false;
+  let secureInputHolder: SecureInputHolder | null = null;
   let recentHistory: TrayHistoryRow[] = [];
   // Optimistic until the helper says otherwise, so a healthy launch never
   // flashes a warning. `HelperClient` replays its last `permissions` report to
@@ -159,6 +161,7 @@ export function createTray(deps: TrayDeps): TrayPort {
     const template = buildTrayMenu({
       state,
       secureInput,
+      secureInputHolder,
       config: config.get(),
       recentHistory,
       includePreview,
@@ -168,7 +171,7 @@ export function createTray(deps: TrayDeps): TrayPort {
     });
     tray.setImage(trayIcon(trayIconFor(state, secureInput, permissions.hotkeyActive)));
     tray.setToolTip(
-      `Grok Dictate — ${trayStatusLabel(state, secureInput, permissions.hotkeyActive, permissions.accessibility)}`,
+      `Grok Dictate — ${trayStatusLabel(state, secureInput, permissions.hotkeyActive, permissions.accessibility, secureInputHolder)}`,
     );
     tray.setContextMenu(Menu.buildFromTemplate(toElectron(template)));
 
@@ -269,11 +272,26 @@ export function createTray(deps: TrayDeps): TrayPort {
   });
 
   return {
-    setState(next: SessionState, nextSecureInput: boolean): void {
-      if (next === state && nextSecureInput === secureInput) return;
+    setState(
+      next: SessionState,
+      nextSecureInput: boolean,
+      nextHolder: SecureInputHolder | null,
+    ): void {
+      if (
+        next === state &&
+        nextSecureInput === secureInput &&
+        secureInputHoldersEqual(nextHolder, secureInputHolder)
+      ) {
+        return;
+      }
       state = next;
       secureInput = nextSecureInput;
-      log.debug('tray state', { state, secureInput });
+      secureInputHolder = nextHolder;
+      log.debug('tray state', {
+        state,
+        secureInput,
+        secureInputHolder: secureInputHolder?.name ?? null,
+      });
       render();
     },
   };

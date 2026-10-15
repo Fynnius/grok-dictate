@@ -264,24 +264,40 @@ export function present(view: HudView): HudPresentation {
       };
     }
 
-    case 'blocked':
+    case 'blocked': {
+      // Named when the holder resolved (added 2026-10-15), so the pill says
+      // which app to go and leave rather than just that something is
+      // blocking the hotkey — see `SecureInputHolder`. Unknown keeps the
+      // original sentence exactly.
+      const holderName = view.holder?.name ?? null;
+      const label = holderName ? `Secure Input is on in ${holderName}` : 'Blocked — Secure Input';
+      const detail = holderName
+        ? `Fn is blocked until ${holderName} lets go of Secure Input.`
+        : 'A password field has focus. macOS blocks all key monitoring while it does, so dictation is paused.';
+      // Terminal's own Secure Keyboard Entry is the one culprit common enough,
+      // and simple enough to name precisely by bundle id, to earn its own
+      // hint rather than a generic "go check your apps".
+      const terminalHint =
+        view.holder?.bundleId === 'com.apple.Terminal'
+          ? ' Terminal ▸ Secure Keyboard Entry is the switch.'
+          : '';
       return {
         layer,
         // Amber: a self-clearing pause, not a failure (§16.5b).
         tone: 'warning',
-        label: 'Blocked — Secure Input',
+        label,
         capsule: { kind: 'alert' },
         message: {
-          title: 'Blocked — Secure Input',
+          title: label,
           body: null,
           // : this is one of the two silent failures.
           // Saying it out loud is the entire mitigation.
-          detail:
-            'A password field has focus. macOS blocks all key monitoring while it does, so dictation is paused.',
+          detail: `${detail}${terminalHint}`,
           actions: [],
         },
         liveText: null,
       };
+    }
 
     case 'error':
       return {

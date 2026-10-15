@@ -11,6 +11,11 @@
  * `unmute_output` mute system audio while recording. Fire-and-forget, like
  * `copy`. No reply frame. Unknown-type rule still holds for an older helper.
  *
+ * Reopened again 2026-10-15: `secure_input` carries an optional `holder`
+ * naming which process macOS reports is blocking the hotkey. `nullish()`, not
+ * required, so an older helper that never sends it still parses — see
+ * `SecureInputHolder`.
+ *
  * Newline-delimited JSON over the helper's stdin/stdout. Every frame carries
  * `v: 1`. Parsing is total — `parseHelperFrame` never throws. A helper that
  * can crash the app on a malformed byte would take down the hotkey.
@@ -80,10 +85,38 @@ export const HotkeyFrameSchema = z.object({
   ts: z.number().int().nonnegative(),
 });
 
+/**
+ * Which process macOS reports is holding Secure Input, when the helper could
+ * resolve one.
+ *
+ * `name` is `NSRunningApplication(processIdentifier:)?.localizedName`, or the
+ * bare process name (`proc_name`) for a holder with no `NSApplication` at all
+ * — a plain command-line tool, not a GUI app. `bundleId` is
+ * `NSRunningApplication(processIdentifier:)?.bundleIdentifier`, `null` for
+ * that same command-line case — and the one field precise enough to
+ * special-case Terminal's Secure Keyboard Entry without matching on a
+ * localised name.
+ */
+export const SecureInputHolderSchema = z.object({
+  name: z.string().nullable(),
+  bundleId: z.string().nullable(),
+});
+export type SecureInputHolder = z.infer<typeof SecureInputHolderSchema>;
+
 export const SecureInputFrameSchema = z.object({
   v: version,
   type: z.literal('secure_input'),
   enabled: z.boolean(),
+  /**
+   * Absent or `null` means "unknown" — covers both `enabled: false` and a
+   * holder pid the helper could not name. **Measured 2026-10-15, macOS 27:**
+   * `CGSessionCopyCurrentDictionary()` carries a `kCGSSessionSecureInputPID`
+   * key for exactly as long as `enabled` is true, verified on this machine by
+   * toggling Terminal's own Secure Keyboard Entry and watching the key appear
+   * and disappear with it. `.nullish()` so an older helper, which never sends
+   * this field, still parses.
+   */
+  holder: SecureInputHolderSchema.nullish(),
 });
 
 export const FrontmostFrameSchema = z.object({
@@ -362,6 +395,23 @@ export type ShutdownCommand = z.infer<typeof ShutdownCommandSchema>;
 export type MuteOutputCommand = z.infer<typeof MuteOutputCommandSchema>;
 export type UnmuteOutputCommand = z.infer<typeof UnmuteOutputCommandSchema>;
 export type AppToHelper = z.infer<typeof AppToHelperSchema>;
+
+/**
+ * Whether two holders (or the absence of one) are the same, for deciding
+ * whether a new `secure_input` frame is reporting a *change* of holder rather
+ * than a repeat of the one already known. `null` and `undefined` are the same
+ * "unknown" for this comparison — `holder` arrives nullish on the wire.
+ */
+export function secureInputHoldersEqual(
+  a: SecureInputHolder | null | undefined,
+  b: SecureInputHolder | null | undefined,
+): boolean {
+  const left = a ?? null;
+  const right = b ?? null;
+  if (left === right) return true;
+  if (left === null || right === null) return false;
+  return left.name === right.name && left.bundleId === right.bundleId;
+}
 
 /* ------------------------------------------------------------------ *
  * Framing

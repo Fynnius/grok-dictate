@@ -197,8 +197,8 @@ export class Orchestrator {
             return;
         }
       }),
-      native.onSecureInput((enabled) => {
-        this.dispatch({ type: 'SECURE_INPUT', enabled });
+      native.onSecureInput((enabled, holder) => {
+        this.dispatch({ type: 'SECURE_INPUT', enabled, holder });
       }),
     );
     if (native.isReady) {
@@ -473,7 +473,7 @@ export class Orchestrator {
       }
 
       case 'tray':
-        tray.setState(effect.state, effect.secureInput);
+        tray.setState(effect.state, effect.secureInput, effect.holder ?? null);
         return;
 
       case 'cue':

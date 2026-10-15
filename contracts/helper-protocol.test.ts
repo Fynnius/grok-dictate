@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
   encodeAppFrame,
+  encodeHelperFrame,
   parseAppFrame,
   parseHelperFrame,
+  secureInputHoldersEqual,
   HELPER_CAPABILITIES,
   INSERT_TIERS,
   type InsertCommand,
   type MuteOutputCommand,
+  type SecureInputFrame,
   type UnmuteOutputCommand,
 } from './helper-protocol.js';
 
@@ -95,5 +98,58 @@ describe('the paste tier (2026-09-06)', () => {
       '{"v":1,"type":"ready","version":"0.1.0","caps":["ax","unicode"]}',
     );
     expect(ready.ok).toBe(true);
+  });
+});
+
+describe('secure_input holder (2026-10-15)', () => {
+  it('round-trips a frame naming the holder', () => {
+    const frame: SecureInputFrame = {
+      v: 1,
+      type: 'secure_input',
+      enabled: true,
+      holder: { name: 'Terminal', bundleId: 'com.apple.Terminal' },
+    };
+    expect(parseHelperFrame(encodeHelperFrame(frame))).toEqual({ ok: true, frame });
+  });
+
+  it('reads a frame with no holder as unknown, not a parse failure', () => {
+    // An older helper never sends `holder` at all — the whole reason the
+    // field is nullish rather than required.
+    const parsed = parseHelperFrame('{"v":1,"type":"secure_input","enabled":true}');
+    expect(parsed.ok).toBe(true);
+    expect(
+      parsed.ok && parsed.frame.type === 'secure_input' ? parsed.frame.holder : 'missing',
+    ).toBe(undefined);
+  });
+
+  it('accepts an explicit null holder the same way as an absent one', () => {
+    const parsed = parseHelperFrame('{"v":1,"type":"secure_input","enabled":true,"holder":null}');
+    expect(parsed.ok).toBe(true);
+    expect(
+      parsed.ok && parsed.frame.type === 'secure_input' ? parsed.frame.holder : 'missing',
+    ).toBe(null);
+  });
+
+  it('treats a holder with no bundle id as valid — a command-line process has none', () => {
+    const parsed = parseHelperFrame(
+      '{"v":1,"type":"secure_input","enabled":true,"holder":{"name":"sshd","bundleId":null}}',
+    );
+    expect(parsed.ok).toBe(true);
+  });
+});
+
+describe('secureInputHoldersEqual', () => {
+  it('treats null, undefined, and each other as the same "unknown"', () => {
+    expect(secureInputHoldersEqual(null, undefined)).toBe(true);
+    expect(secureInputHoldersEqual(undefined, undefined)).toBe(true);
+  });
+
+  it('compares holders field by field', () => {
+    const a = { name: '1Password', bundleId: 'com.1password.1password' };
+    const b = { name: '1Password', bundleId: 'com.1password.1password' };
+    const c = { name: '1Password', bundleId: 'com.agilebits.onepassword7' };
+    expect(secureInputHoldersEqual(a, b)).toBe(true);
+    expect(secureInputHoldersEqual(a, c)).toBe(false);
+    expect(secureInputHoldersEqual(a, null)).toBe(false);
   });
 });

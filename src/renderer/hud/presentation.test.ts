@@ -172,6 +172,31 @@ describe('present', () => {
     expect(p.message?.detail).toMatch(/password field/i);
   });
 
+  describe('a named Secure Input holder (2026-10-15)', () => {
+    it('names the app in both the label and the detail', () => {
+      const p = present({ kind: 'blocked', holder: { name: '1Password', bundleId: null } });
+      expect(p.label).toBe('Secure Input is on in 1Password');
+      expect(p.message?.title).toBe('Secure Input is on in 1Password');
+      expect(p.message?.detail).toBe('Fn is blocked until 1Password lets go of Secure Input.');
+    });
+
+    it('adds the Terminal-specific hint only for Terminal.app', () => {
+      const terminal = present({
+        kind: 'blocked',
+        holder: { name: 'Terminal', bundleId: 'com.apple.Terminal' },
+      });
+      expect(terminal.message?.detail).toContain('Secure Keyboard Entry');
+
+      const other = present({ kind: 'blocked', holder: { name: '1Password', bundleId: null } });
+      expect(other.message?.detail).not.toContain('Secure Keyboard Entry');
+    });
+
+    it('falls back to the unnamed copy when `holder` is explicitly null', () => {
+      const p = present({ kind: 'blocked', holder: null });
+      expect(p.label).toBe('Blocked — Secure Input');
+    });
+  });
+
   it('carries the error hint through', () => {
     const p = present({ kind: 'error', message: 'Token expired.', hint: 'Run `grok` to refresh.' });
     expect(p.message?.title).toBe('Token expired.');

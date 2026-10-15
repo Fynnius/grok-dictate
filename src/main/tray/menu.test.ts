@@ -78,9 +78,45 @@ describe('trayStatusLabel', () => {
     // (state-machine.md §8), and the user should see one explanation, not two.
     expect(trayStatusLabel('idle', true)).toBe(trayStatusLabel('blocked', false));
   });
+
+  describe('holder (2026-10-15)', () => {
+    it('names the app when the holder resolved', () => {
+      expect(trayStatusLabel('idle', true, true, true, { name: '1Password', bundleId: null })).toBe(
+        'Secure Input is on in 1Password — Fn is blocked until it lets go',
+      );
+    });
+
+    it('keeps the original sentence when the holder is unknown', () => {
+      expect(trayStatusLabel('idle', true, true, true, null)).toBe(
+        'Blocked — Secure Input is active',
+      );
+      // The default, for every existing call site that never learned about holders.
+      expect(trayStatusLabel('idle', true)).toBe('Blocked — Secure Input is active');
+    });
+
+    it('ignores the holder once the hotkey is dead for an unrelated reason', () => {
+      // A missing grant outranks Secure Input (menu.ts's own doc comment);
+      // naming a holder here would be a non-sequitur next to "permission is
+      // needed".
+      expect(
+        trayStatusLabel('idle', false, false, false, { name: '1Password', bundleId: null }),
+      ).toBe('⚠️ Accessibility permission is needed');
+    });
+  });
 });
 
 describe('buildTrayMenu', () => {
+  it('names the holder in the status row when one is known', () => {
+    const menu = buildTrayMenu(
+      model({
+        state: 'blocked',
+        secureInput: true,
+        secureInputHolder: { name: 'Terminal', bundleId: 'com.apple.Terminal' },
+      }),
+    );
+    expect(menu[0]?.label).toBe('Secure Input is on in Terminal — Fn is blocked until it lets go');
+  });
+
   it('offers history, stats, settings and quit', () => {
     const items = ids(buildTrayMenu(model()));
     expect(items).toContain('open.history');

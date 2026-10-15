@@ -14,7 +14,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { HelperToApp, InsertRoute } from '@contracts/helper-protocol.js';
+import type { HelperToApp, InsertRoute, SecureInputHolder } from '@contracts/helper-protocol.js';
 import type {
   FrontmostApp,
   HelperPermissions,
@@ -49,7 +49,9 @@ export class HelperClient implements NativeHelperPort {
   readonly #hotkeyListeners = new Set<
     (action: 'ptt_down' | 'ptt_up' | 'toggle' | 'retry_insert', ts: number) => void
   >();
-  readonly #secureInputListeners = new Set<(enabled: boolean) => void>();
+  readonly #secureInputListeners = new Set<
+    (enabled: boolean, holder: SecureInputHolder | null) => void
+  >();
   readonly #frontmostListeners = new Set<(app: FrontmostApp) => void>();
   readonly #permissionListeners = new Set<(permissions: HelperPermissions) => void>();
 
@@ -87,7 +89,9 @@ export class HelperClient implements NativeHelperPort {
     return () => this.#hotkeyListeners.delete(listener);
   }
 
-  onSecureInput(listener: (enabled: boolean) => void): () => void {
+  onSecureInput(
+    listener: (enabled: boolean, holder: SecureInputHolder | null) => void,
+  ): () => void {
     this.#secureInputListeners.add(listener);
     return () => this.#secureInputListeners.delete(listener);
   }
@@ -200,7 +204,7 @@ export class HelperClient implements NativeHelperPort {
         for (const l of this.#hotkeyListeners) l(frame.action, frame.ts);
         return;
       case 'secure_input':
-        for (const l of this.#secureInputListeners) l(frame.enabled);
+        for (const l of this.#secureInputListeners) l(frame.enabled, frame.holder ?? null);
         return;
       case 'permissions': {
         const permissions: HelperPermissions = {

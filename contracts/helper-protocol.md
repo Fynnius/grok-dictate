@@ -1,6 +1,6 @@
 # Contract — Helper protocol
 
-**Status: frozen at the end of Phase 1, reopened by Phase 5, reopened again for BUG-1, reopened 2026-08-22 for mute commands** (IMPLEMENTATION-PLAN.md §2). Phases 2–4 built against it exactly and requested no change to it. Two changes have been made since to `insert_result`: Phase 5 added `reason`, and BUG-1 added `verified` and the `verification_failed` decline. Both are additive and `nullish`, so an older build on either side of the wire keeps parsing.
+**Status: frozen at the end of Phase 1, reopened by Phase 5, reopened again for BUG-1, reopened 2026-08-22 for mute commands, reopened 2026-10-15 for the Secure Input holder** (IMPLEMENTATION-PLAN.md §2). Phases 2–4 built against it exactly and requested no change to it. Two changes have been made since to `insert_result`: Phase 5 added `reason`, and BUG-1 added `verified` and the `verification_failed` decline. Both are additive and `nullish`, so an older build on either side of the wire keeps parsing.
 
 **2026-08-22** added `mute_output` and `unmute_output`. Fire-and-forget, like `copy`. An older helper ignores them under §1 rule 2.
 
@@ -61,11 +61,14 @@ First frame after start-up. `caps` lists the insertion tiers this build can actu
 
 ```jsonc
 { "v": 1, "type": "secure_input", "enabled": true }
+{ "v": 1, "type": "secure_input", "enabled": true, "holder": { "name": "1Password", "bundleId": "com.1password.1password" } }
 ```
 
-Emitted **on change only**, plus once shortly after `ready` to establish the initial value. Sourced from `IsSecureEventInputEnabled()` on a timer.
+Emitted **on change only**, plus once shortly after `ready` to establish the initial value. `enabled` is sourced from `IsSecureEventInputEnabled()` on a timer; also emitted when `holder` changes while `enabled` stays `true` — one password field losing focus to another without Secure Input ever clearing in between.
 
 While `enabled` is true no third-party process can install a `CGEventTap`, so the hotkey is dead system-wide. This frame is the _only_ thing that turns that into a visible state instead of "the app is broken" (§12.2).
+
+**`holder` (added 2026-10-15)** names which process macOS reports is holding Secure Input, when the helper could resolve one. Absent or `null` means "unknown" — covers both `enabled: false` and a pid that could not be named — so an older app simply never reads the field (§1 rule 3). **Measured on macOS 27**: `CGSessionCopyCurrentDictionary()` carries a `kCGSSessionSecureInputPID` key for exactly as long as `enabled` is true (verified by toggling Terminal's own Secure Keyboard Entry and watching the key appear and disappear with it); the pid resolves to `holder.name` via `NSRunningApplication(processIdentifier:)?.localizedName`, falling back to the bare process name (`proc_name`) for a command-line holder with no `NSApplication` at all. `holder.bundleId` is the same lookup's `bundleIdentifier`, `null` for that command-line case.
 
 ### `frontmost`
 

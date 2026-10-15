@@ -9,6 +9,7 @@
 import type { AppConfig } from '@contracts/config.js';
 import { DEFAULT_CONFIG } from '@contracts/config.js';
 import type { HistoryEntry, HudView, SessionState } from '@contracts/events.js';
+import type { SecureInputHolder } from '@contracts/helper-protocol.js';
 import type {
   AudioCue,
   ConfigPort,
@@ -32,9 +33,13 @@ export class MemoryHud implements HudPort {
 }
 
 export class MemoryTray implements TrayPort {
-  readonly states: { state: SessionState; secureInput: boolean }[] = [];
-  setState(state: SessionState, secureInput: boolean): void {
-    this.states.push({ state, secureInput });
+  readonly states: {
+    state: SessionState;
+    secureInput: boolean;
+    holder: SecureInputHolder | null;
+  }[] = [];
+  setState(state: SessionState, secureInput: boolean, holder: SecureInputHolder | null): void {
+    this.states.push({ state, secureInput, holder });
   }
 }
 

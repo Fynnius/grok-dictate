@@ -29,7 +29,12 @@
 
 import type { AppConfig, HotkeyBindings, SttModel } from './config.js';
 import type { CaptureDeviceInfo, HistoryEntry, HudView, SessionState } from './events.js';
-import type { InsertDeclineReason, InsertRoute, InsertTier } from './helper-protocol.js';
+import type {
+  InsertDeclineReason,
+  InsertRoute,
+  InsertTier,
+  SecureInputHolder,
+} from './helper-protocol.js';
 import type { AppError, Result } from '../src/shared/result.js';
 
 /* ------------------------------------------------------------------ *
@@ -89,7 +94,12 @@ export interface NativeHelperEvents {
   onHotkey(
     listener: (action: 'ptt_down' | 'ptt_up' | 'toggle' | 'retry_insert', ts: number) => void,
   ): () => void;
-  onSecureInput(listener: (enabled: boolean) => void): () => void;
+  /**
+   * `holder` is `null` whenever it is not known — including every disabled
+   * report. Added 2026-10-15 so the tray/HUD can say which app to leave; see
+   * `SecureInputHolder`.
+   */
+  onSecureInput(listener: (enabled: boolean, holder: SecureInputHolder | null) => void): () => void;
   onFrontmostChanged(listener: (app: FrontmostApp) => void): () => void;
   /**
    * Whether the hotkey is actually alive. Added in Phase 5: the tray used to
@@ -332,7 +342,8 @@ export interface HudPort {
 }
 
 export interface TrayPort {
-  setState(state: SessionState, secureInput: boolean): void;
+  /** `holder` is `null` when Secure Input is off, or on but unnamed. */
+  setState(state: SessionState, secureInput: boolean, holder: SecureInputHolder | null): void;
 }
 
 export type AudioCue = 'start' | 'stop' | 'error';

@@ -14,6 +14,7 @@
 
 import type { AppConfig, LanguageMode } from '@contracts/config.js';
 import type { HudView, SessionState } from '@contracts/events.js';
+import type { SecureInputHolder } from '@contracts/helper-protocol.js';
 import type { TrayIconName } from './icons.js';
 
 export type PanelName = 'settings' | 'history' | 'stats';
@@ -58,6 +59,10 @@ export interface TrayMenuItem {
 export interface TrayModel {
   readonly state: SessionState;
   readonly secureInput: boolean;
+  /** Who macOS reports is holding Secure Input, when known. Optional so
+   *  existing call sites that never set it keep compiling; absent and `null`
+   *  both mean "unknown". Added 2026-10-15. */
+  readonly secureInputHolder?: SecureInputHolder | null;
   readonly config: AppConfig;
   /** Newest first. The menu shows at most five. */
   readonly recentHistory: readonly TrayHistoryRow[];
@@ -109,6 +114,7 @@ export function trayStatusLabel(
   secureInput: boolean,
   hotkeyActive = true,
   accessibility = true,
+  holder: SecureInputHolder | null = null,
 ): string {
   if (!hotkeyActive && !secureInput) {
     // The warning sign is the visual weight the overhaul's §11.1.12 asks for:
@@ -119,7 +125,16 @@ export function trayStatusLabel(
       ? '⚠️ The Fn key is not being detected'
       : '⚠️ Accessibility permission is needed';
   }
-  if (secureInput || state === 'blocked') return 'Blocked — Secure Input is active';
+  if (secureInput || state === 'blocked') {
+    // Named when the holder resolved, so the row says which app to go and
+    // leave instead of just that the hotkey is dead. Unknown keeps the
+    // original sentence exactly — most Secure Input sessions never resolve a
+    // GUI holder (plenty of 1Password/KeePassXC reports are about the tap
+    // staying down after the field itself is gone).
+    return holder?.name
+      ? `Secure Input is on in ${holder.name} — Fn is blocked until it lets go`
+      : 'Blocked — Secure Input is active';
+  }
   switch (state) {
     case 'idle':
       return 'Ready';
@@ -247,6 +262,7 @@ export function buildTrayMenu(model: TrayModel): readonly TrayMenuItem[] {
         model.secureInput,
         model.hotkeyActive,
         model.accessibility,
+        model.secureInputHolder ?? null,
       ),
       enabled: false,
     },

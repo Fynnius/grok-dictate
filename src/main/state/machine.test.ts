@@ -50,6 +50,8 @@ const histories = (effects: readonly Effect[]): Extract<Effect, { type: 'history
   );
 const huds = (effects: readonly Effect[]): Extract<Effect, { type: 'hud' }>[] =>
   effects.filter((e): e is Extract<Effect, { type: 'hud' }> => e.type === 'hud');
+const trays = (effects: readonly Effect[]): Extract<Effect, { type: 'tray' }>[] =>
+  effects.filter((e): e is Extract<Effect, { type: 'tray' }> => e.type === 'tray');
 const kinds = (effects: readonly Effect[]): string[] => effects.map((e) => e.type);
 
 /**
@@ -675,6 +677,90 @@ describe('Secure Input (contract §8, )', () => {
       );
       const cleared = reduce(refused.snapshot, { type: 'SECURE_INPUT', enabled: false }, env);
       expect(huds(cleared.effects)[0]?.view).toEqual({ kind: 'hidden' });
+    });
+  });
+
+  describe('the holder (2026-10-15)', () => {
+    const HOLDER = { name: '1Password', bundleId: 'com.1password.1password' };
+
+    it('carries the holder on the pill and the tray when one is announced', () => {
+      const { effects, snapshot } = run([
+        { type: 'PTT_DOWN', ts: 1 },
+        { type: 'SECURE_INPUT', enabled: true, holder: HOLDER },
+      ]);
+      expect(huds(effects)[0]?.view).toEqual({ kind: 'blocked', holder: HOLDER });
+      expect(trays(effects).at(-1)).toMatchObject({ state: 'blocked', holder: HOLDER });
+      expect(snapshot.ctx.secureInputHolder).toEqual(HOLDER);
+    });
+
+    it('omits the holder entirely — not as an explicit null — when unknown', () => {
+      // Every pre-2026-10-15 assertion in this file compares against the bare
+      // `{ kind: 'blocked' }`; an explicit `holder: null` would be a different
+      // object to a strict equality check even though it means the same thing.
+      const { effects } = run([
+        { type: 'SECURE_INPUT', enabled: true },
+        { type: 'PTT_DOWN', ts: 1 },
+      ]);
+      expect(huds(effects)[0]?.view).toEqual({ kind: 'blocked' });
+      expect('holder' in (huds(effects)[0]?.view ?? {})).toBe(false);
+    });
+
+    it('reports a holder change while staying blocked, without re-deciding whether to announce', () => {
+      const OTHER = { name: 'KeePassXC', bundleId: null };
+      // Entered silently from idle — nothing was requested, so nothing is shown.
+      const blocked = run([{ type: 'SECURE_INPUT', enabled: true, holder: HOLDER }]);
+      expect(huds(blocked.effects)).toHaveLength(0);
+
+      const changed = reduce(
+        blocked.snapshot,
+        { type: 'SECURE_INPUT', enabled: true, holder: OTHER },
+        testEnv(),
+      );
+      expect(changed.snapshot.ctx.secureInputHolder).toEqual(OTHER);
+      // Still nothing on screen: the holder changing is not a new request.
+      expect(huds(changed.effects)).toHaveLength(0);
+      expect(trays(changed.effects).at(-1)).toMatchObject({ holder: OTHER });
+    });
+
+    it('updates a holder name already on screen when it changes', () => {
+      const env = testEnv();
+      const OTHER = { name: 'KeePassXC', bundleId: null };
+      // A request while blocked raises the pill (`blockedNoticeShown: true`).
+      const announced = run(
+        [
+          { type: 'SECURE_INPUT', enabled: true, holder: HOLDER },
+          { type: 'PTT_DOWN', ts: 1 },
+        ],
+        env,
+      );
+      const changed = reduce(
+        announced.snapshot,
+        { type: 'SECURE_INPUT', enabled: true, holder: OTHER },
+        env,
+      );
+      expect(huds(changed.effects).at(-1)?.view).toEqual({ kind: 'blocked', holder: OTHER });
+    });
+
+    it('clears the holder once Secure Input itself clears', () => {
+      const { snapshot } = run([
+        { type: 'SECURE_INPUT', enabled: true, holder: HOLDER },
+        { type: 'SECURE_INPUT', enabled: false },
+      ]);
+      expect(snapshot.ctx.secureInputHolder).toBeNull();
+    });
+
+    it('names the holder in the not-inserted detail when a turn finalises while blocked', () => {
+      const { all } = run([
+        { type: 'PTT_DOWN', ts: 1 },
+        { type: 'TRANSCRIPT_INTERIM', sessionId: 's1', text: 'a secret' },
+        { type: 'SECURE_INPUT', enabled: true, holder: HOLDER },
+        { type: 'TURN_ENDED', sessionId: 's1', durationSec: 2 },
+      ]);
+      const view = huds(all).at(-1)?.view;
+      expect(view).toMatchObject({ kind: 'not_inserted', reason: 'secure_input' });
+      expect(view && 'detail' in view ? view.detail : '').toContain(
+        '1Password had Secure Input on',
+      );
     });
   });
 });

@@ -10,7 +10,11 @@
  */
 
 import type { AudioCue, FrontmostApp, InsertOutcome } from '@contracts/ports.js';
-import type { InsertRoute } from '@contracts/helper-protocol.js';
+import {
+  secureInputHoldersEqual,
+  type InsertRoute,
+  type SecureInputHolder,
+} from '@contracts/helper-protocol.js';
 import type {
   HistoryEntry,
   HudView,
@@ -38,7 +42,12 @@ export type SessionEvent =
    */
   | { type: 'INSERT_TEXT'; text: string }
   | { type: 'CANCEL' }
-  | { type: 'SECURE_INPUT'; enabled: boolean }
+  /**
+   * `holder` is nullish on the wire and here: absent or `null` means
+   * "unknown", which covers both `enabled: false` and a holder the helper
+   * could not name. Added 2026-10-15; see `SecureInputHolder`.
+   */
+  | { type: 'SECURE_INPUT'; enabled: boolean; holder?: SecureInputHolder | null }
   | { type: 'FRONTMOST'; sessionId: string; app: FrontmostApp }
   | { type: 'TRANSCRIPT_INTERIM'; sessionId: string; text: string }
   | { type: 'TRANSCRIPT_FINAL'; sessionId: string; text: string }
@@ -101,7 +110,9 @@ export type Effect =
       route: InsertRoute;
     }
   | { type: 'hud'; view: HudView }
-  | { type: 'tray'; state: SessionState; secureInput: boolean }
+  /** `holder` is omitted outside the blocked/inserting-while-blocked paths,
+   *  where it is `ctx.secureInputHolder`. */
+  | { type: 'tray'; state: SessionState; secureInput: boolean; holder?: SecureInputHolder | null }
   | { type: 'cue'; cue: AudioCue }
   | { type: 'history_append'; entry: HistoryDraft }
   /**
@@ -157,6 +168,12 @@ export interface SessionContext {
    * and nobody else's.
    */
   readonly blockedNoticeShown: boolean;
+  /**
+   * Who macOS reports is holding Secure Input, while `secureInput` is true.
+   * `null` when unknown, or once it clears. Added 2026-10-15 so the tray/HUD
+   * can name the app instead of just saying something is blocking the hotkey.
+   */
+  readonly secureInputHolder: SecureInputHolder | null;
   readonly startedAt: number | null;
   readonly elapsedMs: number;
   readonly durationSec: number | null;
@@ -232,6 +249,7 @@ export const INITIAL_CONTEXT: SessionContext = {
   pendingStart: false,
   secureInput: false,
   blockedNoticeShown: false,
+  secureInputHolder: null,
   startedAt: null,
   elapsedMs: 0,
   durationSec: null,
@@ -356,6 +374,25 @@ function recordingView(ctx: SessionContext): HudView {
 
 function processingView(): HudView {
   return { kind: 'processing', interim: '' };
+}
+
+/**
+ * The blocked pill, with `holder` omitted — not sent as an explicit `null` —
+ * whenever it is not known. Every test and preview written before 2026-10-15
+ * compares against the bare `{ kind: 'blocked' }`; an explicit `null` would
+ * read as a different object to a strict equality check even though it means
+ * the same thing.
+ */
+function blockedView(holder: SecureInputHolder | null): HudView {
+  return holder === null ? { kind: 'blocked' } : { kind: 'blocked', holder };
+}
+
+/** The `tray` effect for the blocked regime, with `holder` omitted the same
+ *  way as `blockedView` and for the same reason. */
+function trayBlockedEffect(state: SessionState, holder: SecureInputHolder | null): Effect {
+  return holder === null
+    ? { type: 'tray', state, secureInput: true }
+    : { type: 'tray', state, secureInput: true, holder };
 }
 
 function muteEffect(ctx: SessionContext): Effect[] {
@@ -499,7 +536,7 @@ function startSession(ctx: SessionContext, mode: SessionMode, env: MachineEnv): 
  * line is still logged, because a dead hotkey is exactly what someone reading
  * the log afterwards needs explained.
  */
-function enterBlocked(snapshot: Snapshot): Step {
+function enterBlocked(snapshot: Snapshot, holder: SecureInputHolder | null): Step {
   const { state, ctx } = snapshot;
   const effects: Effect[] = [];
   if (state === 'recording' && ctx.sessionId !== null) {
@@ -510,22 +547,55 @@ function enterBlocked(snapshot: Snapshot): Step {
   // A turn in flight is being taken away mid-sentence — that the user has to be
   // told, and it is the one case where they did ask for something.
   const notify = state !== 'idle';
-  if (notify) effects.push({ type: 'hud', view: { kind: 'blocked' } });
-  effects.push({ type: 'tray', state: 'blocked', secureInput: true });
+  if (notify) effects.push({ type: 'hud', view: blockedView(holder) });
+  effects.push(trayBlockedEffect('blocked', holder));
   effects.push({
     type: 'log',
     level: 'warn',
-    message: 'Secure Input is active — the event tap is disabled system-wide',
-    fields: { previousState: state, announced: notify },
+    message: secureInputBlockedLogMessage(holder),
+    fields: { previousState: state, announced: notify, holderName: holder?.name ?? null },
   });
   // An insert already dispatched to the helper cannot be recalled; stay in
   // `inserting` and let the result land, which routes to `blocked` below.
   const nextState: SessionState = state === 'inserting' ? 'inserting' : 'blocked';
   return step(
     nextState,
-    { ...ctx, secureInput: true, pendingStart: false, blockedNoticeShown: notify },
+    {
+      ...ctx,
+      secureInput: true,
+      pendingStart: false,
+      blockedNoticeShown: notify,
+      secureInputHolder: holder,
+    },
     effects,
   );
+}
+
+/**
+ * The holder changed while Secure Input stayed on — one password field losing
+ * focus to another without ever clearing in between. Updates the context and,
+ * if a notice is already on screen, the text it shows; does **not** re-decide
+ * whether to announce (that would turn a silent block into an announced one
+ * the moment the holder behind it changed).
+ */
+function updateBlockedHolder(snapshot: Snapshot, holder: SecureInputHolder | null): Step {
+  const { state, ctx } = snapshot;
+  const effects: Effect[] = [];
+  if (ctx.blockedNoticeShown) effects.push({ type: 'hud', view: blockedView(holder) });
+  effects.push(trayBlockedEffect('blocked', holder));
+  effects.push({
+    type: 'log',
+    level: 'warn',
+    message: secureInputBlockedLogMessage(holder),
+    fields: { holderChanged: true, holderName: holder?.name ?? null },
+  });
+  return step(state, { ...ctx, secureInputHolder: holder }, effects);
+}
+
+/** The existing Secure Input warn line, naming the holder when known. */
+function secureInputBlockedLogMessage(holder: SecureInputHolder | null): string {
+  const base = 'Secure Input is active — the event tap is disabled system-wide';
+  return holder?.name ? `${base} (held by ${holder.name})` : base;
 }
 
 /**
@@ -652,7 +722,7 @@ function finishInsert(
   // Secure Input arrived while the insert was in flight → land in `blocked`.
   if (ctx.secureInput) {
     effects.push({ type: 'hud', view: insertView(outcome, text, reasonWhenFailed) });
-    effects.push({ type: 'tray', state: 'blocked', secureInput: true });
+    effects.push(trayBlockedEffect('blocked', ctx.secureInputHolder));
     // The insert's own pill has replaced the blocked one, so leaving Secure
     // Input must not hide it — it carries the transcript.
     return step('blocked', { ...cleared, pendingStart: false, blockedNoticeShown: false }, effects);
@@ -890,10 +960,24 @@ export function reduce(snapshot: Snapshot, event: SessionEvent, env: MachineEnv)
 
   // Secure Input wins from any state (contract §8 / IMPLEMENTATION-PLAN §3.1.2).
   if (event.type === 'SECURE_INPUT') {
-    if (event.enabled === ctx.secureInput && state !== 'blocked') {
+    const holder = event.holder ?? null;
+    const holderUnchanged = secureInputHoldersEqual(holder, ctx.secureInputHolder);
+    if (event.enabled === ctx.secureInput && holderUnchanged && state !== 'blocked') {
       return { snapshot, effects: [] };
     }
-    if (event.enabled) return enterBlocked(snapshot);
+    if (event.enabled) {
+      // Already in the blocked regime (`blocked`, or `inserting` while an
+      // insert dispatched before Secure Input arrived settles) — update the
+      // holder in place rather than re-running the whole transition, which
+      // would re-decide `notify` from today's already-blocked state and could
+      // turn a silent block into an announced one just because the holder
+      // behind it changed.
+      if (ctx.secureInput) {
+        if (holderUnchanged) return { snapshot, effects: [] };
+        return updateBlockedHolder(snapshot, holder);
+      }
+      return enterBlocked(snapshot, holder);
+    }
     if (state === 'blocked') {
       const effects: Effect[] = [];
       // Dismiss our own message and nobody else's. If Secure Input never
@@ -910,11 +994,12 @@ export function reduce(snapshot: Snapshot, event: SessionEvent, env: MachineEnv)
           pendingStart: false,
           sessionId: null,
           blockedNoticeShown: false,
+          secureInputHolder: null,
         },
         effects,
       );
     }
-    return step(state, { ...ctx, secureInput: false }, [
+    return step(state, { ...ctx, secureInput: false, secureInputHolder: null }, [
       { type: 'tray', state, secureInput: false },
     ]);
   }
@@ -1335,7 +1420,7 @@ function reduceBlocked(snapshot: Snapshot, event: PostSecureEvent, env: MachineE
   // The pill it raises is ours, so unblocking dismisses it.
   const refuse = (what: string): Step =>
     step('blocked', { ...ctx, blockedNoticeShown: true }, [
-      { type: 'hud', view: { kind: 'blocked' } },
+      { type: 'hud', view: blockedView(ctx.secureInputHolder) },
       { type: 'cue', cue: 'error' },
       { type: 'log', level: 'warn', message: `${what} refused: Secure Input is active` },
     ]);
@@ -1374,6 +1459,12 @@ function reduceBlocked(snapshot: Snapshot, event: PostSecureEvent, env: MachineE
       // whether the words survive at all.
       const { text, unconfirmedTail } = salvage(withDuration);
       if (text.length === 0) return step('blocked', { ...withDuration, sessionId: null }, []);
+      // Named when the holder is known, so the advice says where to go
+      // instead of just that somewhere needs leaving.
+      const holderName = ctx.secureInputHolder?.name ?? null;
+      const whatHeld = holderName
+        ? `${holderName} had Secure Input on`
+        : 'A password field had focus';
       return step(
         'blocked',
         {
@@ -1407,8 +1498,8 @@ function reduceBlocked(snapshot: Snapshot, event: PostSecureEvent, env: MachineE
               // losing the password-field advice.
               reason: 'secure_input',
               detail: unconfirmedTail
-                ? 'A password field had focus, so nothing was typed. The end of this was still being transcribed and was never confirmed.'
-                : 'A password field had focus, so nothing was typed.',
+                ? `${whatHeld}, so nothing was typed. The end of this was still being transcribed and was never confirmed.`
+                : `${whatHeld}, so nothing was typed.`,
             },
           },
         ],
