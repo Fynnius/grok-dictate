@@ -183,9 +183,10 @@ private func coreAudioUID(_ device: AudioDeviceID) -> String? {
     var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
     let status = AudioObjectGetPropertyData(device, &address, 0, nil, &size, &uid)
     guard status == noErr, let uid else { return nil }
-    // GetPropertyData copies the CFString into our slot without transferring
-    // +1; unretained is the matching take.
-    return uid.takeUnretainedValue() as String
+    // The property hands back a +1 CFString: AudioHardwareBase.h says "the
+    // caller is responsible for releasing the returned CFObject". Retained is
+    // the matching take; unretained leaked one string per device per lookup.
+    return uid.takeRetainedValue() as String
 }
 
 private func findDevice(uid: String) -> AudioDeviceID? {
