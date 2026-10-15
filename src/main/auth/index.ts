@@ -192,8 +192,8 @@ export class GrokAuthProvider implements AuthPort {
    * and caching would mean a `grok login` in another terminal did not take
    * effect until Grok Dictate restarted.
    *
-   * `options.marginMs` overrides the IMPLEMENTATION-PLAN.md §3.3 safety margin
-   * (default `TOKEN_EXPIRY_MARGIN_MS`). `DictateAuth` passes `0` once, to ask
+   * `options.marginMs` overrides the safety margin (default
+   * `TOKEN_EXPIRY_MARGIN_MS`). `DictateAuth` passes `0` once, to ask
    * "has this literally expired" rather than "is it inside our buffer" — see
    * the comment at its call site for why that distinction now matters.
    */
@@ -358,7 +358,7 @@ const RENEW_CHECK_INTERVAL_MS = 60_000;
  *
  * **Zero, as of `grok 1.0.52`.** `main.log` shows that theory is dead:
  * 2026-10-03T02:46:48–02:50:49 and again 2026-10-11/12 are the same shape —
- * `grok models` exits 0 and leaves `auth.json` completely untouched when asked
+ * `grok models` exits 0 and leaves `expires_at` unchanged when asked
  * with three, two and roughly one minute left, and only the attempt made
  * *after* `expires_at` had actually passed produced a new token (see the
  * updated table in `renew.ts`). Every early attempt was a wasted spawn logged,
@@ -430,26 +430,24 @@ export class DictateAuth implements AuthPort {
      */
     if (first.error.code !== 'auth_expired') return first;
 
-    const renewed = await this.#renewAndReread('a dictation started with an expired token');
-    if (renewed !== null) return renewed;
-
     /**
-     * Still not usable under the normal margin — on `grok 1.0.52` this is the
-     * expected outcome whenever the token has less than `TOKEN_EXPIRY_MARGIN_MS`
-     * left but has not actually expired yet: the CLI correctly declines to
-     * refresh something that is not yet due (see `renew.ts`), so the renewal
-     * above was a confirmed no-op, not a failure.
+     * Inside `TOKEN_EXPIRY_MARGIN_MS` but not actually expired: use it, and do
+     * not spawn the CLI first. On `grok 1.0.52` the CLI declines to refresh a
+     * token that is not yet due (see `renew.ts`), so a run here would cost the
+     * key press a second of latency and change nothing.
      *
-     * Refusing the token anyway would turn that no-op into a failed dictation,
-     * and that refusal buys nothing here: `stt/client.ts` presents the bearer
-     * exactly once, as the `Authorization` header on the WebSocket handshake,
-     * never again for the rest of the session. A token good for a few more
-     * seconds authenticates that handshake exactly as well as one good for an
-     * hour. So reject only a token that has actually expired — `marginMs: 0`
-     * asks `GrokAuthProvider` that literal question instead of the padded one.
+     * Using it is safe: `stt/client.ts` presents the bearer exactly once, as the
+     * `Authorization` header on the WebSocket handshake, never again for the
+     * rest of the session. A token good for a few more seconds authenticates
+     * that handshake exactly as well as one good for an hour. `marginMs: 0`
+     * asks `GrokAuthProvider` "has this literally expired" instead of the
+     * padded question.
      */
     const stillGood = await this.#cli.getBearer({ marginMs: 0 });
-    return stillGood.ok ? stillGood : first;
+    if (stillGood.ok) return stillGood;
+
+    const renewed = await this.#renewAndReread('a dictation started with an expired token');
+    return renewed ?? first;
   }
 
   /**
@@ -492,7 +490,7 @@ export class DictateAuth implements AuthPort {
      * A renewal counts as having happened only if `expires_at` actually moved
      * later. Measured against `grok 1.0.52` (`main.log`,
      * 2026-10-03T02:46:48–02:50:49 and 2026-10-11/12): `grok models` exits 0
-     * and leaves the file byte-for-byte unchanged whenever it is asked before
+     * and leaves `expires_at` unchanged whenever it is asked before
      * the token has really expired, so `exitCode === 0` and even
      * `after.ok === true` are both consistent with nothing having happened —
      * the old code logged exactly that as "renewed automatically" every time.

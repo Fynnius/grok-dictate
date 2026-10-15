@@ -494,16 +494,16 @@ describe('DictateAuth', () => {
 
     it('serves a token inside the margin but not actually expired, rather than failing the dictation', async () => {
       // Reproduces main.log, 2026-10-03T02:49:48–02:49:49: 23 s left, inside
-      // `TOKEN_EXPIRY_MARGIN_MS` (60 s). `grok models` runs and — correctly, on
-      // 1.0.52 — leaves the token exactly as it was, because it has not actually
-      // expired. The WebSocket in `stt/client.ts` only presents the bearer once,
-      // at connect, so this token is still safe to dictate with.
+      // `TOKEN_EXPIRY_MARGIN_MS` (60 s). On 1.0.52 `grok models` would leave the
+      // token exactly as it was, because it has not actually expired — so the
+      // CLI is not even asked. The WebSocket in `stt/client.ts` only presents
+      // the bearer once, at connect, so this token is still safe to dictate with.
       const original = new Date(Date.now() + 10_000).toISOString();
       write(authDocument({ expires_at: original }));
-      const { renewer, calls, outcomes } = stubRenewer(() => undefined); // 1.0.52: no-op, too early
+      const { renewer, calls, outcomes } = stubRenewer(() => undefined);
       const bearer = await build({ renewer, cli: { path } }).getBearer();
 
-      expect(calls()).toBe(1);
+      expect(calls()).toBe(0); // no spawn: it could not have changed anything
       expect(bearer.ok).toBe(true);
       if (!bearer.ok) return;
       expect(bearer.value.expiresAt.toISOString()).toBe(original);

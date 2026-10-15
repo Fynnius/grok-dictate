@@ -41,8 +41,8 @@
  *
  * **This changed under `grok 1.0.52`, and the row-one threshold above no
  * longer holds.** `main.log` (2026-10-03T02:46:48–02:50:49, repeated
- * 2026-10-11/12) shows `grok models` exiting 0 and leaving `auth.json`
- * byte-for-byte unchanged — `expires_at` identical — when asked with three,
+ * 2026-10-11/12) shows `grok models` exiting 0 and leaving `expires_at`
+ * unchanged when asked with three,
  * two and roughly one minute left; only the attempt made *after* the token's
  * real `expires_at` had passed produced a new token. 1.0.52 no longer
  * early-invalidates a token with minutes left; empirically it only refreshes
