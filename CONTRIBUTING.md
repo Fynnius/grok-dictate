@@ -21,7 +21,11 @@ npm run typecheck
 ./native/test.sh
 ```
 
-`npm run package` builds the standalone `Grok Dictate.app` into `/Applications` and a zip in `release/`.
+`npm run package` builds the standalone, ad-hoc signed `Grok Dictate.app` into `/Applications`. For a release, zip that signed copy so the signature survives:
+
+```bash
+ditto -c -k --sequesterRsrc --keepParent "/Applications/Grok Dictate.app" release/grok-dictate-<version>-mac-arm64.zip
+```
 
 ## How the repo is laid out
 
