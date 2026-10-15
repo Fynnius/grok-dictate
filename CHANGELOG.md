@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-10-15
+
+Secure Input moves to the menu bar and names who holds it, a Grok CLI login no longer fails a dictation in its last minute, and Electron picks up current Chromium security fixes.
+
 ### Changed
 
 - **Settings → Dictation splits “where it talks” from “which model”.** _Dictation via_ is xAI API or grok.com. The API path pins [Voice Transcribe 2.0](https://docs.x.ai/developers/model-capabilities/audio/speech-to-text) (1.0 stays selectable). grok.com is still STT 2 Fast, not a third API slug. Existing `grok-stt` configs become a 2.0 pin; existing Fast configs become Dictation via grok.com. Unknown model slugs are kept and sent, not rewritten to the default.
@@ -18,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **"The Grok login was renewed automatically" is only logged when it was.** While the Mac sleeps the Grok CLI defers a refresh and exits 0 with the token unchanged; each of those runs was logged as a renewal. Only an expiry that actually moved counts now. If a dictation meets a token in its last minute and renewing changes nothing, the token is used as long as it has 30 s left — enough for the connection and its retries — instead of failing the dictation.
 - **The Swift helper builds on Xcode 27.** `native/build.sh` and `native/test.sh` failed on a new weak-capture diagnostic; `native/test.sh` also runs outside the iCloud-synced tree now, where `codesign` refused its test bundles.
+- The output mute no longer leaks a small string per audio device each time it looks one up.
 
 ## [0.4.0] — 2026-09-12
 
