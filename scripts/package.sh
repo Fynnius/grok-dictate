@@ -21,9 +21,9 @@
 #      anyway); it is enough to give this machine something stable to remember.
 #
 # Phase 5 packaged the app because HT-13 established that terminal-launched
-# Electron cannot own a menu-bar status item on this machine — see
-# docs/phase-5-review.md. The tray is the only affordance a menu-bar app has, so
-# "run it from a terminal" stopped being a viable way to use the product.
+# Electron cannot own a menu-bar status item on this machine. The tray is the
+# only affordance a menu-bar app has, so "run it from a terminal" stopped being
+# a viable way to use the product.
 #
 # After a build, macOS treats the result as a new application. Expect to grant
 # Microphone, Accessibility and Input Monitoring once (braindump §12.6, and

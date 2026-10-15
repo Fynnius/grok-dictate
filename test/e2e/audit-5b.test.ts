@@ -8,9 +8,8 @@
  * refresh path — because those are exactly the properties a single phase could
  * honour inside its own boundary while the product as a whole broke them.
  *
- * The per-behaviour checks stay where they are and are listed in
- * `docs/phase-5-review.md` with their homes; duplicating them here would give
- * two places to update and one to forget.
+ * The per-behaviour checks stay where they are, listed with their homes;
+ * duplicating them here would give two places to update and one to forget.
  *
  * Several assertions below are **source scans**. That is deliberate. A
  * behavioural test proves that the paths it drives do not write the clipboard;

@@ -8,7 +8,7 @@
  * A packaged menu-bar app has no terminal: it is launched from Finder, its
  * stdout goes nowhere, and it has no window that could show a log either. So
  * the moment the app is packaged — which is the moment the tray icon finally
- * works, `docs/phase-5-review.md` — it also becomes undiagnosable.
+ * works — it also becomes undiagnosable.
  *
  * That is the same shape as the failures  is about. Both silent
  * failures it names (Secure Input, the event-tap timeout) produce "no error, no
