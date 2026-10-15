@@ -418,3 +418,71 @@ into cmux and Terminal.app from a process that holds Accessibility (§5 Q1,
 Q2), and a real 2,000-character dictation timed off `insert_end −
 insert_begin`. The default is `auto`; those two runs are what would tell you
 whether the default is wrong.
+
+---
+
+## 13. Field results (2026-10-15)
+
+Accessibility was granted to the real launch terminal after §5 was written, so
+the app has now actually run. **Window:** 2026-09-12 (the 0.4.0 release) through
+2026-09-29, the last dictation on record — 57 dictations, 30 paste / 17 unicode
+/ 10 cancelled (no tier). Targets: cmux 18, Claude 17, Terminal 16, Arc 4, Grok
+Dictate 1, Grok Bot 1. Source: `history.json` for counts, `main.log` for
+per-chord receipts and timing; `main.log`'s own coverage starts at
+2026-09-12T10:27Z, so the sample's first two dictations (07:30–07:31 that
+morning) have no log line to check against — everything below is the other 55.
+
+**Q1 — closed, within a stated limit.** 29 of the 30 paste-tier rows in the
+covered window have a matching receipt line, correctly attributed: cmux 13,
+Terminal 10, Claude 5, Arc 1. (The 30th paste, into Arc at 07:31, predates log
+coverage.) Exactly one chord in the whole window got no receipt, and it was the
+right one: into Grok Dictate's own window, which doesn't read the pasteboard.
+It waited out the 0.5 s timeout (511 ms), declined, and fell through to Unicode
+injection in under a millisecond — final tier `unicode`, inserted, not typed
+twice. A receipt only proves the target read the pasteboard after the chord,
+not what it did with the text; within that limit, 29 for 29 attributed
+correctly is as clean an answer as this data can give.
+
+**Q2 — still open, narrower.** All 10 Terminal pastes received a receipt
+7–15 ms after the chord — far too fast for a human to have seen or dismissed a
+modal dialog. That is evidence against the dialog firing on these 10
+occasions, on this machine, with developer tools installed; it says nothing
+about a fresh install, a different source app, or a future Terminal build.
+
+**Q3 — closed, with a caveat.** No dictation in the sample reached 2,000 units.
+The longest was 1,940 units into cmux, `insert_end − insert_begin` = 118 ms —
+well inside the 150 ms budget, but at 97% of the target length, not 100%. Next
+longest: 1,368 into Terminal (84 ms), 1,235 into cmux (83 ms). The budget holds
+everywhere it was actually tested; the headline number itself is approached,
+not hit.
+
+**§8, where the field data actually speaks:**
+
+- _Is 120 units the right split?_ Every unicode-tier insertion in the sample
+  was ≤120 units (max 107). Every paste into Claude, Terminal or Arc was >120
+  (min 122). Every paste into cmux happened regardless of length — 5, 20, 67
+  and 82-unit dictations pasted exactly like the 1,940-unit one. That matches
+  the design: cmux's AX signature decides it outright, and the length rule is
+  what pulls the other three apps in once a dictation is long enough. The log
+  doesn't record which rule fired per event, so this is the shape of the
+  traffic, not a count of which rule won.
+- _Is 200 ms right for non-Chromium targets?_ Every one of the 29 receipts was
+  a single read — `receiptsAfterChord` never exceeded 1 in the log (the
+  "(N reads)" suffix never appears, nor does "earlier read(s) ignored"). The
+  pasteboard was released 215–222 ms after the receipt in all 29 cases (mean
+  216.8 ms), matching the 200 ms quiet period plus ~16 ms of overhead. The
+  sample never produced the multi-probe case this parameter exists for, so
+  this confirms the mechanism runs on schedule — not that 200 ms is enough for
+  a target that actually reads twice.
+- _Should ⌃⌘V force the paste route?_ No field data. `history.json` has no
+  field that distinguishes a ⌃⌘V re-insert from any other dictation.
+- _Is 0.5 s the right ceiling?_ One field case exercised it, end to end: the
+  Grok Dictate decline above, 513 ms from `insert_begin` to `insert_end`,
+  firing once across 30 attempts and falling through cleanly.
+
+**Correction to an earlier draft.** `unconfirmedTail` is not the ⌃⌘V re-insert
+path — nothing connects the two. It marks a take whose end the server never
+confirmed because the connection dropped mid-utterance; the partial text is
+kept in History but never typed. All 9 cancelled rows in the window carry it:
+3 true, 6 false. (A 10th no-tier row has neither flag set and wasn't
+investigated further — out of scope here.)
