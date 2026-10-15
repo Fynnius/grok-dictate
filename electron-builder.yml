@@ -21,6 +21,9 @@ files:
   # Without this exclusion it is swept into the asar: 260 MB of Swift object
   # files for a 6 MB application.
   - '!out/native-build'
+  # `tsc` keeps its incremental build info in out/ (tsconfig.*.json). It lists
+  # every source and test path and is no part of the app.
+  - '!out/*.tsbuildinfo'
   - package.json
 
 # The Swift binaries. Lookup checks `process.resourcesPath` second, after the
