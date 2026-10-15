@@ -26,7 +26,6 @@ const ALL_VIEWS: HudView[] = [
   { kind: 'not_inserted', text: LONG, reason: 'insert_failed', detail: null },
   { kind: 'not_inserted', text: LONG, reason: 'verification_failed', detail: null },
   { kind: 'not_inserted', text: LONG, reason: 'session_error_unconfirmed', detail: null },
-  { kind: 'blocked' },
   { kind: 'error', message: 'No speech was detected.', hint: 'Check the microphone.' },
 ];
 
@@ -74,7 +73,6 @@ describe('present', () => {
     expect(ids({ kind: 'recording', elapsedMs: 0, level: 0, interim: '', mode: 'hold' })).toEqual(
       [],
     );
-    expect(ids({ kind: 'blocked' })).toEqual([]);
     // `error` too: click the pill, don't add a Dismiss button to aim at.
     expect(ids({ kind: 'error', message: 'boom', hint: 'try again' })).toEqual([]);
   });
@@ -158,43 +156,11 @@ describe('present', () => {
     expect(warn.capsule).toEqual({ kind: 'waveform', buttons: false });
   });
 
-  it('colours failure red and the self-clearing pause amber (overhaul §16.5b)', () => {
+  it('colours failure red (overhaul §16.5b)', () => {
     expect(
       present({ kind: 'not_inserted', text: LONG, reason: 'insert_failed', detail: null }).tone,
     ).toBe('error');
     expect(present({ kind: 'error', message: 'boom', hint: null }).tone).toBe('error');
-    expect(present({ kind: 'blocked' }).tone).toBe('warning');
-  });
-
-  it('names Secure Input explicitly rather than failing silently (§12.2)', () => {
-    const p = present({ kind: 'blocked' });
-    expect(p.message?.title).toContain('Secure Input');
-    expect(p.message?.detail).toMatch(/password field/i);
-  });
-
-  describe('a named Secure Input holder (2026-10-15)', () => {
-    it('names the app in both the label and the detail', () => {
-      const p = present({ kind: 'blocked', holder: { name: '1Password', bundleId: null } });
-      expect(p.label).toBe('Secure Input is on in 1Password');
-      expect(p.message?.title).toBe('Secure Input is on in 1Password');
-      expect(p.message?.detail).toBe('Fn is blocked until 1Password lets go of Secure Input.');
-    });
-
-    it('adds the Terminal-specific hint only for Terminal.app', () => {
-      const terminal = present({
-        kind: 'blocked',
-        holder: { name: 'Terminal', bundleId: 'com.apple.Terminal' },
-      });
-      expect(terminal.message?.detail).toContain('Secure Keyboard Entry');
-
-      const other = present({ kind: 'blocked', holder: { name: '1Password', bundleId: null } });
-      expect(other.message?.detail).not.toContain('Secure Keyboard Entry');
-    });
-
-    it('falls back to the unnamed copy when `holder` is explicitly null', () => {
-      const p = present({ kind: 'blocked', holder: null });
-      expect(p.label).toBe('Blocked — Secure Input');
-    });
   });
 
   it('carries the error hint through', () => {
@@ -280,7 +246,6 @@ describe('an insert the helper could not confirm', () => {
 describe('notInsertedCopy', () => {
   const reasons: NotInsertedReason[] = [
     'insert_failed',
-    'secure_input',
     'target_changed',
     'helper_unavailable',
     'verification_failed',

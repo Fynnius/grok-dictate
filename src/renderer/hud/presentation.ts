@@ -35,9 +35,7 @@ import { hudLayer, type HudLayer } from '@shared/hud-view.js';
 
 /**
  * The capsule's fill drives the tone: red for a failure the user must act on,
- * amber for a self-clearing pause (`blocked` — overhaul §16.5b: red for a
- * state the user causes by clicking a password field would train them to
- * ignore red).
+ * amber for a warning that is not a failure (the recording cap's last minute).
  */
 export type HudTone = 'idle' | 'recording' | 'processing' | 'success' | 'warning' | 'error';
 
@@ -158,12 +156,6 @@ export function notInsertedCopy(reason: NotInsertedReason): { title: string; det
         title: 'Not inserted',
         detail: `Neither insertion method was accepted by that app. ${RETRY_HINT}`,
       };
-    case 'secure_input':
-      return {
-        title: 'Not inserted — password field',
-        detail:
-          'macOS Secure Input was active, so nothing was typed. Click out of the password field, then press ⌃⌘V.',
-      };
     case 'target_changed':
       return {
         title: 'Not inserted — focus moved',
@@ -260,41 +252,6 @@ export function present(view: HudView): HudPresentation {
         label: title,
         capsule: { kind: 'alert' },
         message: null,
-        liveText: null,
-      };
-    }
-
-    case 'blocked': {
-      // Named when the holder resolved (added 2026-10-15), so the pill says
-      // which app to go and leave rather than just that something is
-      // blocking the hotkey — see `SecureInputHolder`. Unknown keeps the
-      // original sentence exactly.
-      const holderName = view.holder?.name ?? null;
-      const label = holderName ? `Secure Input is on in ${holderName}` : 'Blocked — Secure Input';
-      const detail = holderName
-        ? `Fn is blocked until ${holderName} lets go of Secure Input.`
-        : 'A password field has focus. macOS blocks all key monitoring while it does, so dictation is paused.';
-      // Terminal's own Secure Keyboard Entry is the one culprit common enough,
-      // and simple enough to name precisely by bundle id, to earn its own
-      // hint rather than a generic "go check your apps".
-      const terminalHint =
-        view.holder?.bundleId === 'com.apple.Terminal'
-          ? ' Terminal ▸ Secure Keyboard Entry is the switch.'
-          : '';
-      return {
-        layer,
-        // Amber: a self-clearing pause, not a failure (§16.5b).
-        tone: 'warning',
-        label,
-        capsule: { kind: 'alert' },
-        message: {
-          title: label,
-          body: null,
-          // : this is one of the two silent failures.
-          // Saying it out loud is the entire mitigation.
-          detail: `${detail}${terminalHint}`,
-          actions: [],
-        },
         liveText: null,
       };
     }

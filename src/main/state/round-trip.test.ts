@@ -330,7 +330,9 @@ describe('the mocked dictation round-trip', () => {
 
     expect(h.orchestrator.snapshot.state).toBe('blocked');
     expect(h.stt.turns).toHaveLength(0);
-    expect(h.hud.last).toEqual({ kind: 'blocked' });
+    // Refused by ear and in the menu bar; nothing goes on screen.
+    expect(h.hud.views).toHaveLength(0);
+    expect(h.sound.cues).toContain('error');
 
     h.mock({ action: 'secure_input', enabled: false });
     await waitFor(() => h.orchestrator.snapshot.state === 'idle');

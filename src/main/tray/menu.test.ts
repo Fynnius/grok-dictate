@@ -86,6 +86,15 @@ describe('trayStatusLabel', () => {
       );
     });
 
+    it('says "the lock screen" rather than "loginwindow"', () => {
+      expect(
+        trayStatusLabel('idle', true, true, true, {
+          name: 'loginwindow',
+          bundleId: 'com.apple.loginwindow',
+        }),
+      ).toBe('Secure Input is on at the lock screen — Fn is blocked until you sign in');
+    });
+
     it('keeps the original sentence when the holder is unknown', () => {
       expect(trayStatusLabel('idle', true, true, true, null)).toBe(
         'Blocked — Secure Input is active',
@@ -114,7 +123,9 @@ describe('buildTrayMenu', () => {
         secureInputHolder: { name: 'Terminal', bundleId: 'com.apple.Terminal' },
       }),
     );
-    expect(menu[0]?.label).toBe('Secure Input is on in Terminal — Fn is blocked until it lets go');
+    expect(menu[0]?.label).toBe(
+      'Secure Input is on in Terminal — turn off Terminal ▸ Secure Keyboard Entry',
+    );
   });
 
   it('offers history, stats, settings and quit', () => {
@@ -219,7 +230,7 @@ describe('buildTrayMenu', () => {
     // gets confirmed by a human (IMPLEMENTATION-PLAN.md §3.4). `inserted` is
     // listed twice (`verified` true / null) even though both now draw the
     // same check, so the data path is still inspectable.
-    expect(previews).toHaveLength(12);
+    expect(previews).toHaveLength(11);
   });
 
   it('delays every preview except Hide, so focus can be moved to another app first', () => {

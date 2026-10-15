@@ -211,12 +211,6 @@ describe('mouse ignore', () => {
     expect(fake.ignoreForward).toBe(true);
   });
 
-  it('blocked is fully click-through, including the pills', async () => {
-    await shown({ kind: 'blocked' });
-    expect(fake.ignoreMouse).toBe(true);
-    expect(fake.ignoreForward).toBe(false);
-  });
-
   it('a click without a move does not pin the session position', async () => {
     const hud = await shown(HOLD);
     hud.beginDrag(400, 800);

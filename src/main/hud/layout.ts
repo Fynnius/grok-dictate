@@ -32,7 +32,7 @@ export const HUD_CAPSULE_WINDOW: HudSize = { width: 160, height: 64 };
  *  kept so `hudBounds` tests still cover a large overlay on a secondary display. */
 export const HUD_MESSAGE_WINDOW: HudSize = { width: 400, height: 260 };
 /**
- * Capsule plus a two-or-three-line notice (`error`, `blocked`) — a title and a
+ * Capsule plus a two-or-three-line notice (`error`) — a title and a
  * line of advice, nothing more (§19.3). Sized to that rather than to the
  * transcript pill so the transparent window is not a 400 × 260 rectangle
  * floating over the user's document for states that need a fifth of it.
@@ -130,7 +130,7 @@ export function boundsFromAnchor(
  * the message pill.
  *
  * The one distinction this file adds on top of `hudLayer` is *how much* the
- * pill has to say: `error` and `blocked` carry a sentence; insert outcomes
+ * pill has to say: `error` carries a sentence; insert outcomes
  * are a wordless capsule. `HUD_MESSAGE_WINDOW` stays as the size a transcript
  * pill would need, used by tests of `hudBounds` on a large overlay.
  */
@@ -163,11 +163,6 @@ export function hudDwellMs(view: HudView): number | null {
     case 'recording':
     case 'processing':
       return null; // ends when the session does
-    case 'blocked':
-      // Cleared by `SECURE_INPUT(false)`, which emits `hud(hidden)`. Hiding it
-      // on a timer would re-hide the one signal that explains why the hotkey
-      // is dead.
-      return null;
     case 'inserted':
     case 'not_inserted':
       // Wordless: a green check or a red flash, then gone. Recovery is

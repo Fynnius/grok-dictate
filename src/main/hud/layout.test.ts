@@ -19,7 +19,6 @@ const VIEWS: Record<HudView['kind'], HudView> = {
   processing: { kind: 'processing', interim: 'hallo' },
   inserted: { kind: 'inserted', text: 'hallo', tier: 'ax', verified: true },
   not_inserted: { kind: 'not_inserted', text: 'hallo', reason: 'insert_failed', detail: null },
-  blocked: { kind: 'blocked' },
   error: { kind: 'error', message: 'boom', hint: null },
 };
 
@@ -43,11 +42,10 @@ describe('hudSize', () => {
   });
 
   it('gives a sentence less room than a transcript (§19.3)', () => {
-    // `error` and `blocked` say one thing and leave. Insert outcomes no
+    // `error` says one thing and leaves. Insert outcomes no
     // longer put the words on screen; `HUD_MESSAGE_WINDOW` is the size that
     // overlay used to need, kept so bounds tests still cover a large window.
     expect(hudSize(VIEWS.error)).toEqual(HUD_NOTICE_WINDOW);
-    expect(hudSize(VIEWS.blocked)).toEqual(HUD_NOTICE_WINDOW);
     expect(HUD_NOTICE_WINDOW.height).toBeLessThan(HUD_MESSAGE_WINDOW.height);
   });
 
@@ -84,7 +82,6 @@ describe('hudInteractive', () => {
     ).toBe(false);
     expect(hudInteractive(VIEWS.processing)).toBe(false);
     expect(hudInteractive(VIEWS.inserted)).toBe(false);
-    expect(hudInteractive(VIEWS.blocked)).toBe(false);
     expect(hudInteractive(VIEWS.hidden)).toBe(false);
     // `error` takes the mouse so a click on the pill dismisses it. Empty
     // chrome around the 400×152 notice window still forwards (hover-forward).
@@ -96,12 +93,6 @@ describe('hudDwellMs', () => {
   it('leaves the live states up until the session replaces them', () => {
     expect(hudDwellMs(VIEWS.recording)).toBeNull();
     expect(hudDwellMs(VIEWS.processing)).toBeNull();
-  });
-
-  it('keeps `blocked` up until Secure Input actually clears (§12.2)', () => {
-    // Hiding it on a timer would re-hide the one signal that explains why the
-    // hotkey has stopped responding.
-    expect(hudDwellMs(VIEWS.blocked)).toBeNull();
   });
 
   it('gives insert outcomes the same short dwell — they are a flash, not a paragraph', () => {

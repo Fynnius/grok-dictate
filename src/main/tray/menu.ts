@@ -131,6 +131,17 @@ export function trayStatusLabel(
     // original sentence exactly — most Secure Input sessions never resolve a
     // GUI holder (plenty of 1Password/KeePassXC reports are about the tap
     // staying down after the field itself is gone).
+    //
+    // This row is the only place Secure Input is ever shown (2026-10-15) —
+    // nothing goes on screen — so the two culprits common enough to name
+    // precisely get their own wording: the lock screen (loginwindow), and
+    // Terminal's own Secure Keyboard Entry, which stays on until switched off.
+    if (holder?.bundleId === 'com.apple.loginwindow' || holder?.name === 'loginwindow') {
+      return 'Secure Input is on at the lock screen — Fn is blocked until you sign in';
+    }
+    if (holder?.bundleId === 'com.apple.Terminal') {
+      return 'Secure Input is on in Terminal — turn off Terminal ▸ Secure Keyboard Entry';
+    }
     return holder?.name
       ? `Secure Input is on in ${holder.name} — Fn is blocked until it lets go`
       : 'Blocked — Secure Input is active';
@@ -238,7 +249,6 @@ const PREVIEW_VIEWS: readonly { id: string; label: string; view: HudView }[] = [
       detail: 'kAXErrorAttributeUnsupported',
     },
   },
-  { id: 'preview.blocked', label: 'Blocked', view: { kind: 'blocked' } },
   {
     id: 'preview.error',
     label: 'Error',

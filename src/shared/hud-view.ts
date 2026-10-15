@@ -61,7 +61,6 @@ export function hudLayer(view: HudView): HudLayer {
     case 'inserted':
     case 'not_inserted':
       return 'capsule';
-    case 'blocked':
     case 'error':
       return 'capsule-message';
   }
@@ -77,8 +76,7 @@ export function hudLayer(view: HudView): HudLayer {
  * steal document clicks (`hud-window.ts`).
  *
  * Hands-free recording takes the mouse for its ✕/✓ (overhaul §16.5c). `error`
- * takes it so a click on the pill dismisses it. `blocked` stays click-through
- * — that click has to reach the password field it is pointing at. Hold
+ * takes it so a click on the pill dismisses it. Hold
  * recording is not interactive here; hover-forward is what makes the capsule
  * hittable for drag.
  *
@@ -94,7 +92,6 @@ export function hudInteractive(view: HudView): boolean {
     case 'processing':
     case 'inserted':
     case 'not_inserted':
-    case 'blocked':
       return false;
   }
 }

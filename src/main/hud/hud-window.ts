@@ -278,14 +278,13 @@ export class HudWindow implements HudPort {
 
   /**
    * Hands-free: take the mouse now. Error / recording / processing: forward
-   * events through empty chrome until a pill reports enter. Hidden and
-   * `blocked` ignore entirely — a blocked click has to reach the password
-   * field, not our overlay.
+   * events through empty chrome until a pill reports enter. Hidden ignores
+   * entirely.
    */
   #syncIgnoreMouse(): void {
     const window = this.window;
     if (window === null) return;
-    if (this.#view.kind === 'hidden' || this.#view.kind === 'blocked') {
+    if (this.#view.kind === 'hidden') {
       window.setIgnoreMouseEvents(true);
       return;
     }

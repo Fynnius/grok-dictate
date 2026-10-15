@@ -550,7 +550,6 @@ describe('Secure Input (contract §8, )', () => {
     ]);
     expect(snapshot.state).toBe('blocked');
     expect(kinds(effects)).not.toContain('start_capture');
-    expect(huds(effects)[0]?.view).toEqual({ kind: 'blocked' });
   });
 
   it('refuses the toggle and the re-insert too', () => {
@@ -580,8 +579,7 @@ describe('Secure Input (contract §8, )', () => {
     // Capture is stopped and the turn is finished so the text still arrives.
     expect(kinds(all)).toContain('stop_capture');
     expect(kinds(all)).toContain('finish_stt');
-    // …and it is shown and stored, marked as not inserted.
-    expect(huds(all).at(-1)?.view).toMatchObject({ kind: 'not_inserted', reason: 'secure_input' });
+    // …and it is stored, marked as not inserted, and reachable by ⌃⌘V.
     expect(histories(all)[0]?.entry).toMatchObject({ inserted: false, tier: 'none' });
     expect(snapshot.ctx.lastTranscript).toBe('mein geheimes Passwort ist nicht das hier');
   });
@@ -618,35 +616,46 @@ describe('Secure Input (contract §8, )', () => {
   });
 
   /**
-   * Secure Input arrives on focus, not on intent — and for a menu-bar app that
-   * is usually somebody signing in to something with no thought of dictating.
-   * §8's "refusing visibly is the entire point" is about refusing a *request*;
-   * until one arrives there is nothing to refuse and nothing to say.
+   * Secure Input never puts anything on screen (2026-10-15): it turns on
+   * whenever a password field has focus, and a message there covered whatever
+   * the user was looking at. The menu bar carries it — the tray icon and its
+   * status row — and a refused request is answered by ear.
    */
-  describe('announces itself on intent, not on focus', () => {
+  describe('lives in the menu bar, never on screen', () => {
     it('says nothing on screen when a password field merely takes focus', () => {
       const { snapshot, effects } = run([{ type: 'SECURE_INPUT', enabled: true }]);
       expect(snapshot.state).toBe('blocked');
       expect(huds(effects)).toHaveLength(0);
-      // The tray icon still turns: ambient, not interrupting.
-      expect(kinds(effects)).toContain('tray');
+      expect(trays(effects).at(-1)).toMatchObject({ state: 'blocked', secureInput: true });
     });
 
-    it('refuses a press loudly once the user does ask', () => {
+    it('refuses a press with the error cue, and no pill', () => {
       const env = testEnv();
       const quiet = run([{ type: 'SECURE_INPUT', enabled: true }], env);
       const refused = reduce(quiet.snapshot, { type: 'PTT_DOWN', ts: 1 }, env);
-      expect(huds(refused.effects)[0]?.view).toEqual({ kind: 'blocked' });
+      expect(huds(refused.effects)).toHaveLength(0);
       expect(refused.effects).toContainEqual({ type: 'cue', cue: 'error' });
       expect(kinds(refused.effects)).not.toContain('start_capture');
     });
 
-    it('still announces itself when it interrupts a dictation in flight', () => {
+    it('takes the recording pill down and plays the error cue when it cuts a dictation off', () => {
       const { effects } = run([
         { type: 'PTT_DOWN', ts: 1 },
         { type: 'SECURE_INPUT', enabled: true },
       ]);
-      expect(huds(effects)[0]?.view).toEqual({ kind: 'blocked' });
+      expect(huds(effects).at(-1)?.view).toEqual({ kind: 'hidden' });
+      expect(effects).toContainEqual({ type: 'cue', cue: 'error' });
+    });
+
+    it('shows nothing when a cut-off turn finalises while blocked', () => {
+      const { all } = run([
+        { type: 'PTT_DOWN', ts: 1 },
+        { type: 'TRANSCRIPT_INTERIM', sessionId: 's1', text: 'a secret' },
+        { type: 'SECURE_INPUT', enabled: true },
+        { type: 'TURN_ENDED', sessionId: 's1', durationSec: 2 },
+      ]);
+      expect(huds(all).map((h) => h.view.kind)).not.toContain('not_inserted');
+      expect(histories(all)).toHaveLength(1);
     });
 
     it('leaves a pill that is already on screen alone, coming and going', () => {
@@ -665,80 +674,36 @@ describe('Secure Input (contract §8, )', () => {
       expect(huds(throughAPasswordField.all)).toHaveLength(0);
       expect(throughAPasswordField.snapshot.state).toBe('idle');
     });
-
-    it('dismisses its own pill when Secure Input clears', () => {
-      const env = testEnv();
-      const refused = run(
-        [
-          { type: 'SECURE_INPUT', enabled: true },
-          { type: 'PTT_DOWN', ts: 1 },
-        ],
-        env,
-      );
-      const cleared = reduce(refused.snapshot, { type: 'SECURE_INPUT', enabled: false }, env);
-      expect(huds(cleared.effects)[0]?.view).toEqual({ kind: 'hidden' });
-    });
   });
 
   describe('the holder (2026-10-15)', () => {
     const HOLDER = { name: '1Password', bundleId: 'com.1password.1password' };
 
-    it('carries the holder on the pill and the tray when one is announced', () => {
+    it('carries the holder to the tray', () => {
       const { effects, snapshot } = run([
         { type: 'PTT_DOWN', ts: 1 },
         { type: 'SECURE_INPUT', enabled: true, holder: HOLDER },
       ]);
-      expect(huds(effects)[0]?.view).toEqual({ kind: 'blocked', holder: HOLDER });
       expect(trays(effects).at(-1)).toMatchObject({ state: 'blocked', holder: HOLDER });
       expect(snapshot.ctx.secureInputHolder).toEqual(HOLDER);
     });
 
-    it('omits the holder entirely — not as an explicit null — when unknown', () => {
-      // Every pre-2026-10-15 assertion in this file compares against the bare
-      // `{ kind: 'blocked' }`; an explicit `holder: null` would be a different
-      // object to a strict equality check even though it means the same thing.
-      const { effects } = run([
-        { type: 'SECURE_INPUT', enabled: true },
-        { type: 'PTT_DOWN', ts: 1 },
-      ]);
-      expect(huds(effects)[0]?.view).toEqual({ kind: 'blocked' });
-      expect('holder' in (huds(effects)[0]?.view ?? {})).toBe(false);
+    it('omits the holder from the tray effect — not as an explicit null — when unknown', () => {
+      const { effects } = run([{ type: 'SECURE_INPUT', enabled: true }]);
+      expect('holder' in (trays(effects).at(-1) ?? {})).toBe(false);
     });
 
-    it('reports a holder change while staying blocked, without re-deciding whether to announce', () => {
+    it('reports a holder change to the tray while staying blocked', () => {
       const OTHER = { name: 'KeePassXC', bundleId: null };
-      // Entered silently from idle — nothing was requested, so nothing is shown.
       const blocked = run([{ type: 'SECURE_INPUT', enabled: true, holder: HOLDER }]);
-      expect(huds(blocked.effects)).toHaveLength(0);
-
       const changed = reduce(
         blocked.snapshot,
         { type: 'SECURE_INPUT', enabled: true, holder: OTHER },
         testEnv(),
       );
       expect(changed.snapshot.ctx.secureInputHolder).toEqual(OTHER);
-      // Still nothing on screen: the holder changing is not a new request.
       expect(huds(changed.effects)).toHaveLength(0);
       expect(trays(changed.effects).at(-1)).toMatchObject({ holder: OTHER });
-    });
-
-    it('updates a holder name already on screen when it changes', () => {
-      const env = testEnv();
-      const OTHER = { name: 'KeePassXC', bundleId: null };
-      // A request while blocked raises the pill (`blockedNoticeShown: true`).
-      const announced = run(
-        [
-          { type: 'SECURE_INPUT', enabled: true, holder: HOLDER },
-          { type: 'PTT_DOWN', ts: 1 },
-        ],
-        env,
-      );
-      const changed = reduce(
-        announced.snapshot,
-        { type: 'SECURE_INPUT', enabled: true, holder: OTHER },
-        env,
-      );
-      expect(huds(changed.effects).at(-1)?.view).toEqual({ kind: 'blocked', holder: OTHER });
     });
 
     it('clears the holder once Secure Input itself clears', () => {
@@ -747,20 +712,6 @@ describe('Secure Input (contract §8, )', () => {
         { type: 'SECURE_INPUT', enabled: false },
       ]);
       expect(snapshot.ctx.secureInputHolder).toBeNull();
-    });
-
-    it('names the holder in the not-inserted detail when a turn finalises while blocked', () => {
-      const { all } = run([
-        { type: 'PTT_DOWN', ts: 1 },
-        { type: 'TRANSCRIPT_INTERIM', sessionId: 's1', text: 'a secret' },
-        { type: 'SECURE_INPUT', enabled: true, holder: HOLDER },
-        { type: 'TURN_ENDED', sessionId: 's1', durationSec: 2 },
-      ]);
-      const view = huds(all).at(-1)?.view;
-      expect(view).toMatchObject({ kind: 'not_inserted', reason: 'secure_input' });
-      expect(view && 'detail' in view ? view.detail : '').toContain(
-        '1Password had Secure Input on',
-      );
     });
   });
 });
@@ -1025,17 +976,14 @@ describe('contract §9 invariants', () => {
     expect(kinds(all).filter((k) => /copy|clipboard|paste/i.test(k))).toEqual([]);
   });
 
-  it('7. every transcript that existed either inserts, is shown, or is explained', () => {
+  it('7. every transcript that existed either inserts or is kept in History', () => {
+    // Shown is not enough and not required: a turn cut off by Secure Input
+    // puts nothing on screen (2026-10-15), and its words survive in History.
     const { all } = run(SOAK);
-    const shown = huds(all).filter(
-      (h) => h.view.kind === 'inserted' || h.view.kind === 'not_inserted',
-    );
     const insertedTexts = inserts(all).map((i) => i.text);
-    const shownTexts = shown.map((h) =>
-      h.view.kind === 'inserted' || h.view.kind === 'not_inserted' ? h.view.text : '',
-    );
+    const storedTexts = histories(all).map((h) => h.entry.text);
     for (const text of ['Satz eins. Satz zwei.', 'Satz drei.']) {
-      expect([...insertedTexts, ...shownTexts]).toContain(text);
+      expect([...insertedTexts, ...storedTexts]).toContain(text);
     }
   });
 });
@@ -1515,11 +1463,8 @@ describe('a turn that dies while Secure Input is blocking (BUG-3)', () => {
     ]);
     expect(snapshot.ctx.lastTranscript).toBe('the deploy went out at half past');
     expect(histories(all)[0]?.entry).toMatchObject({ inserted: false, unconfirmedTail: true });
-    // Secure Input is still the reason nothing was typed — that is the advice
-    // the user needs — so the tail is disclosed in the detail line.
-    const view = huds(all).at(-1)?.view;
-    expect(view).toMatchObject({ kind: 'not_inserted', reason: 'secure_input' });
-    expect(view && 'detail' in view ? view.detail : '').toContain('never confirmed');
+    // Nothing on screen: Secure Input lives in the menu bar (2026-10-15).
+    expect(huds(all).at(-1)?.view).toEqual({ kind: 'hidden' });
     expect(inserts(all)).toHaveLength(0);
   });
 
@@ -1538,8 +1483,8 @@ describe('a turn that dies while Secure Input is blocking (BUG-3)', () => {
     expect(snapshot.state).toBe('blocked');
     expect(snapshot.ctx.lastTranscript).toBe('The deploy went out at half past.');
     expect(histories(all).at(-1)?.entry).toMatchObject({ inserted: false, tier: 'none' });
-    // The blocked pill stays: Secure Input is still what the user must clear.
-    expect(huds(all).at(-1)?.view).toEqual({ kind: 'blocked' });
+    // Nothing replaces the hidden recording pill: the menu bar explains it.
+    expect(huds(all).at(-1)?.view).toEqual({ kind: 'hidden' });
     expect(inserts(all)).toHaveLength(0);
   });
 });

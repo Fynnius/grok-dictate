@@ -50,7 +50,7 @@
  * `grok login`; this app does not embed that TUI or write `auth.json`.
  */
 
-import type { InsertTier, SecureInputHolder } from './helper-protocol.js';
+import type { InsertTier } from './helper-protocol.js';
 import type { AppError } from '../src/shared/result.js';
 import type { AppConfig, LanguageMode } from './config.js';
 import type { StatsViewModel } from '../src/shared/stats.js';
@@ -76,7 +76,6 @@ export type SessionMode = 'hold' | 'toggle';
  */
 export type NotInsertedReason =
   | 'insert_failed' // both tiers declined
-  | 'secure_input' // Secure Input was active
   | 'target_changed' // focus moved during processing
   | 'helper_unavailable' // the Swift helper died mid-request
   /**
@@ -125,13 +124,6 @@ export type HudView =
   | { kind: 'processing'; interim: string }
   | { kind: 'inserted'; text: string; tier: InsertTier; verified: boolean | null }
   | { kind: 'not_inserted'; text: string; reason: NotInsertedReason; detail: string | null }
-  /**
-   * `holder` names which process macOS reports is holding Secure Input.
-   * Absent when unknown — Secure Input is off (never reached here), or the
-   * holder's pid could not be named — which the HUD renders as today's
-   * generic copy. Added 2026-10-15; see `SecureInputHolder`.
-   */
-  | { kind: 'blocked'; holder?: SecureInputHolder | null }
   | { kind: 'error'; message: string; hint: string | null };
 
 /* ------------------------------------------------------------------ *

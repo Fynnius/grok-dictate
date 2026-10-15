@@ -8,13 +8,11 @@ const VIEWS: Record<HudView['kind'], HudView> = {
   processing: { kind: 'processing', interim: 'hallo' },
   inserted: { kind: 'inserted', text: 'hallo', tier: 'ax', verified: true },
   not_inserted: { kind: 'not_inserted', text: 'hallo', reason: 'insert_failed', detail: null },
-  blocked: { kind: 'blocked' },
   error: { kind: 'error', message: 'boom', hint: null },
 };
 
 describe('hudLayer', () => {
-  it('shows the message pill only for blocked and error — insert outcomes stay wordless', () => {
-    expect(hudLayer(VIEWS.blocked)).toBe('capsule-message');
+  it('shows the message pill only for error — insert outcomes stay wordless', () => {
     expect(hudLayer(VIEWS.error)).toBe('capsule-message');
     expect(hudLayer(VIEWS.not_inserted)).toBe('capsule');
     expect(hudLayer({ kind: 'inserted', text: 'hallo', tier: 'unicode', verified: null })).toBe(
@@ -46,14 +44,10 @@ describe('hudInteractive', () => {
     expect(hudInteractive(VIEWS.hidden)).toBe(false);
     expect(hudInteractive(VIEWS.processing)).toBe(false);
     expect(hudInteractive(VIEWS.inserted)).toBe(false);
-    // `blocked` shows words but offers nothing to press — it must never
-    // swallow the click that dismisses the password field it points at.
-    expect(hudInteractive(VIEWS.blocked)).toBe(false);
   });
 
-  it('lets a click on the error pill dismiss it; blocked stays click-through', () => {
+  it('lets a click on the error pill dismiss it', () => {
     expect(hudInteractive(VIEWS.error)).toBe(true);
-    expect(hudInteractive(VIEWS.blocked)).toBe(false);
   });
 
   it('splits recording by mode (§16.5c): hold is click-through, hands-free takes the mouse', () => {

@@ -83,7 +83,7 @@ Carried alongside the state; not part of it.
 | `RETRY_INSERT` without                | `idle`                      | `hud(error "nothing to re-insert")`                                                                                                      |
 | `INSERT_TEXT` with text               | `inserting`                 | `insert(text, targetBundleId=null, route)` — a history row or a Scratchpad edit; also §6                                                 |
 | `INSERT_TEXT` with empty text         | —                           |                                                                                                                                          |
-| `SECURE_INPUT(true)`                  | `blocked`                   | `hud(blocked)`, `tray(blocked)`                                                                                                          |
+| `SECURE_INPUT(true)`                  | `blocked`                   | `tray(blocked)` — nothing on screen, §8                                                                                                  |
 | `PTT_UP`, `CANCEL`, transcript events | —                           |                                                                                                                                          |
 
 `route` on every `insert` effect is the user's `insertMethod` setting, read from `MachineEnv` at the moment the insert is dispatched and passed through to the helper untouched. **The reducer does not decide how text is inserted and cannot** — that needs the focused element, which lives two processes away (`helper-protocol.md` §3). It only carries the preference. Unlike `repairSeams` it is deliberately _not_ snapshotted at the start of the turn: nothing about the route affects text already in flight, and `INSERT_TEXT` re-inserts an old transcript with no turn behind it at all.
@@ -108,18 +108,18 @@ Carried alongside the state; not part of it.
 
 ### From `processing`
 
-| Event                                   | →            | Effects                                                                  |
-| --------------------------------------- | ------------ | ------------------------------------------------------------------------ |
-| `TRANSCRIPT_FINAL`                      | `processing` | append to `committed`; **no insert, no HUD frame** — see §12             |
-| `TRANSCRIPT_INTERIM`                    | `processing` | `hud(processing)`                                                        |
-| `TURN_ENDED` with `committed` non-empty | `inserting`  | `insert(committed, targetBundleId)`                                      |
-| `TURN_ENDED` with `committed` empty     | `idle`       | `hud(error "no speech detected")`                                        |
-| `CANCEL`                                | `idle`       | `abort_stt`, `unmute_output`, `hud(hidden)`                              |
-| `SILENCE_GATED`                         | `idle`       | `abort_stt`, `hud(hidden)` — a short silent tap; not an error            |
-| `PTT_DOWN`                              | `processing` | `pendingStart = true` — see §5                                           |
-| `PTT_UP`                                | `processing` | `pendingStart = false`                                                   |
-| `SECURE_INPUT(true)`                    | `blocked`    | the in-flight turn still lands in `blocked` and is shown, never inserted |
-| `SESSION_ERROR`                         | `idle`       | see §10                                                                  |
+| Event                                   | →            | Effects                                                                    |
+| --------------------------------------- | ------------ | -------------------------------------------------------------------------- |
+| `TRANSCRIPT_FINAL`                      | `processing` | append to `committed`; **no insert, no HUD frame** — see §12               |
+| `TRANSCRIPT_INTERIM`                    | `processing` | `hud(processing)`                                                          |
+| `TURN_ENDED` with `committed` non-empty | `inserting`  | `insert(committed, targetBundleId)`                                        |
+| `TURN_ENDED` with `committed` empty     | `idle`       | `hud(error "no speech detected")`                                          |
+| `CANCEL`                                | `idle`       | `abort_stt`, `unmute_output`, `hud(hidden)`                                |
+| `SILENCE_GATED`                         | `idle`       | `abort_stt`, `hud(hidden)` — a short silent tap; not an error              |
+| `PTT_DOWN`                              | `processing` | `pendingStart = true` — see §5                                             |
+| `PTT_UP`                                | `processing` | `pendingStart = false`                                                     |
+| `SECURE_INPUT(true)`                    | `blocked`    | the in-flight turn still lands in `blocked` and in history, never inserted |
+| `SESSION_ERROR`                         | `idle`       | see §10                                                                    |
 
 ### From `inserting`
 
@@ -138,16 +138,16 @@ Carried alongside the state; not part of it.
 
 ### From `blocked`
 
-| Event                 | →         | Effects                                                                                                                              |
-| --------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `SECURE_INPUT(false)` | `idle`    | `hud(hidden)`, `tray(idle)`; `pendingStart` cleared                                                                                  |
-| `PTT_DOWN` / `TOGGLE` | `blocked` | **refused**; `hud(blocked)`, `cue(error)`                                                                                            |
-| `RETRY_INSERT`        | `blocked` | refused — see §8                                                                                                                     |
-| `INSERT_TEXT`         | `blocked` | refused — every insertion path is, without exception                                                                                 |
-| `TRANSCRIPT_FINAL`    | `blocked` | appended to `committed`                                                                                                              |
-| `TURN_ENDED`          | `blocked` | `hud(not_inserted, reason='secure_input')`, `history_append(inserted:false)`, set `lastTranscript` — including the interim tail, §10 |
-| `SESSION_ERROR`       | `blocked` | `history_append(inserted:false)` and set `lastTranscript`; the pill stays `blocked` — §10                                            |
-| `INSERT_RESULT`       | `blocked` | an insert that was already in flight completes normally and is recorded                                                              |
+| Event                 | →         | Effects                                                                                               |
+| --------------------- | --------- | ----------------------------------------------------------------------------------------------------- |
+| `SECURE_INPUT(false)` | `idle`    | `hud(hidden)`, `tray(idle)`; `pendingStart` cleared                                                   |
+| `PTT_DOWN` / `TOGGLE` | `blocked` | **refused**; `cue(error)` — no HUD view, §8                                                           |
+| `RETRY_INSERT`        | `blocked` | refused — see §8                                                                                      |
+| `INSERT_TEXT`         | `blocked` | refused — every insertion path is, without exception                                                  |
+| `TRANSCRIPT_FINAL`    | `blocked` | appended to `committed`                                                                               |
+| `TURN_ENDED`          | `blocked` | `history_append(inserted:false)`, set `lastTranscript` — including the interim tail, §10; no HUD view |
+| `SESSION_ERROR`       | `blocked` | `history_append(inserted:false)` and set `lastTranscript` — §10                                       |
+| `INSERT_RESULT`       | `blocked` | an insert that was already in flight completes normally and is recorded                               |
 
 ---
 
@@ -230,9 +230,9 @@ Since §12 the everyday version of that case no longer reaches `inserting` at al
 `IsSecureEventInputEnabled()` is true when focus is in a password field. While it is, **no third-party process can install a `CGEventTap`**, so the hotkey is dead system-wide with no error and no log. §12.2 calls this one of two silent failures that "will make a working app look broken".
 
 - `SECURE_INPUT(true)` from **any** state → `blocked`, exactly as IMPLEMENTATION-PLAN.md §3.1.2 specifies.
-- **The pill is raised on intent, not on focus.** Entering `blocked` from `idle` emits no HUD view at all: the tray icon turns, the warn line is logged, and nothing appears on screen. Secure Input turns on whenever a password field takes focus, which for a menu-bar app is usually a sign-in with no thought of dictating — announcing it there put a message up every time the user typed a password, and covered whatever pill was already there. Entering from `recording`, `processing` or `inserting` still announces, because a turn the user asked for is being taken away mid-sentence. `ctx.blockedNoticeShown` records which of the two happened, so that `SECURE_INPUT(false)` dismisses the app's own message and never a transcript the user was still reading.
-- `blocked` **refuses** `ptt_down`, `toggle` and `retry_insert`, and says so in the HUD, with the error cue, and in the tray icon. Refusing visibly is the entire point — and a refusal is the moment there is finally something to refuse.
-- An in-flight turn is **not discarded**. Capture stops and the turn is finalised, so the transcript still arrives; it is shown as `not_inserted` with `reason='secure_input'` and stored in history with `inserted:false`. Discarding what the user just said would be a worse failure than not typing it.
+- **Nothing goes on screen — the menu bar carries it (2026-10-15).** Secure Input turns on whenever a password field takes focus, which for a menu-bar app is usually a sign-in with no thought of dictating, and a message on screen covered whatever the user was looking at. The tray icon turns, its status row names the holder when macOS reports one (the lock screen and Terminal's Secure Keyboard Entry get their own wording), and the warn line is logged. Entering from `recording` or `processing` hides the recording pill and plays the error cue, because a turn the user asked for is being taken away mid-sentence.
+- `blocked` **refuses** `ptt_down`, `toggle` and `retry_insert` with the error cue; the menu bar says why.
+- An in-flight turn is **not discarded**. Capture stops and the turn is finalised, so the transcript still arrives; it is stored in history with `inserted:false` and is reachable by ⌃⌘V once Secure Input clears. Discarding what the user just said would be a worse failure than not typing it.
 - Insertion is **never attempted** while blocked. Whether Secure Input also blocks AX writes is , unresolved — Phase 2 measures it. Until then the app does not find out the hard way inside a password field.
 
 ---

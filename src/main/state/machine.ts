@@ -158,17 +158,6 @@ export interface SessionContext {
   readonly pendingStart: boolean;
   readonly secureInput: boolean;
   /**
-   * Whether the blocked pill on screen is ours.
-   *
-   * Secure Input used to be announced the moment it arrived, from any state, so
-   * focusing a password field with no intention of dictating put a pill up —
-   * and leaving the field then blanked whatever pill had been there before it.
-   * The notice is now raised only when the user asked for something (§8), and
-   * this records whether it was, so that unblocking dismisses our own message
-   * and nobody else's.
-   */
-  readonly blockedNoticeShown: boolean;
-  /**
    * Who macOS reports is holding Secure Input, while `secureInput` is true.
    * `null` when unknown, or once it clears. Added 2026-10-15 so the tray/HUD
    * can name the app instead of just saying something is blocking the hotkey.
@@ -248,7 +237,6 @@ export const INITIAL_CONTEXT: SessionContext = {
   lastTranscript: null,
   pendingStart: false,
   secureInput: false,
-  blockedNoticeShown: false,
   secureInputHolder: null,
   startedAt: null,
   elapsedMs: 0,
@@ -377,18 +365,10 @@ function processingView(): HudView {
 }
 
 /**
- * The blocked pill, with `holder` omitted — not sent as an explicit `null` —
- * whenever it is not known. Every test and preview written before 2026-10-15
- * compares against the bare `{ kind: 'blocked' }`; an explicit `null` would
- * read as a different object to a strict equality check even though it means
- * the same thing.
+ * The `tray` effect for the blocked regime, with `holder` omitted — not sent as
+ * an explicit `null` — whenever it is not known, so a strict equality check
+ * against the bare effect still matches.
  */
-function blockedView(holder: SecureInputHolder | null): HudView {
-  return holder === null ? { kind: 'blocked' } : { kind: 'blocked', holder };
-}
-
-/** The `tray` effect for the blocked regime, with `holder` omitted the same
- *  way as `blockedView` and for the same reason. */
 function trayBlockedEffect(state: SessionState, holder: SecureInputHolder | null): Effect {
   return holder === null
     ? { type: 'tray', state, secureInput: true }
@@ -522,19 +502,14 @@ function startSession(ctx: SessionContext, mode: SessionMode, env: MachineEnv): 
 /**
  * Enter `blocked`, finalising any in-flight capture so the text is not lost (§8).
  *
- * **The pill is raised only if the user was in the middle of something.** Secure
- * Input turns on whenever focus lands in a password field, which for a menu-bar
- * app is usually nothing to do with dictating: the user is signing in to
- * something. Announcing it there put a message on screen every time they typed a
- * password, and covered whatever was on screen before it.
- *
- * §8's "refusing visibly is the entire point" is about refusing a *request*, and
- * that is unchanged — a press, a toggle or a ⌃⌘V while blocked still refuses
- * loudly, with the pill and the error cue, in `reduceBlocked`. What is silent
- * now is the unprompted transition from `idle`, where there is nothing to
- * refuse yet. The tray icon still turns (ambient, not interrupting) and the warn
- * line is still logged, because a dead hotkey is exactly what someone reading
- * the log afterwards needs explained.
+ * **Nothing goes on screen.** Secure Input turns on whenever focus lands in a
+ * password field, which for a menu-bar app is usually nothing to do with
+ * dictating, and a message there covered whatever the user was looking at. The
+ * menu bar carries it instead: the tray icon turns and its status row names the
+ * holder (`tray/menu.ts`). A turn that was cut off ends with the recording pill
+ * hidden and the error cue, and its words go to History like any other
+ * untyped take. The warn line is still logged, because a dead hotkey is exactly
+ * what someone reading the log afterwards needs explained.
  */
 function enterBlocked(snapshot: Snapshot, holder: SecureInputHolder | null): Step {
   const { state, ctx } = snapshot;
@@ -544,16 +519,19 @@ function enterBlocked(snapshot: Snapshot, holder: SecureInputHolder | null): Ste
     effects.push(...unmuteEffect(ctx));
     effects.push({ type: 'finish_stt', sessionId: ctx.sessionId });
   }
-  // A turn in flight is being taken away mid-sentence — that the user has to be
-  // told, and it is the one case where they did ask for something.
-  const notify = state !== 'idle';
-  if (notify) effects.push({ type: 'hud', view: blockedView(holder) });
+  // A turn in flight is being taken away mid-sentence: take its pill down and
+  // say so by ear. The menu bar explains why.
+  const interrupted = state === 'recording' || state === 'processing';
+  if (interrupted) {
+    effects.push({ type: 'hud', view: { kind: 'hidden' } });
+    effects.push({ type: 'cue', cue: 'error' });
+  }
   effects.push(trayBlockedEffect('blocked', holder));
   effects.push({
     type: 'log',
     level: 'warn',
     message: secureInputBlockedLogMessage(holder),
-    fields: { previousState: state, announced: notify, holderName: holder?.name ?? null },
+    fields: { previousState: state, holderName: holder?.name ?? null },
   });
   // An insert already dispatched to the helper cannot be recalled; stay in
   // `inserting` and let the result land, which routes to `blocked` below.
@@ -564,7 +542,6 @@ function enterBlocked(snapshot: Snapshot, holder: SecureInputHolder | null): Ste
       ...ctx,
       secureInput: true,
       pendingStart: false,
-      blockedNoticeShown: notify,
       secureInputHolder: holder,
     },
     effects,
@@ -573,15 +550,12 @@ function enterBlocked(snapshot: Snapshot, holder: SecureInputHolder | null): Ste
 
 /**
  * The holder changed while Secure Input stayed on — one password field losing
- * focus to another without ever clearing in between. Updates the context and,
- * if a notice is already on screen, the text it shows; does **not** re-decide
- * whether to announce (that would turn a silent block into an announced one
- * the moment the holder behind it changed).
+ * focus to another without ever clearing in between. Updates the context and
+ * the menu bar's status row.
  */
 function updateBlockedHolder(snapshot: Snapshot, holder: SecureInputHolder | null): Step {
   const { state, ctx } = snapshot;
   const effects: Effect[] = [];
-  if (ctx.blockedNoticeShown) effects.push({ type: 'hud', view: blockedView(holder) });
   effects.push(trayBlockedEffect('blocked', holder));
   effects.push({
     type: 'log',
@@ -723,9 +697,7 @@ function finishInsert(
   if (ctx.secureInput) {
     effects.push({ type: 'hud', view: insertView(outcome, text, reasonWhenFailed) });
     effects.push(trayBlockedEffect('blocked', ctx.secureInputHolder));
-    // The insert's own pill has replaced the blocked one, so leaving Secure
-    // Input must not hide it — it carries the transcript.
-    return step('blocked', { ...cleared, pendingStart: false, blockedNoticeShown: false }, effects);
+    return step('blocked', { ...cleared, pendingStart: false }, effects);
   }
 
   if (cleared.pendingStart) {
@@ -979,13 +951,9 @@ export function reduce(snapshot: Snapshot, event: SessionEvent, env: MachineEnv)
       return enterBlocked(snapshot, holder);
     }
     if (state === 'blocked') {
-      const effects: Effect[] = [];
-      // Dismiss our own message and nobody else's. If Secure Input never
-      // interrupted anything then nothing of ours is on screen, and hiding
-      // regardless would blank a transcript the user was still reading — which
-      // is what happened every time they clicked through a password field.
-      if (ctx.blockedNoticeShown) effects.push({ type: 'hud', view: { kind: 'hidden' } });
-      effects.push({ type: 'tray', state: 'idle', secureInput: false });
+      // Nothing of ours is on screen to dismiss: Secure Input lives in the menu
+      // bar only.
+      const effects: Effect[] = [{ type: 'tray', state: 'idle', secureInput: false }];
       return step(
         'idle',
         {
@@ -993,7 +961,6 @@ export function reduce(snapshot: Snapshot, event: SessionEvent, env: MachineEnv)
           secureInput: false,
           pendingStart: false,
           sessionId: null,
-          blockedNoticeShown: false,
           secureInputHolder: null,
         },
         effects,
@@ -1416,11 +1383,10 @@ function reduceInserting(snapshot: Snapshot, event: PostSecureEvent, env: Machin
 
 function reduceBlocked(snapshot: Snapshot, event: PostSecureEvent, env: MachineEnv): Step {
   const { ctx } = snapshot;
-  // Refusing a request is loud, and stays loud: this is the path §8 is about.
-  // The pill it raises is ours, so unblocking dismisses it.
+  // Refusing a request is audible, not visible: the error cue, with the reason
+  // in the menu bar's status row. Nothing goes on screen for Secure Input.
   const refuse = (what: string): Step =>
-    step('blocked', { ...ctx, blockedNoticeShown: true }, [
-      { type: 'hud', view: blockedView(ctx.secureInputHolder) },
+    step('blocked', ctx, [
       { type: 'cue', cue: 'error' },
       { type: 'log', level: 'warn', message: `${what} refused: Secure Input is active` },
     ]);
@@ -1456,15 +1422,10 @@ function reduceBlocked(snapshot: Snapshot, event: PostSecureEvent, env: MachineE
       // `toIdleWithError` (BUG-3): Secure Input can arrive mid-sentence, and a
       // turn finalised from `blocked` may carry a preview the server never got
       // to confirm. Nothing is typed either way (§8), so the only question is
-      // whether the words survive at all.
+      // whether the words survive at all: they go to History and ⌃⌘V, and
+      // nothing goes on screen.
       const { text, unconfirmedTail } = salvage(withDuration);
       if (text.length === 0) return step('blocked', { ...withDuration, sessionId: null }, []);
-      // Named when the holder is known, so the advice says where to go
-      // instead of just that somewhere needs leaving.
-      const holderName = ctx.secureInputHolder?.name ?? null;
-      const whatHeld = holderName
-        ? `${holderName} had Secure Input on`
-        : 'A password field had focus';
       return step(
         'blocked',
         {
@@ -1473,9 +1434,6 @@ function reduceBlocked(snapshot: Snapshot, event: PostSecureEvent, env: MachineE
           lastTranscript: text,
           committed: [],
           interim: '',
-          // The transcript pill below replaces the blocked one; unblocking must
-          // not take the text off screen with it.
-          blockedNoticeShown: false,
         },
         [
           ...appendHistory(withDuration, {
@@ -1487,21 +1445,6 @@ function reduceBlocked(snapshot: Snapshot, event: PostSecureEvent, env: MachineE
             inserted: false,
             unconfirmedTail,
           }),
-          {
-            type: 'hud',
-            view: {
-              kind: 'not_inserted',
-              text,
-              // The reason it was not typed is still Secure Input — that is
-              // what the user has to act on — so the unconfirmed tail is said
-              // in the detail line rather than by swapping the reason and
-              // losing the password-field advice.
-              reason: 'secure_input',
-              detail: unconfirmedTail
-                ? `${whatHeld}, so nothing was typed. The end of this was still being transcribed and was never confirmed.`
-                : `${whatHeld}, so nothing was typed.`,
-            },
-          },
         ],
       );
     }
