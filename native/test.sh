@@ -13,4 +13,10 @@ set -euo pipefail
 cd "$(dirname "$0")"
 # --scratch-path for the same reason as build.sh: Prettier reads only the root
 # .prettierignore, and a default-placed native/.build fails `npm run lint`.
-swift test --scratch-path "${SCRATCH:-../out/native-build}" -Xswiftc -warnings-as-errors "$@"
+#
+# Outside the repository, unlike build.sh: SwiftPM ad-hoc signs the .xctest
+# bundles, and this tree sits under iCloud-synced `~/Documents`, whose
+# fileprovider stamps `com.apple.FinderInfo` on them. `codesign` then refuses
+# with "resource fork, Finder information, or similar detritus not allowed" —
+# the same trap scripts/package.sh signs around.
+swift test --scratch-path "${SCRATCH:-${TMPDIR:-/tmp}/grok-dictate-native-test}" -Xswiftc -warnings-as-errors "$@"

@@ -280,7 +280,7 @@ final class HelperApp {
     // MARK: - stdin
 
     private func startReadingStdin() {
-        FileHandle.standardInput.readabilityHandler = { handle in
+        FileHandle.standardInput.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
@@ -405,7 +405,7 @@ final class BackgroundInsertion: InsertionPerforming {
         completion: @escaping (InsertionOutcome) -> Void
     ) {
         pendingCount += 1
-        queue.async { [ladder] in
+        queue.async { [weak self, ladder] in
             let outcome = ladder.run(text: text, targetBundleId: targetBundleId, route: route)
             DispatchQueue.main.async { [weak self] in
                 self?.pendingCount -= 1
