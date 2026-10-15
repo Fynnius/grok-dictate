@@ -33,7 +33,7 @@ npm run typecheck
 | `src/shared/`   | Logger, redaction, constants                                     |
 | `native/`       | Swift helper: hotkey tap + insertion ladder                      |
 | `mocks/`        | Test doubles. The app itself does not use them at runtime        |
-| `docs/`         | Architecture, permissions, and dated phase/handoff reports       |
+| `docs/`         | Architecture, permissions, and dated handoffs and reports        |
 | `scripts/`      | Packaging and one-off dev scripts, not part of the app build     |
 | `test/`         | End-to-end tests; most unit tests live next to their source file |
 

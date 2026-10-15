@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **A dictation in the last minute of a Grok CLI login no longer fails.** Grok CLI 1.0.52 only refreshes a token once it has actually expired, so the app's renewal four minutes early did nothing — while logging "renewed automatically" each time — and the app then refused the still-valid token for its final 60 s. Renewal now runs at expiry, only an expiry that actually moved counts as a renewal, and a token that has not expired is used: the bearer is only presented once, when the socket connects.
+- **"The Grok login was renewed automatically" is only logged when it was.** While the Mac sleeps the Grok CLI defers a refresh and exits 0 with the token unchanged; each of those runs was logged as a renewal. Only an expiry that actually moved counts now. If a dictation meets a token in its last minute and renewing changes nothing, the token is used as long as it has 30 s left — enough for the connection and its retries — instead of failing the dictation.
 - **The Swift helper builds on Xcode 27.** `native/build.sh` and `native/test.sh` failed on a new weak-capture diagnostic; `native/test.sh` also runs outside the iCloud-synced tree now, where `codesign` refused its test bundles.
 
 ## [0.4.0] — 2026-09-12

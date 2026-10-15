@@ -458,8 +458,9 @@ not hit.
 
 **§8, where the field data actually speaks:**
 
-- _Is 120 units the right split?_ Every unicode-tier insertion in the sample
-  was ≤120 units (max 107). Every paste into Claude, Terminal or Arc was >120
+- _Is 120 units the right split?_ Every unicode-tier insertion into another
+  app was ≤120 units (max 107); the one longer unicode row (334 units) is the
+  declined paste into Grok Dictate's own window above, which fell through. Every paste into Claude, Terminal or Arc was >120
   (min 122). Every paste into cmux happened regardless of length — 5, 20, 67
   and 82-unit dictations pasted exactly like the 1,940-unit one. That matches
   the design: cmux's AX signature decides it outright, and the length rule is
