@@ -84,10 +84,14 @@ export interface AudioSource extends AudioSourcePort {
   handleRendererMessage(message: RendererToMain): boolean;
 }
 
-export function createAudioSource(
-  logger: Logger,
-  options?: { micProcessing?: () => boolean },
-): AudioSource {
+export interface AudioSourceOptions {
+  /** Chromium telephony DSP; the native adapter ignores it. */
+  readonly micProcessing?: () => boolean;
+  /** Built-in mic in place of a Bluetooth headset; native adapter only. */
+  readonly preferBuiltInMic?: () => boolean;
+}
+
+export function createAudioSource(logger: Logger, options?: AudioSourceOptions): AudioSource {
   const lookup = resolveCaptureBinary(currentCaptureLookupEnvironment());
   const log = logger.child('audio');
 
@@ -118,9 +122,13 @@ export function createAudioSource(
 function createNativeAudioSource(
   logger: Logger,
   command: string,
-  options?: { micProcessing?: () => boolean },
+  options?: AudioSourceOptions,
 ): AudioSource {
-  const transport = new NativeCaptureTransport({ command, logger });
+  const transport = new NativeCaptureTransport({
+    command,
+    logger,
+    preferBuiltInMic: options?.preferBuiltInMic ?? (() => false),
+  });
   const coordinator = new CaptureCoordinator({
     transport,
     logger,
@@ -142,10 +150,7 @@ function createNativeAudioSource(
   });
 }
 
-function createChromiumAudioSource(
-  logger: Logger,
-  options?: { micProcessing?: () => boolean },
-): AudioSource {
+function createChromiumAudioSource(logger: Logger, options?: AudioSourceOptions): AudioSource {
   const window = new CaptureWindow(logger);
   const coordinator = new CaptureCoordinator({
     transport: window,

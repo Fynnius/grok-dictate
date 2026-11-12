@@ -464,6 +464,17 @@ export function SettingsView(): React.JSX.Element {
           </div>
           <div className="card-row">
             <span className="row-label">
+              Use the Mac’s microphone with Bluetooth headphones
+              <InfoTip text="When AirPods or another Bluetooth headset is your input, record from the Mac’s built-in microphone instead. Using a headset’s microphone switches it into call mode: music drops to phone quality, the first second of speech is lost, and macOS sometimes leaves it sending pure silence until you reconnect it. Your headphones keep playing as usual. Ignored when the lid is closed or the Mac has no built-in microphone." />
+            </span>
+            <Switch
+              checked={config.preferBuiltInMic}
+              onChange={(next) => save({ preferBuiltInMic: next })}
+              ariaLabel="Use the Mac’s built-in microphone when a Bluetooth headset is the input"
+            />
+          </div>
+          <div className="card-row">
+            <span className="row-label">
               Insert text by
               <InfoTip text="Pasting is fast whatever the length, and it is the only thing that reliably works in a terminal — but it replaces whatever is on your clipboard, every time, and does not put it back. Typing leaves your clipboard alone and is instant for a short reply, but it types one character at a time, so a long dictation visibly streams in and some apps drop it. Automatic pastes long text and terminals, types everything else." />
             </span>

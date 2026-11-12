@@ -15,7 +15,14 @@ import { appError, err, ok, type Result } from '@shared/result.js';
 import type { AppError } from '@shared/result.js';
 
 export type AppToCapture =
-  | { type: 'start'; sessionId: string; sampleRate: number; chunkBytes: number }
+  | {
+      type: 'start';
+      sessionId: string;
+      sampleRate: number;
+      chunkBytes: number;
+      /** Capture from the built-in mic when the default input is Bluetooth. */
+      preferBuiltInMic: boolean;
+    }
   | { type: 'stop'; sessionId: string }
   | { type: 'cancel'; sessionId: string };
 

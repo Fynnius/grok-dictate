@@ -137,7 +137,10 @@ function main(): void {
   });
   const sound = createSound(log, () => hud.window);
   const { port: native, supervisor } = createNativeHelper(log);
-  const audio = createAudioSource(log, { micProcessing: () => config.get().micProcessing });
+  const audio = createAudioSource(log, {
+    micProcessing: () => config.get().micProcessing,
+    preferBuiltInMic: () => config.get().preferBuiltInMic,
+  });
   const stt = createSttClient(log, auth, grokCom);
   const preview = createHudPreview(hud);
   let signedIn = false;

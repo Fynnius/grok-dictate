@@ -51,6 +51,11 @@ export interface NativeCaptureTransportOptions {
   readonly restartBaseMs?: number;
   readonly restartMaxMs?: number;
   readonly maxConsecutiveRestarts?: number;
+  /**
+   * `AppConfig.preferBuiltInMic`, read at every `start` so a settings change
+   * takes effect on the next hold. Missing → false (follow the default input).
+   */
+  readonly preferBuiltInMic?: () => boolean;
 }
 
 function defaultSpawn(command: string): CaptureChild {
@@ -64,6 +69,7 @@ export class NativeCaptureTransport implements CaptureTransport {
   readonly #framer = new LineFramer();
   readonly #backoff: Backoff;
   readonly #maxConsecutiveRestarts: number;
+  readonly #preferBuiltInMic: () => boolean;
 
   #child: CaptureChild | null = null;
   #deliver: ((message: RendererToMain) => void) | null = null;
@@ -84,6 +90,7 @@ export class NativeCaptureTransport implements CaptureTransport {
       maxMs: options.restartMaxMs ?? 10_000,
     });
     this.#maxConsecutiveRestarts = options.maxConsecutiveRestarts ?? 10;
+    this.#preferBuiltInMic = options.preferBuiltInMic ?? (() => false);
   }
 
   attach(deliver: (message: RendererToMain) => void): void {
@@ -106,6 +113,7 @@ export class NativeCaptureTransport implements CaptureTransport {
         sessionId: message.sessionId,
         sampleRate: message.sampleRate,
         chunkBytes: message.chunkBytes,
+        preferBuiltInMic: this.#preferBuiltInMic(),
       });
       return;
     }

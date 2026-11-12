@@ -288,6 +288,37 @@ describe('NativeCaptureTransport', () => {
     expect(children).toHaveLength(1);
   });
 
+  it('sends preferBuiltInMic on start, read fresh at every hold', () => {
+    const child = new FakeChild();
+    let prefer = true;
+    const transport = new NativeCaptureTransport({
+      command: '/capture',
+      logger: createLogger('test'),
+      spawn: () => child,
+      preferBuiltInMic: () => prefer,
+    });
+    transport.start();
+    running.push(transport);
+    const start = (sessionId: string): void => {
+      transport.send({
+        type: 'capture-start',
+        sessionId,
+        sampleRate: SAMPLE_RATE_HZ,
+        chunkBytes: CHUNK_BYTES,
+        micProcessing: false,
+      });
+    };
+
+    start('s1');
+    prefer = false;
+    start('s2');
+
+    const starts = child.written
+      .map((line) => JSON.parse(line) as { type: string; preferBuiltInMic?: boolean })
+      .filter((command) => command.type === 'start');
+    expect(starts.map((command) => command.preferBuiltInMic)).toEqual([true, false]);
+  });
+
   it('ignores micProcessing on capture-start', () => {
     const child = new FakeChild();
     const { coordinator } = wire(() => child);

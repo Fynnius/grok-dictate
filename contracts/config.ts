@@ -34,6 +34,16 @@
  * `grok-voice-transcribe-1.0`) is `sttModel`. grok.com STT 2 Fast is the
  * grok.com transport, not a third catalog entry. Legacy `grok-stt` configs
  * pin Transcribe 2.0; legacy `grok-stt-2-fast` becomes transport `grok-com`.
+ *
+ * ## 2026-11-12 Bluetooth headset microphone
+ *
+ * One flag, `preferBuiltInMic`. Opening an AirPods microphone forces the
+ * headset into hands-free mode, and macOS's Bluetooth stack measurably wedges
+ * there (silent input until the headset reconnects — see
+ * `native/Sources/CaptureCore/InputRouting.swift`). With the flag on, native
+ * capture records from the built-in microphone while the headset keeps
+ * playing. A setting because it changes which microphone hears the user.
+ * Default on.
  */
 
 import { z } from 'zod';
@@ -266,6 +276,16 @@ export const AppConfigSchema = z.object({
    * going through Chromium `getUserMedia` (a native adapter ignores it).
    */
   micProcessing: z.boolean().default(false),
+
+  /**
+   * When the system default input is a Bluetooth headset, record from the
+   * Mac's built-in microphone instead — unless the lid is closed or there is
+   * no built-in microphone. The headset stays in high-quality playback mode.
+   *
+   * Native capture only; the Chromium fallback follows the system default.
+   * Off restores "always use the system default input". Default on.
+   */
+  preferBuiltInMic: z.boolean().default(true),
 
   launchAtLogin: z.boolean().default(false),
 

@@ -99,6 +99,13 @@ describe('config defaults', () => {
     expect(config.micProcessing).toBe(true);
   });
 
+  it('prefers the built-in microphone over a Bluetooth headset by default, and can be turned off', () => {
+    expect(DEFAULT_CONFIG.preferBuiltInMic).toBe(true);
+    const { config, issues } = parseConfig({ preferBuiltInMic: false });
+    expect(issues).toEqual([]);
+    expect(config.preferBuiltInMic).toBe(false);
+  });
+
   it('lets the helper choose the insertion route by default', () => {
     expect(DEFAULT_CONFIG.insertMethod).toBe('auto');
   });

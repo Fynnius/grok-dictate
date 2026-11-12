@@ -13,8 +13,11 @@ describe('capture protocol', () => {
         sessionId: 's1',
         sampleRate: 16_000,
         chunkBytes: 3200,
+        preferBuiltInMic: true,
       }),
-    ).toBe('{"type":"start","sessionId":"s1","sampleRate":16000,"chunkBytes":3200}\n');
+    ).toBe(
+      '{"type":"start","sessionId":"s1","sampleRate":16000,"chunkBytes":3200,"preferBuiltInMic":true}\n',
+    );
   });
 
   it('parses started, level, drained and error', () => {
