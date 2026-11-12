@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-11-12
+
+Dictating with AirPods no longer ends in silence: the app records from the Mac's own microphone while the headphones keep playing.
+
+### Added
+
+- **Settings → Dictation → Use the Mac’s microphone with Bluetooth headphones**, on by default. When AirPods or another Bluetooth headset is the system input, native capture records from the built-in microphone instead, and the headset stays in its normal playback mode. Not applied when the lid is closed (the built-in microphone is disconnected then) or the Mac has none; wired and USB microphones are left alone. Turn it off to always use the system input.
+
+### Fixed
+
+- **"The microphone sent no sound" with a Bluetooth headset.** Opening a headset's microphone forces it into hands-free (call) mode. The switch stopped the capture engine right after it started, rebuilding it blocked capture for 2–3 s so short holds recorded nothing, and after a stop and start during the handover macOS's Bluetooth stack could leave the headset input sending pure silence for every later hold until it was reconnected. The fix above avoids that mode entirely. The error itself now names a Bluetooth headset as a cause instead of pointing only at mute and Privacy & Security.
+
 ## [0.5.0] — 2026-10-15
 
 Secure Input moves to the menu bar and names who holds it, a Grok CLI login no longer fails a dictation in its last minute, and Electron picks up current Chromium security fixes.
