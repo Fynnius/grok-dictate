@@ -73,8 +73,13 @@ final class CaptureApp {
 
     private func handle(_ command: CaptureCommand) {
         switch command {
-        case let .start(sessionId, sampleRate, chunkBytes):
-            handleStart(sessionId: sessionId, sampleRate: sampleRate, chunkBytes: chunkBytes)
+        case let .start(sessionId, sampleRate, chunkBytes, preferBuiltInMic):
+            handleStart(
+                sessionId: sessionId,
+                sampleRate: sampleRate,
+                chunkBytes: chunkBytes,
+                preferBuiltInMic: preferBuiltInMic
+            )
         case let .stop(sessionId):
             handleStop(sessionId: sessionId, dropTail: false)
         case let .cancel(sessionId):
@@ -82,7 +87,12 @@ final class CaptureApp {
         }
     }
 
-    private func handleStart(sessionId: String, sampleRate: Int, chunkBytes: Int) {
+    private func handleStart(
+        sessionId: String,
+        sampleRate: Int,
+        chunkBytes: Int,
+        preferBuiltInMic: Bool
+    ) {
         // A new start after stop (or a press that supersedes a press) must
         // take the device immediately. Drain the previous session first so
         // its tail is not mixed into the new one.
@@ -97,8 +107,11 @@ final class CaptureApp {
         }
 
         do {
-            try engine.start(sampleRate: Double(sampleRate), chunkBytes: chunkBytes) {
-                [weak self] chunks in
+            try engine.start(
+                sampleRate: Double(sampleRate),
+                chunkBytes: chunkBytes,
+                preferBuiltInMic: preferBuiltInMic
+            ) { [weak self] chunks in
                 // Synchronous on the tap thread, while the engine still holds
                 // its lock: `stop` waits on that lock, so drained cannot overtake
                 // in-flight chunks.
@@ -115,7 +128,7 @@ final class CaptureApp {
                 .started(
                     sessionId: sessionId,
                     actualSampleRate: sampleRate,
-                    device: InputDeviceInfo.current()
+                    device: InputDeviceInfo.current(pinned: engine.openedDevice)
                 )
             )
         } catch let error as CaptureEngine.OpenError {

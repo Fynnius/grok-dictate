@@ -1,19 +1,20 @@
-/// CoreAudio introspection for the input device actually in use.
+/// CoreAudio introspection for the input device capture opens.
 ///
-/// `CaptureEngine` never calls `AUAudioUnit.setDeviceID` — the engine's input
-/// node always tracks the system *default* input device — so "the default
-/// input device right now" and "the device `engine.start()` just opened" are
-/// the same object. Queried after `engine.start()` returns successfully, not
-/// at `prepareIdle()` time, so a route change between prepare and start
-/// (AirPods waking up, a USB mic plugged in) is reflected rather than stale.
+/// `CaptureEngine` normally leaves its input node on the system *default*
+/// input device. The one exception is `InputRouting`: when the default is a
+/// Bluetooth headset and the built-in microphone is usable, the engine pins
+/// the built-in microphone with `AUAudioUnit.setDeviceID`. `current(pinned:)`
+/// therefore describes the pinned device when there is one and the default
+/// otherwise — the device `engine.start()` actually opened. Queried after
+/// `engine.start()` returns, not at `prepareIdle()` time, so a route change
+/// between prepare and start (AirPods waking up, a USB mic plugged in) is
+/// reflected rather than stale.
 ///
-/// Diagnostic only, for the `timing` summary line
-/// (`docs/report-latency-ux-2026-08-22.md` §W3 — Bluetooth HFP is the
-/// suspected cause of the slow `device_open` → `first_pcm_main` holds, but
-/// the log never recorded which device was open to confirm it). Every
-/// property read is independently best-effort: a device that cannot be
-/// described at all yields `nil` from `current()`, never a thrown error —
-/// this must not be able to turn a successful `start()` into a failed one.
+/// The description is diagnostic only, for the `timing` summary line
+/// (`docs/report-latency-ux-2026-08-22.md` §W3). Every property read is
+/// independently best-effort: a device that cannot be described at all
+/// yields `nil`, never a thrown error — this must not be able to turn a
+/// successful `start()` into a failed one.
 ///
 /// Deliberately does not query the device's name or UID: `main.log` gets
 /// pasted into public GitHub issues, and a Bluetooth UID embeds the device's
@@ -24,14 +25,29 @@ import AudioToolbox
 import CaptureCore
 import CoreAudio
 import Foundation
+import IOKit
 
 enum InputDeviceInfo {
-    static func current() -> CaptureDeviceInfo? {
-        guard let device = defaultInputDevice() else { return nil }
+    static func current(pinned: AudioDeviceID?) -> CaptureDeviceInfo? {
+        guard let device = pinned ?? defaultInputDevice() else { return nil }
         return CaptureDeviceInfo(
             transport: transportBucket(device),
             sampleRateHz: nominalSampleRate(device)
         )
+    }
+
+    /// The device capture should pin, or `nil` to follow the system default.
+    /// See `InputRouting` for why and when.
+    static func captureTarget(preferBuiltInMic: Bool) -> AudioDeviceID? {
+        guard preferBuiltInMic else { return nil }
+        let builtIn = builtInInputDevice()
+        let useBuiltIn = InputRouting.shouldUseBuiltIn(
+            preferBuiltInMic: preferBuiltInMic,
+            defaultInputTransport: defaultInputDevice().flatMap(transportBucket),
+            hasBuiltInInput: builtIn != nil,
+            lidClosed: isLidClosed()
+        )
+        return useBuiltIn ? builtIn : nil
     }
 
     private static func defaultInputDevice() -> AudioDeviceID? {
@@ -70,5 +86,63 @@ enum InputDeviceInfo {
         let status = AudioObjectGetPropertyData(device, &address, 0, nil, &size, &transport)
         guard status == noErr else { return nil }
         return CaptureDeviceTransportBucket.bucket(rawTransportType: transport)
+    }
+
+    /// The first live built-in device with at least one input stream — on a
+    /// MacBook, "MacBook Pro Microphone". The speakers are a separate
+    /// output-only device, so the input-stream check is what tells them apart.
+    private static func builtInInputDevice() -> AudioDeviceID? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var size: UInt32 = 0
+        let system = AudioObjectID(kAudioObjectSystemObject)
+        guard AudioObjectGetPropertyDataSize(system, &address, 0, nil, &size) == noErr, size > 0
+        else { return nil }
+        var devices = [AudioDeviceID](
+            repeating: 0, count: Int(size) / MemoryLayout<AudioDeviceID>.size)
+        guard AudioObjectGetPropertyData(system, &address, 0, nil, &size, &devices) == noErr
+        else { return nil }
+        return devices.first { device in
+            transportBucket(device) == "built_in" && hasInputStreams(device) && isAlive(device)
+        }
+    }
+
+    private static func hasInputStreams(_ device: AudioDeviceID) -> Bool {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyStreams,
+            mScope: kAudioObjectPropertyScopeInput,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var size: UInt32 = 0
+        let status = AudioObjectGetPropertyDataSize(device, &address, 0, nil, &size)
+        return status == noErr && size > 0
+    }
+
+    private static func isAlive(_ device: AudioDeviceID) -> Bool {
+        var alive: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDeviceIsAlive,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let status = AudioObjectGetPropertyData(device, &address, 0, nil, &size, &alive)
+        return status == noErr && alive != 0
+    }
+
+    /// `AppleClamshellState` on `IOPMrootDomain`: `true` when a laptop's lid
+    /// is shut. A read failure (a desktop Mac has no such property) is "open".
+    private static func isLidClosed() -> Bool {
+        let service = IOServiceGetMatchingService(
+            kIOMainPortDefault, IOServiceMatching("IOPMrootDomain"))
+        guard service != 0 else { return false }
+        defer { IOObjectRelease(service) }
+        let value = IORegistryEntryCreateCFProperty(
+            service, "AppleClamshellState" as CFString, kCFAllocatorDefault, 0
+        )?.takeRetainedValue()
+        return (value as? Bool) ?? false
     }
 }

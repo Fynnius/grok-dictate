@@ -19,6 +19,27 @@ struct CaptureProtocolTests {
         #expect(cancel == .command(.cancel(sessionId: "s1")))
     }
 
+    @Test("start carries preferBuiltInMic, and its absence means false")
+    func decodesPreferBuiltInMic() {
+        let on = CaptureCommandDecoder.decode(
+            line: #"{"type":"start","sessionId":"s1","sampleRate":16000,"chunkBytes":3200,"preferBuiltInMic":true}"#
+        )
+        #expect(
+            on == .command(
+                .start(sessionId: "s1", sampleRate: 16_000, chunkBytes: 3200, preferBuiltInMic: true)
+            )
+        )
+
+        let absent = CaptureCommandDecoder.decode(
+            line: #"{"type":"start","sessionId":"s1","sampleRate":16000,"chunkBytes":3200}"#
+        )
+        #expect(
+            absent == .command(
+                .start(sessionId: "s1", sampleRate: 16_000, chunkBytes: 3200, preferBuiltInMic: false)
+            )
+        )
+    }
+
     @Test("unknown types and malformed lines are values, not traps")
     func unknownAndMalformed() {
         #expect(CaptureCommandDecoder.decode(line: #"{"type":"from_the_future"}"#) == .unknownType("from_the_future"))

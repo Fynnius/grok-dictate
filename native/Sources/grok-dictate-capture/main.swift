@@ -1,6 +1,7 @@
 /// grok-dictate-capture — native microphone adapter for Grok Dictate.
 ///
-/// This process opens the default input, converts to 16 kHz mono PCM16, and
+/// This process opens the default input (or the built-in microphone in place
+/// of a Bluetooth headset — see InputRouting), converts to 16 kHz mono PCM16, and
 /// emits 100 ms / 3200-byte chunks. It is *not* the helper: no event tap, no
 /// pasteboard, no insertion, no token, no STT. The helper stays hotkey +
 /// insertion only.
@@ -8,7 +9,8 @@
 /// Protocol (stdin/stdout JSON lines, UTF-8, one object per line):
 ///
 /// App → capture:
-///   {"type":"start","sessionId":"...","sampleRate":16000,"chunkBytes":3200}
+///   {"type":"start","sessionId":"...","sampleRate":16000,"chunkBytes":3200,
+///    "preferBuiltInMic":true}   (optional, default false — see InputRouting)
 ///   {"type":"stop","sessionId":"..."}
 ///   {"type":"cancel","sessionId":"..."}
 ///

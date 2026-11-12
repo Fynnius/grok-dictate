@@ -9,7 +9,11 @@ import Foundation
 // MARK: - App → capture
 
 public enum CaptureCommand: Sendable, Equatable {
-    case start(sessionId: String, sampleRate: Int, chunkBytes: Int)
+    /// `preferBuiltInMic`: when the system default input is a Bluetooth
+    /// headset, capture from the built-in microphone instead (see
+    /// `InputRouting`). Absent on the wire means `false` — the pre-2026-11
+    /// behaviour of always following the system default.
+    case start(sessionId: String, sampleRate: Int, chunkBytes: Int, preferBuiltInMic: Bool = false)
     case stop(sessionId: String)
     case cancel(sessionId: String)
 }
@@ -50,7 +54,15 @@ public enum CaptureCommandDecoder {
             else {
                 return .malformed(reason: "start is missing a positive even chunkBytes")
             }
-            return .command(.start(sessionId: sessionId, sampleRate: sampleRate, chunkBytes: chunkBytes))
+            let preferBuiltInMic = object["preferBuiltInMic"] as? Bool ?? false
+            return .command(
+                .start(
+                    sessionId: sessionId,
+                    sampleRate: sampleRate,
+                    chunkBytes: chunkBytes,
+                    preferBuiltInMic: preferBuiltInMic
+                )
+            )
         case "stop":
             guard let sessionId = object["sessionId"] as? String, !sessionId.isEmpty else {
                 return .malformed(reason: "stop is missing sessionId")

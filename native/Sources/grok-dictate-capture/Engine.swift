@@ -20,6 +20,13 @@
 /// There is no voice-processing IO, no echo canceller, no AGC — a raw tap
 /// on the HAL input, converted to 16 kHz mono PCM16.
 ///
+/// **Which input.** The system default, except when that is a Bluetooth
+/// headset and the built-in microphone is usable: then the input node is
+/// pinned to the built-in microphone so the headset never leaves A2DP
+/// (`InputRouting` has the measurements). The pin is decided at graph build
+/// time and re-checked on every `start`, so plugging AirPods in or out while
+/// idle is picked up by the next hold.
+///
 /// **Orange indicator.** `prepare()` must not light it; `start()` must; `pause()`
 /// must turn it off. If a real Mac ever shows orange while idle, `pause()`
 /// is the first thing to look at — fall back to `stop()` + `prepare()` on
@@ -57,6 +64,13 @@ final class CaptureEngine {
     private let lock = NSLock()
     private var configObserver: NSObjectProtocol?
     private var handlingConfigChange = false
+    /// The latest `start`'s setting, so idle re-prepares (launch, device
+    /// change) build the graph the next hold will want. Starts `true` to
+    /// match the app's default; the first `start` corrects it.
+    private var preferBuiltInMic = true
+    /// The device the current graph's input node is pinned to; `nil` when it
+    /// follows the system default.
+    private var pinnedDevice: AudioDeviceID?
 
     /// Build and `prepare()` the graph without starting IO.
     ///
@@ -80,13 +94,18 @@ final class CaptureEngine {
         }
     }
 
+    /// The device this graph opens: the pin, or `nil` for the system default.
+    var openedDevice: AudioDeviceID? { pinnedDevice }
+
     func start(
         sampleRate: Double,
         chunkBytes: Int,
+        preferBuiltInMic: Bool,
         onChunks: @escaping ([PcmChunk]) -> Void
     ) throws {
         let t0 = CFAbsoluteTimeGetCurrent()
         _ = releaseSession(dropTail: true)
+        self.preferBuiltInMic = preferBuiltInMic
         self.onChunks = onChunks
         chunker = PcmChunker(chunkBytes: chunkBytes)
 
@@ -151,6 +170,7 @@ final class CaptureEngine {
         self.hardwareFormat = nil
         self.ioRunning = false
         self.tapInstalled = false
+        self.pinnedDevice = nil
     }
 
     /// End a live session without tearing the graph down.
@@ -188,9 +208,11 @@ final class CaptureEngine {
     /// - Returns: `true` when the existing prepared graph was reused.
     @discardableResult
     private func ensureGraph(sampleRate: Double) throws -> Bool {
+        let target = InputDeviceInfo.captureTarget(preferBuiltInMic: preferBuiltInMic)
         if let existing = engine,
             converter != nil,
             outputFormat?.sampleRate == sampleRate,
+            pinnedDevice == target,
             hardwareFormatStillValid(existing)
         {
             // Already prepared and paused. `start()` will resume IO.
@@ -201,7 +223,7 @@ final class CaptureEngine {
         }
 
         rebuildGraph()
-        try finishRebuild(sampleRate: sampleRate)
+        try finishRebuild(sampleRate: sampleRate, device: target)
         return false
     }
 
@@ -223,9 +245,10 @@ final class CaptureEngine {
         self.outputFormat = nil
         self.hardwareFormat = nil
         self.ioRunning = false
+        self.pinnedDevice = nil
     }
 
-    private func finishRebuild(sampleRate: Double) throws {
+    private func finishRebuild(sampleRate: Double, device: AudioDeviceID?) throws {
         // Non-interleaved: `int16ChannelData` is nil for an interleaved
         // format, and we would emit empty chunks while the tap still ran.
         // Mono is the same layout either way.
@@ -250,6 +273,18 @@ final class CaptureEngine {
         // and aborts the process — Swift `catch` does not see it. The 2026-09-11
         // crash reports were exactly this, at first Fn press.
         let input = engine.inputNode
+        // Before `prepare()`: the device is part of what prepare allocates.
+        // A failed pin is not a failed capture — fall back to the default,
+        // which is what every hold did before the pin existed.
+        var pinned: AudioDeviceID?
+        if let device {
+            do {
+                try input.auAudioUnit.setDeviceID(device)
+                pinned = device
+            } catch {
+                logStderr("could not pin the built-in microphone; using the default input: \(error)")
+            }
+        }
         try objcAudio("prepare") { engine.prepare() }
         let hardwareFormat = input.inputFormat(forBus: 0)
         if hardwareFormat.sampleRate <= 0 || hardwareFormat.channelCount == 0 {
@@ -272,6 +307,10 @@ final class CaptureEngine {
         self.hardwareFormat = hardwareFormat
         self.converter = converter
         self.engine = engine
+        self.pinnedDevice = pinned
+        if pinned != nil {
+            logStderr("default input is a Bluetooth headset; capturing from the built-in microphone")
+        }
         observe(engine)
     }
 
@@ -355,7 +394,12 @@ final class CaptureEngine {
 
         if let live {
             do {
-                try start(sampleRate: sampleRate, chunkBytes: chunkBytes, onChunks: live)
+                try start(
+                    sampleRate: sampleRate,
+                    chunkBytes: chunkBytes,
+                    preferBuiltInMic: preferBuiltInMic,
+                    onChunks: live
+                )
                 logStderr("engine restarted after a device change")
             } catch let error as OpenError {
                 logStderr("engine could not restart after a device change: \(error.message)")
