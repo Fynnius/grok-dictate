@@ -882,6 +882,11 @@ function toIdleWithError(ctx: SessionContext, error: AppError): Step {
  * speech. A muted or permission-denied device reports exact digital silence
  * (0.0); an open microphone in a quiet room still reports room tone well above
  * this, even with Chromium's noise suppression on. −54 dBFS sits between them.
+ *
+ * So does a Bluetooth headset whose hands-free link never came up: macOS keeps
+ * the input "running" and feeds it zeros (2026-11-12, AirPods Pro — see
+ * `native/Sources/CaptureCore/InputRouting.swift`). That was the common case
+ * behind this message, and the old hint sent the user to Privacy & Security.
  */
 const SILENT_PEAK = 0.002;
 
@@ -901,7 +906,7 @@ export function noSpeechCopy(peakLevel: number): { message: string; hint: string
   return peakLevel < SILENT_PEAK
     ? {
         message: 'The microphone sent no sound.',
-        hint: 'It is muted, or Grok Dictate has no Microphone permission in System Settings → Privacy & Security.',
+        hint: 'It is muted, a Bluetooth headset did not switch to its microphone (reconnect it), or Grok Dictate has no Microphone permission in System Settings → Privacy & Security.',
       }
     : {
         message: 'No speech was detected.',
